@@ -246,6 +246,26 @@ CLOUD_TRANSCRIPTION_MODELS: list[dict] = [
         "api_model": "gpt-4o-transcribe-diarize",
     },
     {
+        # Released 2026-07-28. OpenAI recommends this model for
+        # completed recordings. It accepts structured keyword and
+        # language hints in addition to the free-form prompt.
+        "id": "gpt-transcribe",
+        "label": "OpenAI GPT Transcribe (fichier, sans diarisation)",
+        "family": "OpenAI",
+        "role": _CLOUD_ROLE,
+        "kind": "cloud",
+        "provider": "openai",
+        "tier": "balanced",
+        "language": ["multi"],
+        "billing": "per_hour",
+        # Official launch price: $0.0045/minute.
+        "price_per_hour": 0.27,
+        "needs_enrichment": True,
+        "diarizes": False,
+        "api_model": "gpt-transcribe",
+        "openai_context_fields": True,
+    },
+    {
         "id": "gpt-4o-mini-transcribe",
         "label": "OpenAI gpt-4o-mini-transcribe",
         "family": "OpenAI",
@@ -1573,7 +1593,7 @@ def _result_from_utterances(
 
 
 def _multipart_body(
-    fields: dict[str, str],
+    fields: dict[str, str | list[str]],
     *,
     file_field: str,
     filename: str,
@@ -1587,13 +1607,16 @@ def _multipart_body(
     crlf = b"\r\n"
     bb = boundary.encode()
     parts: list[bytes] = []
-    for name, value in fields.items():
-        parts += [
-            b"--" + bb,
-            b'Content-Disposition: form-data; name="' + name.encode() + b'"',
-            b"",
-            str(value).encode("utf-8"),
-        ]
+    for name, raw_value in fields.items():
+        values = raw_value if isinstance(raw_value, list) else [raw_value]
+        field_name = f"{name}[]" if isinstance(raw_value, list) else name
+        for value in values:
+            parts += [
+                b"--" + bb,
+                b'Content-Disposition: form-data; name="' + field_name.encode() + b'"',
+                b"",
+                str(value).encode("utf-8"),
+            ]
     parts += [
         b"--" + bb,
         b'Content-Disposition: form-data; name="' + file_field.encode()
@@ -1805,6 +1828,44 @@ class OpenAITranscribeProvider(CloudProvider):
         self._json("GET", f"{OPENAI_API_BASE}/v1/models", headers=self._auth())
         return {"ok": True, "models": self._catalogue_models()}
 
+    @staticmethod
+    def _context_prompt(context: CloudPromptContext) -> str:
+        parts: list[str] = []
+        if (context.meeting_context or "").strip():
+            parts.append("Sujet de la réunion : " + context.meeting_context.strip() + ".")
+        if (context.odoo_context or "").strip():
+            parts.append("Contexte métier : " + context.odoo_context.strip() + ".")
+        if context.expected_speaker_names:
+            parts.append(
+                "Participants attendus : "
+                + ", ".join(name.strip() for name in context.expected_speaker_names if name.strip())
+                + "."
+            )
+        if (context.previous_tail or "").strip():
+            parts.append(
+                "Fin de la partie précédente, uniquement pour continuité : "
+                + context.previous_tail.strip()
+            )
+        return " ".join(parts)
+
+    @staticmethod
+    def _keyword_hints(context: CloudPromptContext) -> list[str]:
+        # OpenAI rejects the complete request if one keyword contains
+        # angle brackets or a line break. Drop invalid hints instead of
+        # turning a harmless vocabulary entry into a failed meeting.
+        return [
+            term
+            for term in context.bias_terms(limit=100)
+            if not any(char in term for char in "<>\r\n")
+        ]
+
+    @staticmethod
+    def _language_hints(context: CloudPromptContext) -> list[str]:
+        raw = (context.language or "").strip().lower()
+        if not raw or raw == "auto":
+            return []
+        return [part for part in re.split(r"[\s,;]+", raw) if part]
+
     def transcribe(
         self, audio_path: str, *, model_id: str, context: CloudPromptContext
     ) -> CloudChunkResult:
@@ -1813,18 +1874,30 @@ class OpenAITranscribeProvider(CloudProvider):
         entry = cloud_model_entry(model_id)
         api_model = str(entry.get("api_model") or model_id)
         prompt_terms = ", ".join(context.bias_terms(limit=100))
-        fields: dict[str, str] = {"model": api_model, "response_format": "json"}
-        if (context.language or "").strip():
+        fields: dict[str, str | list[str]] = {
+            "model": api_model,
+            "response_format": "json",
+        }
+        modern_context = bool(entry.get("openai_context_fields"))
+        language_hints = self._language_hints(context)
+        if modern_context and language_hints:
+            fields["languages"] = language_hints
+        elif (context.language or "").strip():
             fields["language"] = context.language
         # The transcription ``prompt`` biases decoding toward our
         # vocabulary, participants and the meeting topic.
         prompt_parts: list[str] = []
-        if prompt_terms:
+        if prompt_terms and not modern_context:
             prompt_parts.append("Vocabulaire et participants attendus : " + prompt_terms + ".")
-        if (context.meeting_context or "").strip():
-            prompt_parts.append("Sujet de la réunion : " + context.meeting_context.strip() + ".")
+        structured_prompt = self._context_prompt(context)
+        if structured_prompt:
+            prompt_parts.append(structured_prompt)
         if prompt_parts:
             fields["prompt"] = " ".join(prompt_parts)
+        if modern_context:
+            keywords = self._keyword_hints(context)
+            if keywords:
+                fields["keywords"] = keywords
         body_bytes = _Path(audio_path).read_bytes()
         multipart, content_type = _multipart_body(
             fields,

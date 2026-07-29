@@ -78,6 +78,15 @@ class CostMathTest(unittest.TestCase):
         entry = cloud_model_entry("gemini-9-ultra")
         self.assertEqual(entry["id"], "gemini-9-ultra")
 
+    def test_july_2026_openai_file_model_is_catalogued(self):
+        file_model = cloud_model_entry("gpt-transcribe")
+        self.assertEqual(file_model["provider"], "openai")
+        self.assertAlmostEqual(file_model["price_per_hour"], 0.27)
+        self.assertFalse(file_model["diarizes"])
+        # A launch-day addition must not silently replace the evaluated
+        # Gemini default.
+        self.assertEqual(DEFAULT_CLOUD_MODEL, "gemini-3.6-flash")
+
 
 class TimestampTest(unittest.TestCase):
     def test_minute_second(self):
@@ -559,6 +568,21 @@ class MultipartTest(unittest.TestCase):
         self.assertIn(b'filename="a.mp3"', body)
         self.assertIn(b"\x00\x01AUDIO", body)
 
+    def test_multipart_repeats_array_fields_with_brackets(self):
+        from cloud_transcription import _multipart_body
+
+        body, _ = _multipart_body(
+            {"model": "gpt-transcribe", "keywords": ["Odoo", "Mollie"], "languages": ["fr", "en"]},
+            file_field="file",
+            filename="a.mp3",
+            file_bytes=b"audio",
+            file_content_type="audio/mpeg",
+        )
+        self.assertEqual(body.count(b'name="keywords[]"'), 2)
+        self.assertEqual(body.count(b'name="languages[]"'), 2)
+        self.assertIn(b"Odoo", body)
+        self.assertIn(b"Mollie", body)
+
 
 class _FakeResponse:
     def __init__(self, body, headers=None):
@@ -724,6 +748,34 @@ class ContextEnrichmentTest(unittest.TestCase):
         self.assertEqual(terms.count("Odoo"), 1)
         self.assertEqual([t.lower() for t in terms].count("erp"), 1)
         self.assertIn("Robin", terms)
+
+    def test_gpt_transcribe_uses_native_context_fields(self):
+        captured: dict[str, bytes] = {}
+
+        def opener(request, timeout=None):
+            captured["body"] = request.data
+            return _FakeResponse({"text": "Bonjour à tous."})
+
+        provider = get_cloud_provider("openai", "key", opener=opener)
+        provider.transcribe(
+            str(self.audio),
+            model_id="gpt-transcribe",
+            context=_ctx(
+                glossary_terms=["Odoo", "Mollie", "ligne\ninvalide"],
+                expected_speaker_names=["Robin Joseph"],
+                meeting_context="Migration de la facturation",
+                odoo_context="Client Acritec",
+            ),
+        )
+        body = captured["body"]
+        self.assertIn(b'name="languages[]"', body)
+        self.assertNotIn(b'name="language"', body)
+        self.assertIn(b'name="keywords[]"', body)
+        self.assertIn("Odoo".encode(), body)
+        self.assertIn("Robin Joseph".encode(), body)
+        self.assertNotIn("ligne\ninvalide".encode(), body)
+        self.assertIn("Migration de la facturation".encode(), body)
+        self.assertIn("Client Acritec".encode(), body)
 
 
 class STTProviderParsingTest(unittest.TestCase):
