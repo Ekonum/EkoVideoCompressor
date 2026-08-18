@@ -127,13 +127,37 @@ _CLOUD_ROLE = "cloud_transcription"
 # vendor has volume discounts, so the budget guard never under-bills.
 CLOUD_TRANSCRIPTION_MODELS: list[dict] = [
     {
+        # Released ~2026-08. Google's pitch: GA (not preview, unlike 3.6
+        # at its own launch) — Pro-level agentic/coding capability at
+        # Flash cost, better instruction-following than 3.6 Flash.
+        # INTRODUCTORY PRICE — $0.75/$3.75 per 1M in/out tokens expires
+        # 2026-12-31, after which it reverts to $1.50/$7.50 (same as
+        # 3.6 Flash today). Update these two fields when that lapses, or
+        # the budget guard will under-estimate cost from January 2027.
+        # Chosen as the new default per user's explicit call — GA status
+        # lowers (doesn't eliminate) day-one capacity risk; the cloud
+        # retry/fail-over machinery (backoff, cloud_fallback_models,
+        # stay_cloud policy) already covers a rationed spell either way.
+        "id": "gemini-3.7-flash",
+        "label": "Gemini 3.7 Flash",
+        "family": "Gemini",
+        "role": _CLOUD_ROLE,
+        "kind": "cloud",
+        "provider": "gemini",
+        "tier": "balanced",
+        "language": ["multi"],
+        "default": True,
+        "billing": "per_token",
+        "price_in_per_1m": 0.75,
+        "price_out_per_1m": 3.75,
+        "needs_enrichment": False,
+        "diarizes": True,
+        "thinking": "level_low",
+    },
+    {
         # Released 2026-07-21. Google's official pitch: same 1M-token
         # context, frontier-level intelligence, lower cost than 3.5 Flash
-        # (17% fewer output tokens on Artificial Analysis Index). Chosen
-        # as the new default per user's explicit call — a launch-day
-        # model can still hit early capacity limits, but the cloud
-        # retry/fail-over machinery (backoff, cloud_fallback_models,
-        # stay_cloud policy) already covers that.
+        # (17% fewer output tokens on Artificial Analysis Index).
         "id": "gemini-3.6-flash",
         "label": "Gemini 3.6 Flash",
         "family": "Gemini",
@@ -142,7 +166,6 @@ CLOUD_TRANSCRIPTION_MODELS: list[dict] = [
         "provider": "gemini",
         "tier": "balanced",
         "language": ["multi"],
-        "default": True,
         "billing": "per_token",
         "price_in_per_1m": 1.50,
         "price_out_per_1m": 7.50,
