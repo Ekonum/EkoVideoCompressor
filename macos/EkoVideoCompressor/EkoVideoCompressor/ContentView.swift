@@ -3075,10 +3075,30 @@ struct SettingsView: View {
     }
 }
 
+/// "Exporter les logs" outcome. Mirrors ``updater.state``'s
+/// idle/checking/error shape right above it in this same tab, for a
+/// consistent look between the two diagnostic actions.
+enum ExportLogsStatus: Equatable {
+    case idle
+    case exporting
+    case success(path: String)
+    case failure(String)
+}
+
+private struct ExportLogsResponse: Decodable {
+    let path: String
+}
+
 struct GeneralSettingsTab: View {
     @EnvironmentObject private var settings: SettingsStore
     @EnvironmentObject private var updater: UpdateStore
     @EnvironmentObject private var engine: EngineProcess
+    // PR — "Exporter les logs" used to be fire-and-forget
+    // (`engine.run`, result discarded): no success confirmation, no
+    // error surfaced, nothing. A user hitting a real bug got no
+    // feedback the export even ran, so they had no ZIP to send and no
+    // idea why. Now it awaits the command and reports what happened.
+    @State private var exportLogsStatus: ExportLogsStatus = .idle
 
     var body: some View {
         Form {
@@ -3139,17 +3159,61 @@ struct GeneralSettingsTab: View {
                     .foregroundStyle(.secondary)
             }
             Section("Diagnostic") {
-                Button {
-                    engine.run(arguments: EngineProcess.defaultPythonArguments(["export-logs"]))
-                } label: {
-                    Label("Exporter les logs", systemImage: "doc.zipper")
+                HStack {
+                    Button {
+                        exportLogs()
+                    } label: {
+                        Label("Exporter les logs", systemImage: "doc.zipper")
+                    }
+                    .disabled(exportLogsStatus == .exporting)
+                    if exportLogsStatus == .exporting {
+                        ProgressView().controlSize(.small)
+                    }
+                    if case .success(let path) = exportLogsStatus {
+                        Button {
+                            revealInFinder(path)
+                        } label: {
+                            Label("Révéler dans le Finder", systemImage: "folder")
+                        }
+                    }
                 }
-                Text("Une archive ZIP est déposée sur le Bureau pour partage avec le support.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                switch exportLogsStatus {
+                case .idle, .exporting:
+                    Text("Une archive ZIP est déposée sur le Bureau pour partage avec le support.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                case .success(let path):
+                    Label((path as NSString).lastPathComponent, systemImage: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.teal)
+                case .failure(let message):
+                    Text("Échec de l'export : \(message)")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
             }
         }
         .formStyle(.grouped)
+    }
+
+    private func exportLogs() {
+        exportLogsStatus = .exporting
+        Task {
+            let result = await EngineProcess.runCommand(
+                arguments: EngineProcess.defaultPythonArguments(["export-logs"])
+            )
+            guard result.status == 0,
+                  let data = result.rawOutput.data(using: .utf8),
+                  let payload = try? JSONDecoder().decode(ExportLogsResponse.self, from: data)
+            else {
+                exportLogsStatus = .failure(
+                    result.events.last?.message
+                        ?? result.rawOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+                )
+                return
+            }
+            exportLogsStatus = .success(path: payload.path)
+        }
     }
 }
 
