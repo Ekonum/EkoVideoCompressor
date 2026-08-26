@@ -91,8 +91,20 @@ struct ContentView: View {
                     } label: {
                         Label(queue.isBatchRunning ? "En cours" : "Lancer la file", systemImage: "play.fill")
                     }
-                    .disabled(queue.items.isEmpty || queue.isBatchRunning || !energy.allowsTranscriptionStart)
-                    .help(energy.allowsTranscriptionStart ? "" : energy.blockingReason)
+                    // The battery-safety gate exists for local Whisper's
+                    // multi-hour SoC-heavy passes (see EnergyMonitor). A
+                    // cloud run offloads that work to the API — same
+                    // reasoning already applied to the mid-run unplug
+                    // guard — so it must not block STARTING a cloud batch
+                    // either, whatever the battery level.
+                    .disabled(
+                        queue.items.isEmpty || queue.isBatchRunning
+                            || (!settings.usesCloudTranscription && !energy.allowsTranscriptionStart)
+                    )
+                    .help(
+                        settings.usesCloudTranscription || energy.allowsTranscriptionStart
+                            ? "" : energy.blockingReason
+                    )
 
                     Button {
                         showingSettings = true
