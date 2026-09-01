@@ -89,8 +89,21 @@ struct ContentView: View {
                     Button {
                         showingRunSetup = true
                     } label: {
-                        Label(queue.isBatchRunning ? "En cours" : "Lancer la file", systemImage: "play.fill")
+                        Label(
+                            queue.isBatchRunning ? "En cours — préparer la suite" : "Lancer la file",
+                            systemImage: "play.fill"
+                        )
                     }
+                    // Opening Run Setup while a batch is running is
+                    // allowed — it's how the user prepares (and locks
+                    // in) the next file(s) without waiting. runQueue()'s
+                    // own loop re-reads the queue on every iteration, so
+                    // whatever gets configured here rides along
+                    // automatically once the current item finishes; no
+                    // second concurrent run is started (runQueue() is a
+                    // no-op re-entrancy-guarded while one is already
+                    // active).
+                    //
                     // The battery-safety gate exists for local Whisper's
                     // multi-hour SoC-heavy passes (see EnergyMonitor). A
                     // cloud run offloads that work to the API — same
@@ -98,7 +111,7 @@ struct ContentView: View {
                     // guard — so it must not block STARTING a cloud batch
                     // either, whatever the battery level.
                     .disabled(
-                        queue.items.isEmpty || queue.isBatchRunning
+                        queue.items.isEmpty
                             || (!settings.usesCloudTranscription && !energy.allowsTranscriptionStart)
                     )
                     .help(
@@ -167,8 +180,15 @@ struct ContentView: View {
         .onChange(of: queue.autoRunRequestID) { _, requestID in
             guard requestID != nil else { return }
             queue.autoRunRequestID = nil
-            guard !queue.isBatchRunning, !queue.items.isEmpty else { return }
+            guard !queue.items.isEmpty else { return }
             selectedSection = .queue
+            // No `!queue.isBatchRunning` guard here: when a batch is
+            // already running, runQueue() below is a no-op re-entrancy
+            // guard, and the freshly-added item (already "En attente")
+            // is picked up by the active loop's next iteration on its
+            // own — e.g. a library "Relancer" fired while another
+            // transcription is in flight no longer gets silently
+            // dropped.
             Task { await runQueue() }
         }
         .onChange(of: engine.events.count) { _, _ in
@@ -228,6 +248,16 @@ struct ContentView: View {
     }
 
     private func runQueue() async {
+        // Re-entrancy guard: a batch is already draining the queue.
+        // Rather than starting a second concurrent engine invocation
+        // (EngineProcess only ever drives one subprocess at a time),
+        // this call is a no-op — whatever was just added/configured is
+        // already sitting in ``queue.items`` with "En attente", and the
+        // active loop below picks it up on its own next iteration. This
+        // is what lets the user prepare and "launch" a second file
+        // while the first is still running: Run Setup's own Lancer
+        // button calls this same function.
+        guard !queue.isBatchRunning else { return }
         guard !queue.items.isEmpty else { return }
         queue.isBatchRunning = true
         queue.cancellationReason = nil
@@ -241,18 +271,21 @@ struct ContentView: View {
         defer {
             runningPreset = ""
             runningEngine = ""
+            queue.isBatchRunning = false
         }
-        let itemIDs = queue.items.map(\.id)
 
-        for itemID in itemIDs {
+        // Re-read the queue on every iteration instead of freezing the
+        // list of ids up front — a file dropped in, or a rerun launched
+        // from the library, while this loop is mid-``await runJob``
+        // must be swept up automatically rather than stranded until the
+        // batch fully ends and the user relaunches by hand.
+        while let currentItemSnapshot = queue.items.first(where: { $0.status == "En attente" }) {
             if Task.isCancelled { break }
             // If the energy guard cancelled the engine mid-batch,
             // stop processing the rest of the queue too — the user
             // needs to come back, plug in, and re-launch consciously.
             if queue.cancellationReason != nil { break }
-            guard var currentItem = queue.items.first(where: { $0.id == itemID }) else {
-                continue
-            }
+            var currentItem = currentItemSnapshot
             queue.update(currentItem.id, status: "En cours", progress: 0)
             var exitCode = await runJob(currentItem)
             // Recovery loop: if the engine returned ``source_missing``,
@@ -290,7 +323,6 @@ struct ContentView: View {
                 queue.update(currentItem.id, status: "Erreur", progress: 0)
             }
         }
-        queue.isBatchRunning = false
     }
 
     /// Show an NSOpenPanel anchored on the queue window so the user
