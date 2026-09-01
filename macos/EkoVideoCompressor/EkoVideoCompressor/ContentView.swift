@@ -58,6 +58,26 @@ struct ContentView: View {
     /// unplug guard must leave it alone whatever the preset says.
     @State private var runningEngine: String = ""
     @State private var unplugInterruptTask: Task<Void, Never>?
+    // Cloud jobs are network-bound (near-zero local compute — same
+    // reasoning as the existing battery/unplug cloud exemptions), so a
+    // few can genuinely run in parallel instead of waiting their turn.
+    // Capped conservatively to avoid hammering the provider if a big
+    // batch lands at once; bump if it proves too tight.
+    private static let maxConcurrentCloudJobs = 2
+    @State private var activeCloudJobCount = 0
+    /// Id of whichever queued item currently "owns" the single shared
+    /// ``engine`` instance — the one StatusBarView, its Annuler button,
+    /// and the unplug-safety guard all observe. A LOCAL job always
+    /// needs to own it (the energy guard's ``engine.cancel()`` only
+    /// ever reaches this instance, and Whisper jobs stay strictly
+    /// serialized to begin with — one at a time avoids fighting over
+    /// the GPU/Neural Engine), so a local dispatch waits for it to be
+    /// free rather than risk a silently-ungoverned local run. A solo
+    /// cloud job opportunistically borrows it too, purely so the
+    /// common (non-parallel) case keeps today's live progress detail
+    /// in the footer; a second/third concurrent cloud job gets its own
+    /// throwaway instance instead and simply won't show up there.
+    @State private var sharedEngineOwner: QueueItem.ID?
 
     var body: some View {
         NavigationSplitView {
@@ -249,8 +269,7 @@ struct ContentView: View {
 
     private func runQueue() async {
         // Re-entrancy guard: a batch is already draining the queue.
-        // Rather than starting a second concurrent engine invocation
-        // (EngineProcess only ever drives one subprocess at a time),
+        // Rather than starting a second concurrent orchestrator loop,
         // this call is a no-op — whatever was just added/configured is
         // already sitting in ``queue.items`` with "En attente", and the
         // active loop below picks it up on its own next iteration. This
@@ -274,54 +293,117 @@ struct ContentView: View {
             queue.isBatchRunning = false
         }
 
-        // Re-read the queue on every iteration instead of freezing the
-        // list of ids up front — a file dropped in, or a rerun launched
-        // from the library, while this loop is mid-``await runJob``
-        // must be swept up automatically rather than stranded until the
-        // batch fully ends and the user relaunches by hand.
-        while let currentItemSnapshot = queue.items.first(where: { $0.status == "En attente" }) {
+        // Orchestrator: repeatedly claims the next pending item and
+        // dispatches it, never itself awaiting a job to completion —
+        // that's what lets a second (or third) CLOUD job run genuinely
+        // in parallel with whatever's already going, instead of
+        // waiting its turn. Local jobs stay serialized via
+        // ``sharedEngineOwner`` below. Re-reading ``queue.items`` on
+        // every pass (rather than a list frozen up front) means a file
+        // dropped in — or a rerun launched from the library — while
+        // this loop is active gets swept up automatically.
+        while true {
             if Task.isCancelled { break }
-            // If the energy guard cancelled the engine mid-batch,
-            // stop processing the rest of the queue too — the user
-            // needs to come back, plug in, and re-launch consciously.
+            // If the energy guard cancelled the engine mid-batch, stop
+            // claiming new work — the user needs to come back, plug
+            // in, and re-launch consciously. Already-dispatched cloud
+            // jobs are untouched (they were never subject to that
+            // guard) and keep running; the drain loop below waits for
+            // them.
             if queue.cancellationReason != nil { break }
-            var currentItem = currentItemSnapshot
-            queue.update(currentItem.id, status: "En cours", progress: 0)
-            var exitCode = await runJob(currentItem)
-            // Recovery loop: if the engine returned ``source_missing``,
-            // give the user one shot to point us at the new location.
-            // We only retry on explicit relocalisation — Cancel falls
-            // through to the regular "Erreur" status so the batch
-            // keeps moving instead of blocking on an unresolved item.
-            while exitCode != 0 && engine.lastErrorCode == "source_missing" {
-                if Task.isCancelled { break }
-                guard let relocated = await promptRelocalize(missing: currentItem.sourceURL) else {
-                    break
+            guard let next = queue.items.first(where: { $0.status == "En attente" }) else {
+                if activeCloudJobCount == 0 && sharedEngineOwner == nil { break }
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                continue
+            }
+            let isCloud = settings.usesCloudTranscription
+            let jobEngine: EngineProcess
+            if isCloud {
+                guard activeCloudJobCount < Self.maxConcurrentCloudJobs else {
+                    try? await Task.sleep(nanoseconds: 300_000_000)
+                    continue
                 }
-                queue.replace(currentItem.id, with: relocated)
-                currentItem.sourceURL = relocated
-                queue.update(currentItem.id, status: "Reprise", progress: 0)
-                exitCode = await runJob(currentItem)
-            }
-            if exitCode == 0 {
-                queue.update(currentItem.id, status: "Terminé", progress: 100)
-                // Only credit vocabulary usage on success — bumping
-                // counts on a cancelled or failed run would skew the
-                // glossary "recently used" sort with terms that never
-                // actually shaped a transcript.
-                let usedTerms = currentItem.selectedGlossaryTerms
-                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                    .filter { !$0.isEmpty }
-                settings.recordVocabularyUsage(usedTerms)
-            } else if queue.cancellationReason == "max_on_battery" {
-                queue.update(
-                    currentItem.id,
-                    status: "Interrompu (secteur)",
-                    progress: 0
-                )
+                if sharedEngineOwner == nil {
+                    jobEngine = engine
+                    sharedEngineOwner = next.id
+                } else {
+                    jobEngine = EngineProcess()
+                }
+                activeCloudJobCount += 1
             } else {
-                queue.update(currentItem.id, status: "Erreur", progress: 0)
+                // Local Whisper: always needs the shared instance (the
+                // unplug guard only ever cancels that one), and there's
+                // only ever one at a time — wait for it to free up
+                // rather than risk two local passes fighting over the
+                // GPU, or a local run the energy guard can't reach.
+                guard sharedEngineOwner == nil else {
+                    try? await Task.sleep(nanoseconds: 300_000_000)
+                    continue
+                }
+                jobEngine = engine
+                sharedEngineOwner = next.id
             }
+            queue.update(next.id, status: "En cours", progress: 0)
+            let ownsSharedEngine = (sharedEngineOwner == next.id)
+            Task {
+                await processQueueItem(next, using: jobEngine)
+                if isCloud { activeCloudJobCount -= 1 }
+                if ownsSharedEngine { sharedEngineOwner = nil }
+            }
+        }
+
+        // Let any still-running parallel cloud jobs — and whichever job
+        // currently owns the shared engine — finish before the batch is
+        // considered done, so ``isBatchRunning`` (and the "ON/OFF"
+        // badge) stay accurate for their whole duration.
+        while activeCloudJobCount > 0 || sharedEngineOwner != nil {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+        }
+    }
+
+    /// Runs one queue item start-to-finish against the given engine
+    /// instance: the source-missing recovery loop, the terminal status
+    /// update, and vocabulary crediting on success. Parameterised by
+    /// engine so a parallel cloud job gets its own dedicated
+    /// ``EngineProcess`` (live events + ``lastErrorCode`` isolated from
+    /// whatever else is running concurrently) instead of contending
+    /// for the instance another job is already driving.
+    private func processQueueItem(_ item: QueueItem, using jobEngine: EngineProcess) async {
+        var currentItem = item
+        var exitCode = await runJob(currentItem, using: jobEngine)
+        // Recovery loop: if the engine returned ``source_missing``,
+        // give the user one shot to point us at the new location.
+        // We only retry on explicit relocalisation — Cancel falls
+        // through to the regular "Erreur" status so the batch
+        // keeps moving instead of blocking on an unresolved item.
+        while exitCode != 0 && jobEngine.lastErrorCode == "source_missing" {
+            if Task.isCancelled { break }
+            guard let relocated = await promptRelocalize(missing: currentItem.sourceURL) else {
+                break
+            }
+            queue.replace(currentItem.id, with: relocated)
+            currentItem.sourceURL = relocated
+            queue.update(currentItem.id, status: "Reprise", progress: 0)
+            exitCode = await runJob(currentItem, using: jobEngine)
+        }
+        if exitCode == 0 {
+            queue.update(currentItem.id, status: "Terminé", progress: 100)
+            // Only credit vocabulary usage on success — bumping
+            // counts on a cancelled or failed run would skew the
+            // glossary "recently used" sort with terms that never
+            // actually shaped a transcript.
+            let usedTerms = currentItem.selectedGlossaryTerms
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            settings.recordVocabularyUsage(usedTerms)
+        } else if queue.cancellationReason == "max_on_battery" {
+            queue.update(
+                currentItem.id,
+                status: "Interrompu (secteur)",
+                progress: 0
+            )
+        } else {
+            queue.update(currentItem.id, status: "Erreur", progress: 0)
         }
     }
 
@@ -346,7 +428,7 @@ struct ContentView: View {
         return chosen
     }
 
-    private func runJob(_ item: QueueItem) async -> Int32 {
+    private func runJob(_ item: QueueItem, using jobEngine: EngineProcess) async -> Int32 {
         // Names suggested by an Odoo calendar event (or typed by
         // hand) ride in ``speaker_overrides`` keyed on themselves
         // — the engine's initial-prompt builder pulls them as
@@ -458,9 +540,9 @@ struct ContentView: View {
         do {
             let data = try JSONEncoder().encode(request)
             try data.write(to: url)
-            return await engine.runAndWait(arguments: EngineProcess.defaultPythonArguments(["run-job", "--request", url.path]))
+            return await jobEngine.runAndWait(arguments: EngineProcess.defaultPythonArguments(["run-job", "--request", url.path]))
         } catch {
-            engine.lastError = error.localizedDescription
+            jobEngine.lastError = error.localizedDescription
             return -1
         }
     }
