@@ -202,13 +202,12 @@ struct ContentView: View {
             queue.autoRunRequestID = nil
             guard !queue.items.isEmpty else { return }
             selectedSection = .queue
-            // No `!queue.isBatchRunning` guard here: when a batch is
-            // already running, runQueue() below is a no-op re-entrancy
-            // guard, and the freshly-added item (already "En attente")
-            // is picked up by the active loop's next iteration on its
-            // own — e.g. a library "Relancer" fired while another
-            // transcription is in flight no longer gets silently
-            // dropped.
+            // No `!queue.isBatchRunning` guard here: this request IS an
+            // explicit launch (library "Relancer"), so runQueue() arms
+            // the new row and — if a batch is already draining — hands
+            // it to the loop already running instead of starting a
+            // second one. Fired mid-transcription it no longer gets
+            // silently dropped.
             Task { await runQueue() }
         }
         .onChange(of: engine.events.count) { _, _ in
@@ -268,14 +267,21 @@ struct ContentView: View {
     }
 
     private func runQueue() async {
+        // This function IS the "Lancer" action, so arm whatever the
+        // user just configured first. Imported files sit at "Non lancé"
+        // until this point — the orchestrator only ever claims armed
+        // ("En attente") rows, so a file dropped in mid-run waits for
+        // the user to set it up and press Lancer instead of being
+        // swept straight into the running batch on the previous file's
+        // settings.
+        queue.armPendingItems()
         // Re-entrancy guard: a batch is already draining the queue.
         // Rather than starting a second concurrent orchestrator loop,
-        // this call is a no-op — whatever was just added/configured is
-        // already sitting in ``queue.items`` with "En attente", and the
-        // active loop below picks it up on its own next iteration. This
-        // is what lets the user prepare and "launch" a second file
-        // while the first is still running: Run Setup's own Lancer
-        // button calls this same function.
+        // this call stops here — the rows just armed above are picked
+        // up by the loop already running. That's what lets the user
+        // prepare and launch a second file while the first is still
+        // going: Run Setup's own Lancer button calls this same
+        // function.
         guard !queue.isBatchRunning else { return }
         guard !queue.items.isEmpty else { return }
         queue.isBatchRunning = true
@@ -2009,6 +2015,17 @@ struct RunSetupView: View {
         return min(max(currentIndex, 0), queue.items.count - 1)
     }
 
+    /// First file still waiting to be launched — where this sheet
+    /// opens. Matters when it's pulled up mid-run to set up a freshly
+    /// imported file: landing on the row that's already transcribing
+    /// (and can no longer be edited) would just be one more thing to
+    /// navigate past.
+    private var firstPendingIndex: Int? {
+        queue.items.firstIndex { $0.status == "Non lancé" }
+    }
+
+    private var hasPendingItems: Bool { firstPendingIndex != nil }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack {
@@ -2079,16 +2096,31 @@ struct RunSetupView: View {
                         }
                     }
                 }
-                Button(queue.items.count > 1 ? "Lancer la file" : "Lancer") {
+                Button(launchButtonTitle) {
                     onStart()
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
-                .disabled(queue.items.isEmpty)
+                .disabled(queue.isBatchRunning ? !hasPendingItems : queue.items.isEmpty)
             }
             .padding(18)
         }
         .frame(minWidth: 720, minHeight: 640)
+        .onAppear {
+            if let pending = firstPendingIndex {
+                currentIndex = pending
+            }
+        }
+    }
+
+    /// While a batch is already draining, this button doesn't start a
+    /// run — it hands the files just configured to the one already
+    /// going. Say so, rather than implying a second batch is starting.
+    private var launchButtonTitle: String {
+        if queue.isBatchRunning {
+            return "Ajouter à la file en cours"
+        }
+        return queue.items.count > 1 ? "Lancer la file" : "Lancer"
     }
 }
 
