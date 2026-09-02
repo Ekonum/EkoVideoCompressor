@@ -100,7 +100,14 @@ struct QueueItem: Identifiable, Equatable {
     /// related object (the meeting wasn't linked to a CRM lead or
     /// project task).
     var odooContextRef: OdooContextRef?
-    var status: String = "En attente"
+    /// Lifecycle phase. "Non lancé" is the *import* state: the file is
+    /// in the queue but the user hasn't pressed Lancer yet, so the run
+    /// orchestrator must leave it alone — that's what gives them time
+    /// to configure it (speakers, vocabulary, mode…) even while
+    /// another transcription is already running. Pressing Lancer
+    /// promotes it to "En attente" (armed, waiting for a slot), then
+    /// "En cours" → "Terminé" / "Erreur".
+    var status: String = "Non lancé"
     var progress: Double = 0
 
     var isLibraryRerun: Bool {
@@ -286,6 +293,20 @@ final class QueueStore: ObservableObject {
 
     func resetPending() {
         for index in items.indices {
+            items[index].status = "En attente"
+            items[index].progress = 0
+        }
+    }
+
+    /// The user's explicit "Lancer" signal: promotes every not-yet-
+    /// launched file to the armed queue so the run orchestrator will
+    /// claim it. Deliberately leaves "En cours" / "Terminé" rows
+    /// untouched — unlike ``resetPending()`` this is also called while
+    /// a batch is already draining, which is how a file imported and
+    /// configured mid-run joins that run without disturbing (or
+    /// re-running) what's already going.
+    func armPendingItems() {
+        for index in items.indices where items[index].status == "Non lancé" {
             items[index].status = "En attente"
             items[index].progress = 0
         }
