@@ -85,7 +85,7 @@ class CostMathTest(unittest.TestCase):
         self.assertFalse(file_model["diarizes"])
         # A launch-day addition must not silently replace the evaluated
         # Gemini default.
-        self.assertEqual(DEFAULT_CLOUD_MODEL, "gemini-3.7-flash")
+        self.assertEqual(DEFAULT_CLOUD_MODEL, "gemini-3.8-flash")
 
 
 class TimestampTest(unittest.TestCase):

@@ -127,6 +127,33 @@ _CLOUD_ROLE = "cloud_transcription"
 # vendor has volume discounts, so the budget guard never under-bills.
 CLOUD_TRANSCRIPTION_MODELS: list[dict] = [
     {
+        # Google's pitch: GA at launch, most intelligent Flash yet —
+        # built for long-horizon engineering and autonomous agents, and
+        # beating most larger frontier models on DeepSWE v1.1 at a
+        # fraction of their cost. Same price as 3.7 Flash, so this is a
+        # straight upgrade rather than a trade-off.
+        # INTRODUCTORY PRICE — $0.75/$3.75 per 1M in/out tokens runs
+        # through 2026-12-31; standard $1.50/$7.50 kicks in 2027-01-01.
+        # Update these two fields then, or the budget guard will
+        # under-estimate cost. (3.7 Flash below carries the same
+        # deadline.)
+        "id": "gemini-3.8-flash",
+        "label": "Gemini 3.8 Flash",
+        "family": "Gemini",
+        "role": _CLOUD_ROLE,
+        "kind": "cloud",
+        "provider": "gemini",
+        "tier": "balanced",
+        "language": ["multi"],
+        "default": True,
+        "billing": "per_token",
+        "price_in_per_1m": 0.75,
+        "price_out_per_1m": 3.75,
+        "needs_enrichment": False,
+        "diarizes": True,
+        "thinking": "level_low",
+    },
+    {
         # Released ~2026-08. Google's pitch: GA (not preview, unlike 3.6
         # at its own launch) — Pro-level agentic/coding capability at
         # Flash cost, better instruction-following than 3.6 Flash.
@@ -146,7 +173,6 @@ CLOUD_TRANSCRIPTION_MODELS: list[dict] = [
         "provider": "gemini",
         "tier": "balanced",
         "language": ["multi"],
-        "default": True,
         "billing": "per_token",
         "price_in_per_1m": 0.75,
         "price_out_per_1m": 3.75,
