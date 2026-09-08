@@ -918,7 +918,7 @@ final class UpdateStore: ObservableObject {
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
                 if proactive { state = .idle; return }
                 state = .error("Erreur HTTP: \((response as? HTTPURLResponse)?.statusCode ?? -1)")
                 return
@@ -963,7 +963,7 @@ final class UpdateStore: ObservableObject {
             }
 
             let (localURL, response) = try await URLSession.shared.download(for: request)
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
                 state = .error("Erreur téléchargement: \((response as? HTTPURLResponse)?.statusCode ?? -1)")
                 return
             }
