@@ -5,7 +5,7 @@
   "description": "Release automation for EkoVideo Compressor.",
   "repository": {
     "type": "git",
-    "url": "https://github.com/robjo82/EkoVideoCompressor.git"
+    "url": "https://github.com/Ekonum/EkoVideoCompressor.git"
   },
   "scripts": {
     "semantic-release": "semantic-release"

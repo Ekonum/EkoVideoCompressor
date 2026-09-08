@@ -908,7 +908,7 @@ final class UpdateStore: ObservableObject {
         if state == .checking || (caseUpdateStateAvailable(state) && proactive) { return }
         state = .checking
 
-        let url = URL(string: "https://api.github.com/repos/robjo82/EkoVideoCompressor/releases/latest")!
+        let url = URL(string: "https://api.github.com/repos/Ekonum/EkoVideoCompressor/releases/latest")!
         var request = URLRequest(url: url)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("EkoVideoCompressor/\(currentVersion)", forHTTPHeaderField: "User-Agent")
