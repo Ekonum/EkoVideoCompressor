@@ -15,6 +15,7 @@ intercepted. Pins the behaviours the SwiftUI app depends on:
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from dataclasses import dataclass
@@ -160,6 +161,19 @@ class CloudPipelineTest(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.workspace = Path(self._tmp.name)
+        # Pin the engine's app-support dir (library.db, app.log) inside
+        # this test's temp dir. The pipeline reaches for it on its own —
+        # _persist_partial_cloud_progress() calls database() internally —
+        # so without this, a run leaks phantom "meeting.mp4" rows into
+        # the developer's REAL library. Belt to tests/__init__.py's
+        # braces: that bootstrap only fires when discovery imports this
+        # file as part of the `tests` package, which it doesn't under
+        # `unittest discover -s tests` (no top-level dir).
+        support = self.workspace / "app-support"
+        support.mkdir()
+        env_patch = patch.dict(os.environ, {"EKO_APP_SUPPORT_DIR": str(support)})
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
         self.source = self.workspace / "meeting.mp4"
         self.source.write_bytes(b"fake video")
         _FakeProvider.response = _gemini_payload()
