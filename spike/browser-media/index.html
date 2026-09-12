@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Spike M0 — pipeline média navigateur</title>
+<style>
+  :root { --ink:#021A1A; --page:#EAEAEA; --accent:#2AD39F; --violet:#9645D6; --warn:#c2410c; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:28px; background:var(--page); color:var(--ink);
+         font:14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  h1 { font-size:21px; margin:0 0 4px; }
+  h2 { font-size:15px; margin:26px 0 10px; }
+  .sub { color:#4a5b5b; margin:0 0 22px; }
+  .card { background:#fff; border:1px solid #d3dcdc; border-radius:10px; padding:16px; margin-bottom:16px; }
+  button { background:var(--ink); color:#fff; border:0; border-radius:7px;
+           padding:9px 15px; font-size:14px; cursor:pointer; }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  button.ghost { background:#fff; color:var(--ink); border:1px solid #b9c6c6; }
+  label.field { display:inline-flex; align-items:center; gap:7px; margin-right:18px; }
+  input[type=number] { width:88px; padding:5px 7px; border:1px solid #b9c6c6; border-radius:5px; }
+  table { border-collapse:collapse; width:100%; font-size:13px; }
+  th, td { text-align:left; padding:6px 9px; border-bottom:1px solid #e3eaea; }
+  th { font-weight:600; color:#40514f; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  .ok { color:#0f7a5a; } .ko { color:#b3261e; } .na { color:#7a8888; }
+  pre { background:#f4f7f7; border:1px solid #dde5e5; border-radius:7px;
+        padding:12px; overflow:auto; font-size:12px; white-space:pre-wrap; }
+  progress { width:100%; height:9px; }
+  .row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .muted { color:#5d6e6e; font-size:13px; }
+</style>
+</head>
+<body>
+
+<h1>Spike M0 — pipeline média navigateur</h1>
+<p class="sub">Mesure la faisabilité d'extraire l'audio et de compresser <strong>dans le navigateur</strong>,
+sur un vrai fichier de plusieurs Go. À lancer dans <strong>Safari 26+</strong> et <strong>Chrome</strong>, puis à comparer.</p>
+
+<div class="card">
+  <h2 style="margin-top:0">1. Capacités du navigateur</h2>
+  <table id="caps"><tbody></tbody></table>
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0">2. Fichier</h2>
+  <div class="row">
+    <input type="file" id="file" accept="video/*,audio/*">
+    <span id="fileInfo" class="muted"></span>
+  </div>
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0">3. Test A — audio pour transcription</h2>
+  <p class="muted">Découpe en fenêtres (comme <code>plan_audio_chunks</code>) et encode chacune en Opus mono 16 kHz.
+  C'est ce qui serait uploadé. Chaque segment doit rester très en dessous des 100 Mo de Cloudflare.</p>
+  <div class="row" style="margin-bottom:12px">
+    <label class="field">Fenêtre (min) <input type="number" id="win" value="30" min="1"></label>
+    <label class="field">Codec
+      <select id="acodec">
+        <option value="opus" selected>Opus (plus léger)</option>
+        <option value="mp3">MP3 (format actuel)</option>
+      </select></label>
+    <label class="field">Débit (kbps) <input type="number" id="abr" value="24" min="8"></label>
+    <button id="runAudio" disabled>Lancer le test A</button>
+  </div>
+  <progress id="pAudio" value="0" max="1" hidden></progress>
+  <table id="audioOut"><tbody></tbody></table>
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0">4. Test B — compression H.264</h2>
+  <p class="muted">Reproduit le profil actuel (720p, 12 fps). Contrairement à ce que j'avais écrit dans le plan,
+  <strong>le HEVC est disponible ici</strong> — à comparer au H.264 sur mesure plutôt que sur hypothèse.
+  La sortie est écrite <strong>directement sur ton disque</strong> — rien n'est uploadé.</p>
+  <div class="row" style="margin-bottom:12px">
+    <label class="field">Codec
+      <select id="vcodec">
+        <option value="avc" selected>H.264 (universel)</option>
+        <option value="hevc">HEVC (comme aujourd'hui)</option>
+        <option value="av1">AV1</option>
+        <option value="vp9">VP9</option>
+      </select></label>
+    <label class="field">Hauteur <input type="number" id="vh" value="720" min="240"></label>
+    <label class="field">FPS <input type="number" id="fps" value="12" min="1"></label>
+    <label class="field">Débit vidéo (kbps) <input type="number" id="vbr" value="800" min="100"></label>
+    <button id="runVideo" disabled>Lancer le test B</button>
+  </div>
+  <progress id="pVideo" value="0" max="1" hidden></progress>
+  <table id="videoOut"><tbody></tbody></table>
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0">5. Rapport</h2>
+  <button id="copy" class="ghost">Copier le rapport</button>
+  <pre id="report">—</pre>
+</div>
+
+<script type="module">
+import {
+  Input, Output, Conversion, ALL_FORMATS, BlobSource,
+  BufferTarget, StreamTarget, Mp4OutputFormat, WebMOutputFormat, Quality,
+} from 'https://cdn.jsdelivr.net/npm/mediabunny@1.56.0/+esm';
+
+const $ = (id) => document.getElementById(id);
+const log = [];
+const note = (line) => { log.push(line); $('report').textContent = log.join('\n'); };
+
+const mb = (bytes) => (bytes / 1048576).toFixed(1) + ' Mo';
+const secs = (ms) => (ms / 1000).toFixed(1) + ' s';
+const hms = (s) => {
+  const t = Math.round(s);
+  return `${Math.floor(t/3600)}:${String(Math.floor(t%3600/60)).padStart(2,'0')}:${String(t%60).padStart(2,'0')}`;
+};
+
+function addRow(table, cells, cls = '') {
+  const tr = table.querySelector('tbody').insertRow();
+  if (cls) tr.className = cls;
+  cells.forEach((c, i) => {
+    const td = tr.insertCell();
+    td.innerHTML = c;
+    if (i > 0) td.className = 'num';
+  });
+}
+
+// ---- 1. capacités -------------------------------------------------------
+async function checkCaps() {
+  const rows = [];
+  const yes = (b) => b ? '<span class="ok">oui</span>' : '<span class="ko">non</span>';
+
+  rows.push(['Contexte sécurisé (requis)', yes(window.isSecureContext)]);
+  rows.push(['WebCodecs — AudioEncoder', yes('AudioEncoder' in window)]);
+  rows.push(['WebCodecs — VideoEncoder', yes('VideoEncoder' in window)]);
+
+  if ('AudioEncoder' in window) {
+    for (const [label, cfg] of [
+      ['Opus mono 16 kHz', { codec:'opus', sampleRate:16000, numberOfChannels:1, bitrate:24000 }],
+      ['AAC mono 16 kHz',  { codec:'mp4a.40.2', sampleRate:16000, numberOfChannels:1, bitrate:64000 }],
+    ]) {
+      let ok = false;
+      try { ok = (await AudioEncoder.isConfigSupported(cfg)).supported; } catch {}
+      rows.push([`Encodage ${label}`, yes(ok)]);
+    }
+  }
+  if ('VideoEncoder' in window) {
+    for (const [label, codec] of [['H.264', 'avc1.42001f'], ['HEVC (actuel, x265)', 'hev1.1.6.L93.B0']]) {
+      let ok = false;
+      try { ok = (await VideoEncoder.isConfigSupported({ codec, width:1280, height:720, bitrate:800000, framerate:12 })).supported; } catch {}
+      rows.push([`Encodage ${label}`, yes(ok)]);
+    }
+  }
+  rows.push(['Écriture disque (showSaveFilePicker)',
+    'showSaveFilePicker' in window ? '<span class="ok">oui</span>' : '<span class="na">non — repli téléchargement</span>']);
+  rows.push(['Mesure mémoire',
+    performance.memory ? '<span class="ok">oui</span>' : '<span class="na">non (Safari)</span>']);
+
+  rows.forEach(r => addRow($('caps'), r));
+  note('# Spike M0 — pipeline média navigateur');
+  note('navigateur : ' + navigator.userAgent);
+  note('');
+  note('## Capacités');
+  rows.forEach(([k, v]) => note(`- ${k} : ${v.replace(/<[^>]+>/g, '')}`));
+}
+
+// ---- mémoire ------------------------------------------------------------
+let peakHeap = 0, memTimer = null;
+const startMem = () => {
+  peakHeap = 0;
+  if (!performance.memory) return;
+  memTimer = setInterval(() => {
+    peakHeap = Math.max(peakHeap, performance.memory.usedJSHeapSize);
+  }, 400);
+};
+const stopMem = () => { if (memTimer) clearInterval(memTimer); memTimer = null; return peakHeap; };
+
+// ---- plan de découpage (miroir de plan_audio_chunks) --------------------
+function planChunks(total, windowSec) {
+  const TOLERANCE = 5 * 60;
+  if (total <= windowSec + TOLERANCE) return [[0, total]];
+  const count = Math.ceil(total / windowSec);
+  const width = total / count;
+  return Array.from({ length: count }, (_, i) => [i * width, Math.min((i + 1) * width, total)]);
+}
+
+// ---- état ---------------------------------------------------------------
+let file = null, duration = 0;
+
+$('file').addEventListener('change', async (e) => {
+  file = e.target.files[0];
+  if (!file) return;
+  $('fileInfo').textContent = 'lecture…';
+  try {
+    const input = new Input({ formats: ALL_FORMATS, source: new BlobSource(file) });
+    duration = await input.computeDuration();
+    const track = await input.getPrimaryAudioTrack();
+    const chans = track ? await track.getNumberOfChannels() : 0;
+    const rate = track ? await track.getSampleRate() : 0;
+    $('fileInfo').textContent = `${mb(file.size)} · ${hms(duration)} · audio ${chans} canal(aux) ${rate} Hz`;
+    $('runAudio').disabled = false;
+    $('runVideo').disabled = false;
+    note('');
+    note('## Fichier');
+    note(`- ${file.name}`);
+    note(`- taille : ${mb(file.size)} · durée : ${hms(duration)} · audio ${chans}ch ${rate} Hz`);
+  } catch (err) {
+    $('fileInfo').innerHTML = '<span class="ko">illisible : ' + err.message + '</span>';
+  }
+});
+
+// ---- Test A -------------------------------------------------------------
+$('runAudio').addEventListener('click', async () => {
+  $('runAudio').disabled = true;
+  $('audioOut').querySelector('tbody').innerHTML = '';
+  $('pAudio').hidden = false;
+
+  const windowSec = Number($('win').value) * 60;
+  const bitrate = Number($('abr').value) * 1000;
+  const acodec = $('acodec').value;
+  const container = acodec === 'mp3' ? new Mp4OutputFormat() : new WebMOutputFormat();
+  const chunks = planChunks(duration, windowSec);
+  addRow($('audioOut'), ['<strong>Fenêtre</strong>', '<strong>Durée</strong>', '<strong>Encodage</strong>', '<strong>Taille</strong>']);
+
+  const t0 = performance.now();
+  startMem();
+  let total = 0, biggest = 0, failed = null;
+
+  for (let i = 0; i < chunks.length; i++) {
+    const [start, end] = chunks[i];
+    const c0 = performance.now();
+    try {
+      const input = new Input({ formats: ALL_FORMATS, source: new BlobSource(file) });
+      const output = new Output({ format: container, target: new BufferTarget() });
+      const conv = await Conversion.init({
+        input, output,
+        trim: { start, end },
+        video: { discard: true },
+        audio: { codec: acodec, numberOfChannels: 1, sampleRate: 16000, quality: new Quality({ bitrate }) },
+      });
+      conv.onProgress = (p) => { $('pAudio').value = (i + p) / chunks.length; };
+      await conv.execute();
+      const bytes = output.target.buffer.byteLength;
+      total += bytes; biggest = Math.max(biggest, bytes);
+      addRow($('audioOut'), [`${i + 1}/${chunks.length}`, hms(end - start), secs(performance.now() - c0), mb(bytes)]);
+    } catch (err) {
+      failed = err.message;
+      addRow($('audioOut'), [`${i + 1}/${chunks.length}`, hms(end - start), `<span class="ko">échec</span>`, err.message], '');
+      break;
+    }
+  }
+
+  const elapsed = performance.now() - t0;
+  const heap = stopMem();
+  $('pAudio').value = 1;
+
+  note('');
+  note(`## Test A — audio (${acodec} mono 16 kHz @ ${bitrate/1000} kbps)`);
+  if (failed) { note('- ÉCHEC : ' + failed); }
+  else {
+    const perHour = total / (duration / 3600);
+    note(`- ${chunks.length} segment(s), total ${mb(total)}, plus gros segment ${mb(biggest)}`);
+    note(`- débit réel : ${mb(perHour)}/heure d'enregistrement`);
+    note(`- temps total : ${secs(elapsed)} (soit ${(duration / (elapsed/1000)).toFixed(0)}× temps réel)`);
+    note(`- plafond Cloudflare 100 Mo : ${biggest < 100*1048576 ? 'OK, large marge' : 'DÉPASSÉ'}`);
+    if (heap) note(`- pic mémoire JS : ${mb(heap)}`);
+    addRow($('audioOut'), ['<strong>Total</strong>', hms(duration), `<strong>${secs(elapsed)}</strong>`, `<strong>${mb(total)}</strong>`]);
+  }
+  $('runAudio').disabled = false;
+});
+
+// ---- Test B -------------------------------------------------------------
+$('runVideo').addEventListener('click', async () => {
+  $('runVideo').disabled = true;
+  $('videoOut').querySelector('tbody').innerHTML = '';
+  $('pVideo').hidden = false;
+
+  const height = Number($('vh').value);
+  const frameRate = Number($('fps').value);
+  const vbr = Number($('vbr').value) * 1000;
+  const vcodec = $('vcodec').value;
+
+  let target, handle = null;
+  if ('showSaveFilePicker' in window) {
+    try {
+      handle = await window.showSaveFilePicker({
+        suggestedName: file.name.replace(/\.[^.]+$/, '') + '_compressed.mp4',
+        types: [{ description: 'MP4', accept: { 'video/mp4': ['.mp4'] } }],
+      });
+      target = new StreamTarget(await handle.createWritable());
+    } catch { $('runVideo').disabled = false; $('pVideo').hidden = true; return; }
+  } else {
+    target = new BufferTarget();
+  }
+
+  const t0 = performance.now();
+  startMem();
+  try {
+    const input = new Input({ formats: ALL_FORMATS, source: new BlobSource(file) });
+    const output = new Output({ format: new Mp4OutputFormat(), target });
+    const conv = await Conversion.init({
+      input, output,
+      video: { height, fit: 'contain', codec: vcodec, frameRate, quality: new Quality({ bitrate: vbr }) },
+      audio: { codec: 'aac', quality: new Quality({ bitrate: 128e3 }) },
+    });
+    conv.onProgress = (p) => { $('pVideo').value = p; };
+    await conv.execute();
+
+    const elapsed = performance.now() - t0;
+    const heap = stopMem();
+    let outBytes = target instanceof BufferTarget ? target.buffer.byteLength : (await handle.getFile()).size;
+    const ratio = (1 - outBytes / file.size) * 100;
+
+    addRow($('videoOut'), ['<strong>Source</strong>', mb(file.size)]);
+    addRow($('videoOut'), ['<strong>Sortie H.264</strong>', mb(outBytes)]);
+    addRow($('videoOut'), ['<strong>Réduction</strong>', ratio.toFixed(1) + ' %']);
+    addRow($('videoOut'), ['<strong>Temps</strong>', secs(elapsed)]);
+
+    note('');
+    note(`## Test B — compression ${vcodec} (${height}p, ${frameRate} fps, ${vbr/1000} kbps)`);
+    note(`- source ${mb(file.size)} → sortie ${mb(outBytes)} (réduction ${ratio.toFixed(1)} %)`);
+    note(`- temps : ${secs(elapsed)} (soit ${(duration / (elapsed/1000)).toFixed(1)}× temps réel)`);
+    if (heap) note(`- pic mémoire JS : ${mb(heap)}`);
+  } catch (err) {
+    stopMem();
+    addRow($('videoOut'), ['<span class="ko">Échec</span>', err.message]);
+    note('');
+    note(`## Test B — ${vcodec} : ÉCHEC — ` + err.message);
+  }
+  $('runVideo').disabled = false;
+});
+
+$('copy').addEventListener('click', () => navigator.clipboard.writeText($('report').textContent));
+
+checkCaps();
+</script>
+</body>
+</html>
