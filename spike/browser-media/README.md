@@ -110,3 +110,33 @@ plancher, donc ça se juge à l'œil sur une tranche de 5 min.
 **Note indépendante de la migration** : dans la sortie actuelle de l'app, l'audio est en AAC 128 kbps
 stéréo 96 kHz, soit **206 des 288 Mo**. Pour de la parole, du 64 kbps mono est transparent et
 diviserait ce poste par deux — un gain immédiat sur l'app macOS, sans attendre la webapp.
+
+## Le débit n'est pas le levier (mesuré, `bench/`)
+
+Balayage HEVC sur la fenêtre la plus dense du fichier (t = 45 min, un article Odoo Connaissances
+plein de texte), 720p/12 fps, tranches de 3 min :
+
+| Cible demandée | Débit obtenu | Zone de texte |
+|---|---|---|
+| 60 kbps | 133 kbps | identique |
+| 100 kbps | 134 kbps | identique |
+| 150 kbps | 154 kbps | identique |
+| 250 kbps | 254 kbps | identique |
+
+Deux choses. L'encodeur **plafonne par le bas vers ~133 kbps** : demander 60 ou 100 ne change rien.
+Et surtout, les crops de la zone de texte sont **byte-identiques** d'un débit à l'autre — les bits
+supplémentaires partent dans les zones en mouvement, pas dans le texte statique. Il n'y a donc aucun
+arbitrage taille/lisibilité à ce niveau, et le balayage de débits n'a pas de sens.
+
+Le vrai levier est la **résolution**, parce que la source est en 4K et que la lisibilité est bridée
+par le downscale :
+
+| Profil | Débit vidéo | Taille pleine durée (audio 64k mono) | Texte |
+|---|---|---|---|
+| x265 CRF 28 (app) | 54 kbps | **181 Mo** | le plus net |
+| Navigateur HEVC 720p | 154 kbps | 335 Mo | lisible, plus mou |
+| Navigateur HEVC 1080p | 255 kbps | 490 Mo | proche de x265 |
+
+x265 reste devant avec trois fois moins de bits : un encodeur logiciel en qualité constante bat un
+encodeur matériel à débit cible sur du texte statique. C'est le prix à payer pour sortir la
+compression du client lourd, et il se paie en taille d'archive, pas en lisibilité.
