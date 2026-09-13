@@ -1,0 +1,52 @@
+<!doctype html><meta charset="utf-8"><title>banc</title>
+<pre id="o">boot</pre>
+<script type="module">
+import { Input, Output, Conversion, ALL_FORMATS, UrlSource, BufferTarget,
+         Mp4OutputFormat, Quality } from 'https://cdn.jsdelivr.net/npm/mediabunny@1.56.0/+esm';
+
+const q = new URLSearchParams(location.search);
+const out = document.getElementById('o');
+const say = (t) => { out.textContent += '\n' + t; };
+window.__done = false;
+
+const runs = (q.get('runs') || '').split(',').filter(Boolean);   // codec:kbps
+const start = Number(q.get('start') || 0);
+const span  = Number(q.get('span')  || 180);
+const hgt   = Number(q.get('h')     || 720);
+
+try {
+  const caps = [];
+  for (const [n, c] of [['h264','avc1.42001f'], ['hevc','hev1.1.6.L93.B0']]) {
+    let ok = false;
+    try { ok = (await VideoEncoder.isConfigSupported({ codec:c, width:1280, height:720, bitrate:150000, framerate:12 })).supported; } catch {}
+    caps.push(`${n}=${ok}`);
+  }
+  say('caps ' + caps.join(' '));
+
+  for (const r of runs) {
+    const [codec, kbps] = r.split(':');
+    const t0 = performance.now();
+    const input = new Input({ formats: ALL_FORMATS, source: new UrlSource('/src.mov') });
+    const target = new BufferTarget();
+    const conv = await Conversion.init({
+      input,
+      output: new Output({ format: new Mp4OutputFormat(), target }),
+      trim: { start, end: start + span },
+      video: { height: hgt, fit: 'contain', codec, frameRate: 12,
+               quality: new Quality({ bitrate: Number(kbps) * 1000 }) },
+      audio: { discard: true },
+    });
+    await conv.execute();
+    const buf = target.buffer;
+    const ms = performance.now() - t0;
+    const name = `${codec}_${hgt}p_${kbps}.mp4`;
+    await fetch('/' + name, { method: 'PUT', body: buf });
+    say(`RUN ${name} bytes=${buf.byteLength} kbps=${(buf.byteLength*8/span/1000).toFixed(0)} ms=${ms.toFixed(0)}`);
+  }
+  say('DONE');
+} catch (e) {
+  say('ERREUR ' + (e && e.message || e));
+  say('DONE');
+}
+window.__done = true;
+</script>
