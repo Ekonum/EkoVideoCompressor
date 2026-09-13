@@ -68,10 +68,14 @@ sur un vrai fichier de plusieurs Go. À lancer dans <strong>Safari 26+</strong> 
 </div>
 
 <div class="card">
-  <h2 style="margin-top:0">4. Test B — compression H.264</h2>
-  <p class="muted">Reproduit le profil actuel (720p, 12 fps). Contrairement à ce que j'avais écrit dans le plan,
-  <strong>le HEVC est disponible ici</strong> — à comparer au H.264 sur mesure plutôt que sur hypothèse.
-  La sortie est écrite <strong>directement sur ton disque</strong> — rien n'est uploadé.</p>
+  <h2 style="margin-top:0">4. Test B — compression</h2>
+  <p class="muted">Reproduit le profil actuel (720p, 12 fps). <strong>Le HEVC est disponible ici</strong> —
+  à comparer au H.264 sur mesure plutôt que sur hypothèse. La sortie est écrite
+  <strong>directement sur ton disque</strong> — rien n'est uploadé.</p>
+  <p class="muted"><strong>Référence mesurée</strong> sur <code>…2026-07-03 à 14.40.48.mov</code> (4466 Mo, 3 h 34) :
+  la sortie x265 de l'app fait 288 Mo, soit <strong>54 kbps de vidéo</strong> + 128 kbps d'audio AAC stéréo.
+  L'audio y pèse 206 des 288 Mo. Un débit vidéo cible de 800 kbps est donc ~15× la référence : c'est le
+  réglage de débit, pas le codec, qui décide du résultat.</p>
   <div class="row" style="margin-bottom:12px">
     <label class="field">Codec
       <select id="vcodec">
@@ -82,7 +86,13 @@ sur un vrai fichier de plusieurs Go. À lancer dans <strong>Safari 26+</strong> 
       </select></label>
     <label class="field">Hauteur <input type="number" id="vh" value="720" min="240"></label>
     <label class="field">FPS <input type="number" id="fps" value="12" min="1"></label>
-    <label class="field">Débit vidéo (kbps) <input type="number" id="vbr" value="800" min="100"></label>
+    <label class="field">Débit vidéo (kbps) <input type="number" id="vbr" value="150" min="20"></label>
+    <label class="field">Audio
+      <select id="vacodec">
+        <option value="aac-128-2" selected>AAC 128 kbps stéréo (comme l'app)</option>
+        <option value="aac-64-1">AAC 64 kbps mono</option>
+        <option value="opus-48-1">Opus 48 kbps mono</option>
+      </select></label>
     <button id="runVideo" disabled>Lancer le test B</button>
   </div>
   <progress id="pVideo" value="0" max="1" hidden></progress>
@@ -276,6 +286,11 @@ $('runVideo').addEventListener('click', async () => {
   const frameRate = Number($('fps').value);
   const vbr = Number($('vbr').value) * 1000;
   const vcodec = $('vcodec').value;
+  const [vaCodec, vaKbps, vaCh] = $('vacodec').value.split('-');
+  const audioCfg = {
+    codec: vaCodec, numberOfChannels: Number(vaCh),
+    quality: new Quality({ bitrate: Number(vaKbps) * 1000 }),
+  };
 
   let target, handle = null;
   if ('showSaveFilePicker' in window) {
@@ -298,7 +313,7 @@ $('runVideo').addEventListener('click', async () => {
     const conv = await Conversion.init({
       input, output,
       video: { height, fit: 'contain', codec: vcodec, frameRate, quality: new Quality({ bitrate: vbr }) },
-      audio: { codec: 'aac', quality: new Quality({ bitrate: 128e3 }) },
+      audio: audioCfg,
     });
     conv.onProgress = (p) => { $('pVideo').value = p; };
     await conv.execute();
@@ -309,13 +324,14 @@ $('runVideo').addEventListener('click', async () => {
     const ratio = (1 - outBytes / file.size) * 100;
 
     addRow($('videoOut'), ['<strong>Source</strong>', mb(file.size)]);
-    addRow($('videoOut'), ['<strong>Sortie H.264</strong>', mb(outBytes)]);
+    addRow($('videoOut'), [`<strong>Sortie ${vcodec}</strong>`, mb(outBytes)]);
     addRow($('videoOut'), ['<strong>Réduction</strong>', ratio.toFixed(1) + ' %']);
     addRow($('videoOut'), ['<strong>Temps</strong>', secs(elapsed)]);
 
     note('');
-    note(`## Test B — compression ${vcodec} (${height}p, ${frameRate} fps, ${vbr/1000} kbps)`);
+    note(`## Test B — compression ${vcodec} (${height}p, ${frameRate} fps, ${vbr/1000} kbps vidéo, ${vaCodec} ${vaKbps} kbps ${vaCh}ch)`);
     note(`- source ${mb(file.size)} → sortie ${mb(outBytes)} (réduction ${ratio.toFixed(1)} %)`);
+    note(`- débit réel : ${(outBytes * 8 / duration / 1000).toFixed(0)} kbps (référence x265 de l'app : 188 kbps dont 54 de vidéo)`);
     note(`- temps : ${secs(elapsed)} (soit ${(duration / (elapsed/1000)).toFixed(1)}× temps réel)`);
     if (heap) note(`- pic mémoire JS : ${mb(heap)}`);
   } catch (err) {
