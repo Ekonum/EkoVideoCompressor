@@ -87,6 +87,7 @@ sur un vrai fichier de plusieurs Go. À lancer dans <strong>Safari 26+</strong> 
     <label class="field">Hauteur <input type="number" id="vh" value="720" min="240"></label>
     <label class="field">FPS <input type="number" id="fps" value="12" min="1"></label>
     <label class="field">Débit vidéo (kbps) <input type="number" id="vbr" value="150" min="20"></label>
+    <label class="field" title="0 = tout le fichier. Une tranche de 5 min suffit à juger la qualité d'un débit.">Tranche (min, 0 = tout) <input type="number" id="vtrim" value="5" min="0"></label>
     <label class="field">Audio
       <select id="vacodec">
         <option value="aac-128-2" selected>AAC 128 kbps stéréo (comme l'app)</option>
@@ -286,6 +287,9 @@ $('runVideo').addEventListener('click', async () => {
   const frameRate = Number($('fps').value);
   const vbr = Number($('vbr').value) * 1000;
   const vcodec = $('vcodec').value;
+  const trimMin = Number($('vtrim').value);
+  const trim = trimMin > 0 ? { start: 0, end: Math.min(trimMin * 60, duration) } : null;
+  const span = trim ? trim.end : duration;
   const [vaCodec, vaKbps, vaCh] = $('vacodec').value.split('-');
   const audioCfg = {
     codec: vaCodec, numberOfChannels: Number(vaCh),
@@ -312,6 +316,7 @@ $('runVideo').addEventListener('click', async () => {
     const output = new Output({ format: new Mp4OutputFormat(), target });
     const conv = await Conversion.init({
       input, output,
+      ...(trim ? { trim } : {}),
       video: { height, fit: 'contain', codec: vcodec, frameRate, quality: new Quality({ bitrate: vbr }) },
       audio: audioCfg,
     });
@@ -321,18 +326,20 @@ $('runVideo').addEventListener('click', async () => {
     const elapsed = performance.now() - t0;
     const heap = stopMem();
     let outBytes = target instanceof BufferTarget ? target.buffer.byteLength : (await handle.getFile()).size;
-    const ratio = (1 - outBytes / file.size) * 100;
+    const fullBytes = outBytes * (duration / span);
+    const ratio = (1 - fullBytes / file.size) * 100;
 
     addRow($('videoOut'), ['<strong>Source</strong>', mb(file.size)]);
-    addRow($('videoOut'), [`<strong>Sortie ${vcodec}</strong>`, mb(outBytes)]);
+    addRow($('videoOut'), [`<strong>Sortie ${vcodec}</strong>`, mb(outBytes) + (trim ? ` (tranche de ${trimMin} min → ${mb(fullBytes)} extrapolés)` : '')]);
     addRow($('videoOut'), ['<strong>Réduction</strong>', ratio.toFixed(1) + ' %']);
     addRow($('videoOut'), ['<strong>Temps</strong>', secs(elapsed)]);
 
     note('');
     note(`## Test B — compression ${vcodec} (${height}p, ${frameRate} fps, ${vbr/1000} kbps vidéo, ${vaCodec} ${vaKbps} kbps ${vaCh}ch)`);
-    note(`- source ${mb(file.size)} → sortie ${mb(outBytes)} (réduction ${ratio.toFixed(1)} %)`);
-    note(`- débit réel : ${(outBytes * 8 / duration / 1000).toFixed(0)} kbps (référence x265 de l'app : 188 kbps dont 54 de vidéo)`);
-    note(`- temps : ${secs(elapsed)} (soit ${(duration / (elapsed/1000)).toFixed(1)}× temps réel)`);
+    if (trim) note(`- mesuré sur une tranche de ${trimMin} min, extrapolé à la durée complète`);
+    note(`- source ${mb(file.size)} → sortie ${mb(fullBytes)} (réduction ${ratio.toFixed(1)} %)`);
+    note(`- débit réel : ${(outBytes * 8 / span / 1000).toFixed(0)} kbps (référence x265 de l'app : 188 kbps dont 54 de vidéo)`);
+    note(`- temps : ${secs(elapsed)} (soit ${(span / (elapsed/1000)).toFixed(1)}× temps réel)`);
     if (heap) note(`- pic mémoire JS : ${mb(heap)}`);
   } catch (err) {
     stopMem();
