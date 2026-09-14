@@ -17,3 +17,7 @@ build/
 bin/
 RELEASE_NOTES.md
 _build_version.py
+
+# État local du serveur web (base + fenêtres en transit)
+web/state/
+state/

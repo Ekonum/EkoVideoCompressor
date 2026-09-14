@@ -1,0 +1,31 @@
+name: Serveur web
+
+# Le job macOS installe MLX, pyannote et consorts pour tester le moteur
+# local : inutile ici, et trente fois plus lent. Le serveur a ses propres
+# dépendances et tourne sur un runner Linux, comme en production.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r web/requirements-dev.txt
+
+      - name: Run tests
+        run: python -m unittest discover -t web -s web/tests
