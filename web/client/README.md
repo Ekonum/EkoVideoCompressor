@@ -57,3 +57,28 @@ ajouterait des contenants sans rien clarifier.
 `?source=/chemin` charge un fichier servi par le serveur au lieu de
 passer par le sélecteur : la chaîne complète est vérifiable sans humain.
 Même origine, derrière Access comme le reste.
+
+## Compression
+
+Profil arrêté au jalon M0 : **HEVC 720p, 12 images par seconde, ~150 kbps,
+audio AAC 64 kbps mono**. Mesuré sur une réunion de 3 h 34 : 4 466 Mo
+deviennent 335 Mo, soit 92,5 % de réduction, à 5,4× le temps réel — une
+parité de vitesse avec le libx265 de l'app macOS, pas un gain.
+
+Le débit n'est pas un curseur : l'encodeur plafonne vers 133 kbps, et la
+zone de texte d'une capture d'écran est *byte-identique* de 60 à
+250 kbps. Les bits supplémentaires vont aux zones en mouvement. Monter la
+résolution est le seul vrai levier, et le 1080p (490 Mo) n'a pas semblé
+valoir les 155 Mo supplémentaires.
+
+La sortie est écrite **directement sur le disque** via
+`showSaveFilePicker` et un `StreamTarget` : une archive de plusieurs
+centaines de mégaoctets ne tient pas en mémoire, et surtout elle n'est
+jamais envoyée au serveur. En mode « Compresser » seul, le serveur n'est
+pas sollicité du tout.
+
+*Écart assumé* : l'app macOS ajoute `-movflags +faststart`, qui déplace
+l'index en tête de fichier. Ce n'est pas faisable en écriture
+continue — il faudrait réécrire le fichier entier après coup. L'archive
+se lit parfaitement en local ; elle démarrera juste moins vite si un
+jour on la sert en HTTP.
