@@ -56,6 +56,40 @@ EKOVIDEO_WEB_DEV_MODE=1 GEMINI_API_KEY=… \
 ne doit pas pouvoir démarrer ouvert par accident, et l'application refuse
 de démarrer si ni l'un ni l'autre n'est configuré.
 
+## Le client
+
+`web/static/` — pas de build. Le module qui compte est
+`media-worker.js` : il découpe et encode les fenêtres hors du fil
+principal, puis les envoie lui-même (repasser des ArrayBuffers de
+plusieurs Mo au fil principal juste pour les poster n'ajouterait que des
+copies). Il est indépendant de tout framework et survivra à l'UI.
+
+Pas de Vite ni de React pour l'instant : le jalon prouve une chaîne
+média, et elle doit rester lisible directement dans le navigateur. La
+chaîne d'outils arrivera en M3, quand la surface d'UI (table triable,
+éditeurs, bibliothèque) le justifiera vraiment.
+
+**Format d'upload : MP3 64 kbps mono 16 kHz**, soit exactement ce que
+produit `build_cloud_audio_cmd`. Gemini documente wav, mp3, aiff, aac,
+ogg et flac ; l'Opus n'y figure pas, et le vérifier demande une vraie
+clé. À format identique, la transcription issue du navigateur se compare
+par ailleurs trait pour trait à celle de l'app macOS — c'est la
+vérification du jalon. L'Opus reste l'optimisation visée (~10,7 Mo/h
+contre ~28) : le jour où il est validé, seule `AUDIO_PROFILE` change.
+
+### Rodage sans intervention
+
+`?source=/chemin` charge un fichier servi par le serveur au lieu de
+passer par le sélecteur, ce qui rend la chaîne vérifiable de bout en
+bout sans humain. Même origine, derrière Access comme le reste.
+
+```bash
+./bin/ffmpeg -f lavfi -i "sine=frequency=220:sample_rate=48000" \
+  -f lavfi -i "testsrc=size=320x240:rate=5" -t 720 \
+  -c:v libx264 -preset ultrafast -c:a aac -shortest web/static/_rodage.mp4
+# puis http://127.0.0.1:8080/?source=/_rodage.mp4
+```
+
 ## Configuration
 
 | Variable | Rôle |
