@@ -13,6 +13,7 @@ pyannote.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -44,6 +45,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     technical_terms_json TEXT,
     cloud_cost_usd       REAL NOT NULL DEFAULT 0,
     compressed_bytes     INTEGER,
+    previous_versions_json TEXT,
     created_at           TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at           TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -86,6 +88,18 @@ CREATE TABLE IF NOT EXISTS api_usage (
 );
 
 CREATE INDEX IF NOT EXISTS idx_usage_created ON api_usage(created_at);
+
+-- Recherche plein texte. Table FTS5 autonome plutôt qu'en contenu
+-- externe : les segments sont réécrits en bloc à chaque finalisation,
+-- et des déclencheurs sur un DELETE massif coûteraient plus qu'ils ne
+-- rapportent. Les colonnes UNINDEXED évitent qu'un identifiant de job
+-- ressorte comme un résultat de recherche.
+CREATE VIRTUAL TABLE IF NOT EXISTS segments_fts USING fts5(
+    text,
+    job_id       UNINDEXED,
+    start_second UNINDEXED,
+    speaker      UNINDEXED
+);
 """
 
 
@@ -96,6 +110,18 @@ class Database:
         self._local = threading.local()
         with self.connect() as conn:
             conn.executescript(SCHEMA)
+
+    def _ensure_column(self, conn, table: str, column: str, ddl: str) -> None:
+        """Ajout de colonne idempotent — le pendant du helper de sync-hub.
+
+        SQLite n'a pas d'``ADD COLUMN IF NOT EXISTS`` : on lit le schéma
+        courant plutôt que d'avaler une exception, qui masquerait une
+        vraie erreur de DDL."""
+        existing = {
+            row["name"] for row in conn.execute(f"PRAGMA table_info({table})")
+        }
+        if column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
     def _conn(self) -> sqlite3.Connection:
         conn = getattr(self._local, "conn", None)
@@ -244,21 +270,30 @@ class Database:
             )
 
     def replace_segments(self, job_id: int, segments: list[dict[str, Any]]) -> None:
+        rows = [
+            (
+                job_id,
+                float(s.get("start") or 0.0),
+                float(s.get("end") or 0.0),
+                str(s.get("speaker") or ""),
+                str(s.get("text") or ""),
+            )
+            for s in segments
+        ]
         with self.connect() as conn:
             conn.execute("DELETE FROM transcription_segments WHERE job_id = ?", (job_id,))
             conn.executemany(
                 "INSERT INTO transcription_segments (job_id, start_second, "
                 "end_second, speaker, text) VALUES (?, ?, ?, ?, ?)",
-                [
-                    (
-                        job_id,
-                        float(s.get("start") or 0.0),
-                        float(s.get("end") or 0.0),
-                        str(s.get("speaker") or ""),
-                        str(s.get("text") or ""),
-                    )
-                    for s in segments
-                ],
+                rows,
+            )
+            # L'index plein texte suit dans la même transaction : une
+            # recherche ne doit jamais ramener une phrase qui n'existe plus.
+            conn.execute("DELETE FROM segments_fts WHERE job_id = ?", (job_id,))
+            conn.executemany(
+                "INSERT INTO segments_fts (text, job_id, start_second, speaker) "
+                "VALUES (?, ?, ?, ?)",
+                [(text, job_id, start, speaker) for _, start, _, speaker, text in rows],
             )
 
     def segments_for_job(self, job_id: int) -> list[dict[str, Any]]:
@@ -267,6 +302,108 @@ class Database:
                 "SELECT start_second, end_second, speaker, text FROM "
                 "transcription_segments WHERE job_id = ? ORDER BY start_second",
                 (job_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def reset_chunk(self, job_id: int, idx: int) -> None:
+        """Remet une fenêtre à l'état attendu pour que le navigateur la
+        réencode. C'est le mécanisme derrière « relancer cette fenêtre » :
+        sur une réunion de huit fenêtres dont trois ont échoué, rien ne
+        justifie de repayer les cinq qui sont passées."""
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE job_chunks SET status = 'attendu', error = NULL, "
+                "result_json = NULL, updated_at = ? WHERE job_id = ? AND idx = ?",
+                (datetime.now().isoformat(timespec="seconds"), job_id, idx),
+            )
+
+    def archive_current_version(self, job_id: int) -> None:
+        """Empile la transcription en place dans l'historique avant qu'une
+        relance ne l'écrase. Sans cela, relancer une réunion pour corriger
+        une fenêtre détruirait le travail déjà validé dessus."""
+        job = self.get_job(job_id)
+        if not job or not (job.get("transcript") or "").strip():
+            return
+        versions = json.loads(job.get("previous_versions_json") or "[]")
+        versions.insert(
+            0,
+            {
+                "archived_at": datetime.now().isoformat(timespec="seconds"),
+                "title": job.get("title") or "",
+                "transcript": job.get("transcript") or "",
+                "speaker_map_json": job.get("speaker_map_json"),
+                "technical_terms_json": job.get("technical_terms_json"),
+                "cloud_cost_usd": job.get("cloud_cost_usd") or 0.0,
+            },
+        )
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET previous_versions_json = ?, updated_at = ? WHERE id = ?",
+                (
+                    json.dumps(versions[:10], ensure_ascii=False),
+                    datetime.now().isoformat(timespec="seconds"),
+                    job_id,
+                ),
+            )
+
+    def update_job_context(
+        self,
+        job_id: int,
+        *,
+        title: str | None = None,
+        speakers: dict[str, str] | None = None,
+        technical_terms: list[str] | None = None,
+    ) -> None:
+        """Édition de la fiche par l'utilisateur. Chaque champ absent est
+        laissé tel quel — un formulaire partiel ne doit pas effacer ce
+        qu'il n'affichait pas."""
+        sets: list[str] = []
+        values: list[Any] = []
+        if title is not None:
+            sets.append("title = ?")
+            values.append(title.strip())
+        if speakers is not None:
+            sets.append("speaker_map_json = ?")
+            values.append(json.dumps(speakers, ensure_ascii=False))
+        if technical_terms is not None:
+            sets.append("technical_terms_json = ?")
+            values.append(json.dumps(technical_terms, ensure_ascii=False))
+        if not sets:
+            return
+        sets.append("updated_at = ?")
+        values.extend([datetime.now().isoformat(timespec="seconds"), job_id])
+        with self.connect() as conn:
+            conn.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id = ?", values)
+
+    def set_transcript(self, job_id: int, transcript: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET transcript = ?, updated_at = ? WHERE id = ?",
+                (transcript, datetime.now().isoformat(timespec="seconds"), job_id),
+            )
+
+    def search_segments(
+        self, owner_id: int, query: str, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """Recherche plein texte dans les transcriptions de l'utilisateur.
+
+        La requête est découpée en termes, chacun cité, pour qu'une
+        apostrophe ou un tiret ne soit pas lu comme de la syntaxe FTS —
+        « l'équipe » ferait sinon une erreur d'analyse plutôt qu'une
+        recherche.
+        """
+        terms = [t for t in re.split(r"\s+", (query or "").strip()) if t]
+        if not terms:
+            return []
+        match = " ".join('"' + t.replace('"', '""') + '"' for t in terms)
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT f.job_id, f.start_second, f.speaker, f.text, "
+                "       j.title, j.filename "
+                "FROM segments_fts f JOIN jobs j ON j.id = f.job_id "
+                "WHERE segments_fts MATCH ? AND j.owner_id = ? "
+                "ORDER BY rank LIMIT ?",
+                (match, owner_id, limit),
             ).fetchall()
             return [dict(r) for r in rows]
 

@@ -8,10 +8,10 @@ l'API jobs/fenêtres qui réutilise `cloud_transcription.py` tel quel.
 
 **Le serveur ne voit jamais le média.** Le VPS partagé n'a ni le stockage
 pour des sources de plusieurs Go ni le CPU pour les encoder. Le navigateur
-découpe et encode ; le serveur ne reçoit que des fenêtres audio Opus de
-quelques Mo (mesuré en M0 : 4,9 Mo pour une réunion de 3 h 34, soit vingt
-fois sous le plafond de 100 Mo du tunnel Cloudflare), les relaie à Gemini,
-et ne conserve que des transcriptions.
+découpe et encode ; le serveur ne reçoit que des fenêtres audio de
+quelques Mo — ~14 Mo pour une fenêtre de 30 min en MP3 64 kbps, sept fois
+sous le plafond de 100 Mo du tunnel Cloudflare — les relaie à Gemini, et
+ne conserve que des transcriptions.
 
 ## Pourquoi ici et pas dans son propre dépôt
 
@@ -41,7 +41,36 @@ suivi par `GET`.
 
 **La reprise est gratuite.** `missing_chunks` dit exactement ce que le
 navigateur doit réencoder après un onglet fermé ou un réseau coupé. C'est
-le même mécanisme qui servira au panneau « relancer certaines fenêtres ».
+le même mécanisme qui sert au panneau « relancer certaines fenêtres ».
+
+### Bibliothèque
+
+| Route | Rôle |
+|---|---|
+| `GET /api/jobs` | La table — un traitement par ligne |
+| `GET /api/jobs/{id}/detail` | Transcription, segments, interlocuteurs, termes, versions précédentes |
+| `PATCH /api/jobs/{id}` | Édition **partielle** du titre, des interlocuteurs ou des termes |
+| `POST /api/jobs/{id}/terms/replace` | Corrige un terme mal entendu partout à la fois |
+| `POST /api/jobs/{id}/chunks/{i}/reset` | Redemande **une seule** fenêtre |
+| `GET /api/search?q=` | Recherche plein texte dans ses propres transcriptions |
+
+Quatre choix s'y lisent :
+
+**L'édition est partielle.** Un champ absent est laissé tel quel : un
+formulaire qui n'affiche pas les termes ne doit pas les effacer.
+
+**Relancer une fenêtre ne repaie pas les autres.** `reset` remet la
+fenêtre à l'état attendu et `missing_chunks` y renvoie le navigateur —
+sur huit fenêtres dont trois ont échoué, les cinq bonnes sont gardées.
+
+**Une relance archive la version en place** (`previous_versions_json`,
+dix versions gardées) : rattraper une fenêtre ne doit pas détruire une
+transcription déjà relue.
+
+**La recherche est cloisonnée et vraiment plein texte** — FTS5, index
+réécrit dans la même transaction que les segments, pour qu'une recherche
+ne ramène jamais une phrase effacée. La requête est découpée et chaque
+terme cité, sans quoi « l'équipe » partirait en erreur de syntaxe.
 
 ## Lancer en local
 
@@ -64,10 +93,10 @@ principal, puis les envoie lui-même (repasser des ArrayBuffers de
 plusieurs Mo au fil principal juste pour les poster n'ajouterait que des
 copies). Il est indépendant de tout framework et survivra à l'UI.
 
-Pas de Vite ni de React pour l'instant : le jalon prouve une chaîne
-média, et elle doit rester lisible directement dans le navigateur. La
-chaîne d'outils arrivera en M3, quand la surface d'UI (table triable,
-éditeurs, bibliothèque) le justifiera vraiment.
+Pas de Vite ni de React pour l'instant : la chaîne média doit rester
+lisible directement dans le navigateur. La question du socle frontend se
+pose maintenant que la bibliothèque a son API, et elle sera tranchée avec
+l'UI — pas avant, et surtout pas en retardant une API vérifiable.
 
 **Format d'upload : MP3 64 kbps mono 16 kHz**, soit exactement ce que
 produit `build_cloud_audio_cmd`. Gemini documente wav, mp3, aiff, aac,

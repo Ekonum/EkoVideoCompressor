@@ -73,7 +73,9 @@ class FakeResult:
         )
 
 
-class ApiTestCase(unittest.TestCase):
+class _Fixture(unittest.TestCase):
+    """Montage commun : serveur en mode développement, fournisseur doublé."""
+
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name)
@@ -118,6 +120,10 @@ class ApiTestCase(unittest.TestCase):
         response = self.client.post("/api/jobs", json=payload)
         self.assertEqual(response.status_code, 201, response.text)
         return response.json()
+
+
+class ApiTestCase(_Fixture):
+    """Le contrat d'exécution : plan, budget, envoi, reprise."""
 
     def test_le_plan_de_decoupage_vient_du_serveur(self):
         """Le navigateur exécute un plan, il ne le calcule pas."""
@@ -292,3 +298,137 @@ class SettingsTestCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LibraryTestCase(_Fixture):
+    """Bibliothèque : consultation, édition, recherche, relance."""
+
+    def _finished_job(self, duration=600.0) -> int:
+        body = self._create(duration=duration)
+        job_id = body["job_id"]
+        for chunk in body["chunks"]:
+            self.client.put(
+                f"/api/jobs/{job_id}/chunks/{chunk['index']}", content=b"audio"
+            )
+        self.client.post(f"/api/jobs/{job_id}/finalize")
+        return job_id
+
+    def test_la_liste_ne_montre_que_ses_propres_traitements(self):
+        mine = self._finished_job()
+        autre = self.db.user_id_for_email("luka@ekonum.fr")
+        self.db.create_job(
+            owner_id=autre, filename="prive.mov", duration_seconds=60,
+            model="gemini-3.8-flash", language="fr", context={}, chunks=[(0.0, 60.0)],
+        )
+        listed = self.client.get("/api/jobs").json()
+        self.assertEqual([j["job_id"] for j in listed], [mine])
+
+    def test_le_detail_porte_segments_interlocuteurs_et_termes(self):
+        job_id = self._finished_job()
+        detail = self.client.get(f"/api/jobs/{job_id}/detail").json()
+        self.assertEqual(detail["speakers"], {"Intervenant 1": "Robin"})
+        self.assertEqual(detail["technical_terms"], ["terme0"])
+        self.assertEqual(len(detail["segments"]), 1)
+        self.assertEqual(detail["segments"][0]["speaker"], "Robin")
+
+    def test_l_edition_partielle_n_efface_pas_le_reste(self):
+        """Un formulaire qui n'affiche pas les termes ne doit pas les perdre."""
+        job_id = self._finished_job()
+        response = self.client.patch(
+            f"/api/jobs/{job_id}", json={"title": "Acritec - Revue de mars"}
+        )
+        self.assertEqual(response.status_code, 200)
+        detail = self.client.get(f"/api/jobs/{job_id}/detail").json()
+        self.assertEqual(detail["title"], "Acritec - Revue de mars")
+        self.assertEqual(detail["technical_terms"], ["terme0"])
+
+    def test_le_remplacement_de_terme_touche_transcription_segments_et_glossaire(self):
+        job_id = self._finished_job()
+        self.db.set_transcript(job_id, "Robin : fenêtre 0 chez Acritek.")
+        self.db.update_job_context(job_id, technical_terms=["Acritek", "Odoo"])
+        self.db.replace_segments(
+            job_id,
+            [{"start": 0, "end": 5, "speaker": "Robin", "text": "chez Acritek"}],
+        )
+
+        response = self.client.post(
+            f"/api/jobs/{job_id}/terms/replace", json={"old": "Acritek", "new": "Acritec"}
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["occurrences"], 2)
+
+        detail = self.client.get(f"/api/jobs/{job_id}/detail").json()
+        self.assertIn("Acritec", detail["transcript"])
+        self.assertNotIn("Acritek", detail["transcript"])
+        self.assertEqual(detail["segments"][0]["text"], "chez Acritec")
+        self.assertEqual(detail["technical_terms"], ["Acritec", "Odoo"])
+
+    def test_la_recherche_plein_texte_traverse_les_traitements(self):
+        job_id = self._finished_job()
+        self.db.replace_segments(
+            job_id,
+            [
+                {"start": 0, "end": 5, "speaker": "Robin", "text": "on migre vers Odoo 19"},
+                {"start": 5, "end": 9, "speaker": "Lùka", "text": "rien à signaler"},
+            ],
+        )
+        hits = self.client.get("/api/search", params={"q": "Odoo"}).json()
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["job_id"], job_id)
+        self.assertIn("Odoo", hits[0]["text"])
+
+    def test_la_recherche_encaisse_une_apostrophe(self):
+        """« l'équipe » ne doit pas partir en erreur de syntaxe FTS."""
+        job_id = self._finished_job()
+        self.db.replace_segments(
+            job_id, [{"start": 0, "end": 5, "speaker": "", "text": "toute l'équipe"}]
+        )
+        response = self.client.get("/api/search", params={"q": "l'équipe"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(len(response.json()), 1)
+
+    def test_la_recherche_ne_ramene_pas_une_phrase_effacee(self):
+        job_id = self._finished_job()
+        self.db.replace_segments(
+            job_id, [{"start": 0, "end": 5, "speaker": "", "text": "budget confidentiel"}]
+        )
+        self.db.replace_segments(
+            job_id, [{"start": 0, "end": 5, "speaker": "", "text": "autre chose"}]
+        )
+        self.assertEqual(self.client.get("/api/search", params={"q": "confidentiel"}).json(), [])
+
+    def test_la_recherche_ne_traverse_pas_les_utilisateurs(self):
+        autre = self.db.user_id_for_email("luka@ekonum.fr")
+        job = self.db.create_job(
+            owner_id=autre, filename="prive.mov", duration_seconds=60,
+            model="gemini-3.8-flash", language="fr", context={}, chunks=[(0.0, 60.0)],
+        )
+        self.db.replace_segments(
+            job, [{"start": 0, "end": 5, "speaker": "", "text": "secret de Lùka"}]
+        )
+        self.assertEqual(self.client.get("/api/search", params={"q": "secret"}).json(), [])
+
+    def test_relancer_une_fenetre_ne_redemande_que_celle_la(self):
+        body = self._create(duration=3600.0)
+        job_id = body["job_id"]
+        for index in (0, 1):
+            self.client.put(f"/api/jobs/{job_id}/chunks/{index}", content=b"audio")
+        self.assertEqual(self.client.get(f"/api/jobs/{job_id}").json()["missing_chunks"], [])
+
+        self.assertEqual(
+            self.client.post(f"/api/jobs/{job_id}/chunks/1/reset").status_code, 200
+        )
+        self.assertEqual(self.client.get(f"/api/jobs/{job_id}").json()["missing_chunks"], [1])
+
+    def test_une_relance_archive_la_version_precedente(self):
+        job_id = self._finished_job()
+        self.db.set_transcript(job_id, "première version relue")
+
+        self.client.post(f"/api/jobs/{job_id}/chunks/0/reset")
+        self.client.put(f"/api/jobs/{job_id}/chunks/0", content=b"audio")
+        self.client.post(f"/api/jobs/{job_id}/finalize")
+
+        detail = self.client.get(f"/api/jobs/{job_id}/detail").json()
+        self.assertEqual(len(detail["previous_versions"]), 1)
+        self.assertEqual(detail["previous_versions"][0]["transcript"], "première version relue")
+        self.assertIn("fenêtre 0", detail["transcript"])

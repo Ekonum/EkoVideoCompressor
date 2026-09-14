@@ -41,6 +41,7 @@ from .auth import AccessVerifier, AuthError
 from .db import Database
 from .secrets import GeminiKey, SecretError
 from .settings import Settings
+from .terms import replace_term
 from .transcription import context_for_chunk, transcribe_chunk, transcript_text
 
 log = logging.getLogger("ekovideo.web")
@@ -87,6 +88,20 @@ class JobRequest(BaseModel):
     model: str = Field(min_length=1)
     language: str = "fr"
     context: dict[str, Any] = Field(default_factory=dict)
+
+
+class ContextPatch(BaseModel):
+    """Édition partielle : un champ absent est laissé tel quel, pour qu'un
+    formulaire qui n'affiche pas les termes ne les efface pas."""
+
+    title: str | None = None
+    speakers: dict[str, str] | None = None
+    technical_terms: list[str] | None = None
+
+
+class TermReplacement(BaseModel):
+    old: str = Field(min_length=1)
+    new: str = Field(min_length=1)
 
 
 class FinalizeResponse(BaseModel):
@@ -288,6 +303,9 @@ def create_app(
         ]
         merged = merge_chunk_results(results)
         text = transcript_text(merged.segments)
+        # Relancer une réunion pour rattraper une fenêtre ne doit pas
+        # détruire la version déjà relue.
+        db.archive_current_version(job_id)
         db.replace_segments(job_id, merged.segments)
         db.finish_job(
             job_id,
@@ -307,6 +325,104 @@ def create_app(
             technical_terms=merged.technical_terms,
             cost_usd=merged.usage.cost_usd,
         )
+
+    # -- bibliothèque --------------------------------------------------
+
+    @app.get("/api/jobs")
+    def list_jobs(owner_id: int = Depends(current_user)) -> list[dict]:
+        return [
+            {
+                "job_id": job["id"],
+                "filename": job["filename"],
+                "title": job["title"],
+                "status": job["status"],
+                "model": job["model"],
+                "duration_seconds": job["duration_seconds"],
+                "cost_usd": job["cloud_cost_usd"],
+                "created_at": job["created_at"],
+                "has_versions": bool(job["previous_versions_json"]),
+            }
+            for job in db.list_jobs(owner_id)
+        ]
+
+    @app.get("/api/jobs/{job_id}/detail")
+    def job_detail(job_id: int, owner_id: int = Depends(current_user)) -> dict:
+        job = owned_job(job_id, owner_id)
+        return {
+            "job_id": job_id,
+            "filename": job["filename"],
+            "title": job["title"],
+            "status": job["status"],
+            "model": job["model"],
+            "duration_seconds": job["duration_seconds"],
+            "cost_usd": job["cloud_cost_usd"],
+            "transcript": job["transcript"] or "",
+            "speakers": json.loads(job["speaker_map_json"] or "{}"),
+            "technical_terms": json.loads(job["technical_terms_json"] or "[]"),
+            "segments": db.segments_for_job(job_id),
+            "previous_versions": json.loads(job["previous_versions_json"] or "[]"),
+        }
+
+    @app.patch("/api/jobs/{job_id}")
+    def patch_context(
+        job_id: int, patch: ContextPatch, owner_id: int = Depends(current_user)
+    ) -> dict:
+        owned_job(job_id, owner_id)
+        db.update_job_context(
+            job_id,
+            title=patch.title,
+            speakers=patch.speakers,
+            technical_terms=patch.technical_terms,
+        )
+        return {"updated": True}
+
+    @app.post("/api/jobs/{job_id}/terms/replace")
+    def replace_term_route(
+        job_id: int, payload: TermReplacement, owner_id: int = Depends(current_user)
+    ) -> dict:
+        job = owned_job(job_id, owner_id)
+        transcript, segments, terms, occurrences = replace_term(
+            transcript=job["transcript"] or "",
+            segments=db.segments_for_job(job_id),
+            technical_terms=json.loads(job["technical_terms_json"] or "[]"),
+            old=payload.old,
+            new=payload.new,
+        )
+        if occurrences:
+            db.set_transcript(job_id, transcript)
+            # `segments_for_job` renvoie des colonnes SQL ; `replace_segments`
+            # attend le vocabulaire des segments cloud.
+            db.replace_segments(
+                job_id,
+                [
+                    {
+                        "start": s["start_second"],
+                        "end": s["end_second"],
+                        "speaker": s["speaker"],
+                        "text": s["text"],
+                    }
+                    for s in segments
+                ],
+            )
+        db.update_job_context(job_id, technical_terms=terms)
+        return {"occurrences": occurrences, "technical_terms": terms}
+
+    @app.post("/api/jobs/{job_id}/chunks/{index}/reset", status_code=status.HTTP_200_OK)
+    def reset_chunk(
+        job_id: int, index: int, owner_id: int = Depends(current_user)
+    ) -> dict:
+        job = owned_job(job_id, owner_id)
+        if index < 0 or index >= int(job["chunk_count"]):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Fenêtre inconnue.")
+        db.reset_chunk(job_id, index)
+        # Le job repart en attente : `missing_chunks` guidera le navigateur
+        # vers cette seule fenêtre, sans repayer les autres.
+        db.set_job_status(job_id, "en_attente")
+        return {"reset": index}
+
+    @app.get("/api/search")
+    def search(q: str = "", owner_id: int = Depends(current_user)) -> list[dict]:
+        return db.search_segments(owner_id, q)
 
     # -- tâche de fond -------------------------------------------------
 
