@@ -138,7 +138,10 @@ def create_app(
         )
 
     config.chunk_dir.mkdir(parents=True, exist_ok=True)
-    static_dir = Path(__file__).resolve().parent.parent / "static"
+    # Le client est construit par Vite ; en production l'image Docker
+    # embarque `dist`. En développement on lance plutôt `npm run dev`,
+    # qui sert le client et relaie /api ici.
+    static_dir = Path(__file__).resolve().parent.parent / "client" / "dist"
     app = FastAPI(title="EkoVideo", version="1.0")
     app.state.settings = config
     app.state.db = db
@@ -175,8 +178,17 @@ def create_app(
         return {"status": "ok"}
 
     @app.get("/")
-    def index() -> FileResponse:
-        return FileResponse(static_dir / "index.html")
+    def index():
+        page = static_dir / "index.html"
+        if not page.exists():
+            # Message franc plutôt qu'un 404 opaque : l'oubli le plus
+            # probable est simplement de n'avoir pas construit le client.
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "Client non construit : lancez « npm run build » dans web/client "
+                "(ou « npm run dev » pour développer).",
+            )
+        return FileResponse(page)
 
     @app.post("/api/jobs", status_code=status.HTTP_201_CREATED)
     def create_job(payload: JobRequest, owner_id: int = Depends(current_user)) -> dict:
@@ -480,7 +492,8 @@ def create_app(
     # Monté en dernier pour ne pas masquer les routes ci-dessus. Le client
     # est servi par le même conteneur : une seule application Cloudflare
     # Access protège l'ensemble.
-    app.mount("/", StaticFiles(directory=static_dir), name="static")
+    if static_dir.is_dir():
+        app.mount("/", StaticFiles(directory=static_dir), name="static")
     return app
 
 

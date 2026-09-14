@@ -29,3 +29,18 @@ jobs:
 
       - name: Run tests
         run: python -m unittest discover -t web -s web/tests
+
+      # Le client est construit ici : une erreur de compilation ne doit pas
+      # n'apparaître qu'au moment de fabriquer l'image.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/client/package-lock.json
+
+      - name: Build client
+        working-directory: web/client
+        run: |
+          npm ci
+          npm run build

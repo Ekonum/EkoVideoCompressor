@@ -13,11 +13,11 @@
 import {
   Input, Output, Conversion, ALL_FORMATS, BlobSource,
   BufferTarget, Mp3OutputFormat, OggOutputFormat, Quality,
-} from './vendor/mediabunny.mjs';
+} from 'mediabunny';
 // WebCodecs n'encode que l'Opus et l'AAC : le MP3 vient d'un paquet
-// d'extension Mediabunny, qui s'enregistre auprès du cœur. Contrairement
-// à ce que j'avais noté au jalon M0, il n'est pas embarqué d'office.
-import { registerMp3Encoder } from './vendor/mediabunny-mp3-encoder.mjs';
+// d'extension Mediabunny, qui s'enregistre auprès du cœur. Il n'est pas
+// embarqué d'office dans le paquet principal.
+import { registerMp3Encoder } from '@mediabunny/mp3-encoder';
 
 registerMp3Encoder();
 
@@ -33,6 +33,19 @@ function outputFormat(profile) {
 }
 
 self.onmessage = async (event) => {
+  // Sonder la durée est la seule opération média dont le fil principal
+  // aurait besoin : la faire ici lui évite d'embarquer Mediabunny, qui
+  // pèse plus que tout le reste de l'interface réunie.
+  if (event.data.kind === 'probe') {
+    try {
+      const input = new Input({ formats: ALL_FORMATS, source: new BlobSource(event.data.file) });
+      say({ kind: 'probed', duration: await input.computeDuration() });
+    } catch (error) {
+      say({ kind: 'probe-error', message: error?.message || String(error) });
+    }
+    return;
+  }
+
   const { file, jobId, chunks, audio, pending } = event.data;
   const todo = new Set(pending);
 
