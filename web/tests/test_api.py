@@ -38,6 +38,11 @@ def _settings(root: Path, **overrides) -> Settings:
         broker_token="",
         broker_item="Ekonum - API Gemini",
         broker_field="Clé API",
+        odoo_url="",
+        odoo_database="",
+        odoo_login="",
+        odoo_broker_item="Ekonum - API Odoo",
+        odoo_broker_field="Clé API",
         monthly_budget_usd=50.0,
         dev_mode=True,
         dev_user_email="robin@ekonum.fr",
@@ -432,3 +437,103 @@ class LibraryTestCase(_Fixture):
         self.assertEqual(len(detail["previous_versions"]), 1)
         self.assertEqual(detail["previous_versions"][0]["transcript"], "première version relue")
         self.assertIn("fenêtre 0", detail["transcript"])
+
+
+class VocabularyTestCase(_Fixture):
+    """Vocabulaire d'équipe : partagé, et trié par affinité."""
+
+    def test_le_vocabulaire_est_enregistre_des_la_creation(self):
+        """Dès la création, pas à la fin : une réunion qui échoue doit
+        quand même avoir appris ses termes."""
+        self._create(context={"glossary_terms": ["Odoo", "EDOF"], "client_company": "Acritec"})
+        termes = [t["term"] for t in self.client.get("/api/vocabulary").json()]
+        self.assertCountEqual(termes, ["Odoo", "EDOF", "Acritec"])
+
+    def test_la_cooccurrence_passe_avant_l_usage_brut(self):
+        """« CVR Contrôle » doit remonter dès qu'on saisit « Acritec »,
+        même si Odoo est globalement bien plus fréquent."""
+        for _ in range(5):
+            self.client.post("/api/vocabulary", json={"terms": ["Odoo", "Ekonum"]})
+        self.client.post("/api/vocabulary", json={"terms": ["Acritec", "CVR Contrôle"]})
+
+        suggestions = self.client.get(
+            "/api/vocabulary", params={"selected": "Acritec"}
+        ).json()
+        self.assertEqual(suggestions[0]["term"], "CVR Contrôle")
+        # Et sans contexte, c'est bien l'usage qui gouverne.
+        sans_contexte = self.client.get("/api/vocabulary").json()
+        self.assertIn(sans_contexte[0]["term"], {"Odoo", "Ekonum"})
+
+    def test_les_termes_deja_choisis_ne_sont_pas_resuggeres(self):
+        self.client.post("/api/vocabulary", json={"terms": ["Odoo", "Ekonum"]})
+        suggestions = self.client.get(
+            "/api/vocabulary", params={"selected": "odoo"}
+        ).json()
+        self.assertNotIn("Odoo", [s["term"] for s in suggestions])
+
+    def test_le_vocabulaire_est_partage_entre_collegues(self):
+        """Le cloisonnement par machine de l'app macOS disparaît : c'est
+        le gain attendu du passage en webapp."""
+        self.client.post("/api/vocabulary", json={"terms": ["Wedophone"]})
+        autre = self.db.user_id_for_email("luka@ekonum.fr")
+        self.assertGreater(autre, 0)
+        self.assertIn("Wedophone", [t["term"] for t in self.db.suggest_vocabulary([])])
+
+    def test_un_terme_peut_etre_oublie(self):
+        self.client.post("/api/vocabulary", json={"terms": ["Acritek", "Odoo"]})
+        self.assertEqual(self.client.delete("/api/vocabulary/Acritek").status_code, 204)
+        self.assertEqual(
+            [t["term"] for t in self.client.get("/api/vocabulary").json()], ["Odoo"]
+        )
+
+    def test_les_reglages_exposent_modeles_et_budget(self):
+        vue = self.client.get("/api/settings").json()
+        self.assertTrue(any(m["default"] for m in vue["models"]))
+        self.assertEqual(vue["budget"]["cap_usd"], 50.0)
+        self.assertEqual(vue["budget"]["spent_usd"], 0.0)
+
+
+class OdooTestCase(_Fixture):
+    """Odoo enrichit, il ne conditionne pas."""
+
+    def test_une_panne_odoo_ne_casse_pas_la_page(self):
+        """Odoo absent renvoie une liste vide et une raison — pas une
+        erreur. Une réunion doit se transcrire même si Odoo est en
+        maintenance."""
+        vue = self.client.get("/api/odoo/meetings").json()
+        self.assertFalse(vue["available"])
+        self.assertEqual(vue["meetings"], [])
+        self.assertIn("configuré", vue["reason"])
+
+    def test_le_pack_de_contexte_refuse_franchement_si_odoo_manque(self):
+        """Là en revanche l'appelant a demandé une donnée précise : mieux
+        vaut un refus explicite qu'un pack vide qu'il croirait complet."""
+        response = self.client.get(
+            "/api/odoo/context", params={"model": "crm.lead", "record_id": 1}
+        )
+        self.assertEqual(response.status_code, 503)
+
+    def test_les_reglages_disent_si_odoo_est_branche(self):
+        self.assertFalse(self.client.get("/api/settings").json()["odoo"]["configured"])
+
+    def test_une_panne_reseau_odoo_est_rapportee_sans_500(self):
+        from app.odoo import OdooGateway, OdooUnavailable
+
+        class Panne(OdooGateway):
+            @property
+            def configured(self):
+                return True
+
+            def meetings(self, **_):
+                raise OdooUnavailable("Serveur Odoo injoignable.")
+
+        app = create_app(
+            self.settings,
+            database=self.db,
+            gemini_key=GeminiKey(url="", token="", item="", field="", static_key="k"),
+            odoo=Panne(None, url="x", database="y", login="z"),
+        )
+        with TestClient(app) as client:
+            vue = client.get("/api/odoo/meetings").json()
+        self.assertFalse(vue["available"])
+        self.assertIn("injoignable", vue["reason"])

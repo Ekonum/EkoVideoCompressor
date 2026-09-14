@@ -31,4 +31,10 @@ export const api = {
     call('POST', `/api/jobs/${id}/terms/replace`, { old, new: next }),
   resetChunk: (id, index) => call('POST', `/api/jobs/${id}/chunks/${index}/reset`, {}),
   search: (q) => call('GET', `/api/search?q=${encodeURIComponent(q)}`),
+  vocabulary: (selected) =>
+    call('GET', `/api/vocabulary?selected=${encodeURIComponent(selected.join(','))}`),
+  settings: () => call('GET', '/api/settings'),
+  odooMeetings: () => call('GET', '/api/odoo/meetings'),
+  odooContext: (model, id) =>
+    call('GET', `/api/odoo/context?model=${encodeURIComponent(model)}&record_id=${id}`),
 };

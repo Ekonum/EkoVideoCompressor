@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -39,6 +40,7 @@ from cloud_transcription import (
 
 from .auth import AccessVerifier, AuthError
 from .db import Database
+from .odoo import OdooGateway, OdooUnavailable
 from .secrets import GeminiKey, SecretError
 from .settings import Settings
 from .terms import replace_term
@@ -104,6 +106,10 @@ class TermReplacement(BaseModel):
     new: str = Field(min_length=1)
 
 
+class VocabularyRecord(BaseModel):
+    terms: list[str] = Field(default_factory=list)
+
+
 class FinalizeResponse(BaseModel):
     job_id: int
     title: str
@@ -119,6 +125,7 @@ def create_app(
     database: Database | None = None,
     gemini_key: GeminiKey | None = None,
     verifier: AccessVerifier | None = None,
+    odoo: OdooGateway | None = None,
 ) -> FastAPI:
     config = settings or Settings.from_env()
     db = database or Database(config.db_path)
@@ -130,6 +137,18 @@ def create_app(
         static_key=config.dev_api_key,
     )
     access = verifier or AccessVerifier(config.access_team_domain, config.access_aud)
+    odoo_gateway = odoo or OdooGateway(
+        GeminiKey(
+            url=config.broker_url,
+            token=config.broker_token,
+            item=config.odoo_broker_item,
+            field=config.odoo_broker_field,
+            static_key=os.environ.get("ODOO_API_KEY", ""),
+        ),
+        url=config.odoo_url,
+        database=config.odoo_database,
+        login=config.odoo_login,
+    )
     if not access.configured and not config.dev_mode:
         raise RuntimeError(
             "Cloudflare Access n'est pas configuré (EKOVIDEO_ACCESS_TEAM_DOMAIN "
@@ -225,6 +244,15 @@ def create_app(
             language=payload.language,
             context=payload.context,
             chunks=windows,
+        )
+        # Enregistré maintenant, pas à la fin : ajouter « Acritec » doit
+        # faire remonter les termes qui l'accompagnent dès la réunion
+        # suivante, même si celle-ci échoue.
+        db.record_vocabulary(
+            [
+                *(payload.context.get("glossary_terms") or []),
+                *([payload.context["client_company"]] if payload.context.get("client_company") else []),
+            ]
         )
         return {
             "job_id": job_id,
@@ -431,6 +459,84 @@ def create_app(
         # vers cette seule fenêtre, sans repayer les autres.
         db.set_job_status(job_id, "en_attente")
         return {"reset": index}
+
+    @app.get("/api/vocabulary")
+    def vocabulary(selected: str = "", _: int = Depends(current_user)) -> list[dict]:
+        """Suggestions de vocabulaire, communes à l'équipe."""
+        return db.suggest_vocabulary(
+            [t.strip() for t in selected.split(",") if t.strip()]
+        )
+
+    @app.post("/api/vocabulary")
+    def record_vocabulary(
+        payload: VocabularyRecord, _: int = Depends(current_user)
+    ) -> dict:
+        db.record_vocabulary(payload.terms)
+        return {"recorded": len(payload.terms)}
+
+    @app.delete(
+        "/api/vocabulary/{term}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        # Sans cette classe, FastAPI prépare une réponse JSON et refuse le
+        # 204, qui n'a par définition pas de corps.
+        response_class=Response,
+    )
+    def forget_vocabulary(term: str, _: int = Depends(current_user)) -> Response:
+        db.forget_vocabulary(term)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.get("/api/odoo/meetings")
+    def odoo_meetings(_: int = Depends(current_user)) -> dict:
+        """Réunions du moment, pour proposer « c'est celle-là ».
+
+        Une panne Odoo n'est pas une erreur ici : elle rend simplement la
+        liste vide et le dit. Odoo enrichit, il ne conditionne pas — une
+        réunion doit se transcrire même si le serveur est en maintenance.
+        """
+        if not odoo_gateway.configured:
+            return {"available": False, "reason": "Odoo n'est pas configuré.", "meetings": []}
+        try:
+            return {"available": True, "meetings": odoo_gateway.meetings()}
+        except OdooUnavailable as exc:
+            log.warning("Odoo indisponible : %s", exc)
+            return {"available": False, "reason": str(exc), "meetings": []}
+
+    @app.get("/api/odoo/context")
+    def odoo_context(
+        model: str, record_id: int, _: int = Depends(current_user)
+    ) -> dict:
+        """Pack de contexte d'une réunion : résumé, termes, société cliente."""
+        if not odoo_gateway.configured:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE, "Odoo n'est pas configuré."
+            )
+        try:
+            return odoo_gateway.context_pack(model, record_id)
+        except OdooUnavailable as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+    @app.get("/api/settings")
+    def settings_view(_: int = Depends(current_user)) -> dict:
+        """Ce que l'interface a besoin de savoir : les modèles offerts et
+        où en est le budget d'équipe — la clé Gemini étant partagée, le
+        plafond l'est aussi."""
+        spent = db.month_spend_usd()
+        return {
+            "models": [
+                {
+                    "id": entry["id"],
+                    "label": entry.get("label") or entry["id"],
+                    "default": bool(entry.get("default")),
+                }
+                for entry in CLOUD_TRANSCRIPTION_MODELS
+                if provider_for_model(entry["id"]) == "gemini"
+            ],
+            "budget": {
+                "spent_usd": round(spent, 4),
+                "cap_usd": config.monthly_budget_usd,
+            },
+            "odoo": {"configured": odoo_gateway.configured},
+        }
 
     @app.get("/api/search")
     def search(q: str = "", owner_id: int = Depends(current_user)) -> list[dict]:
