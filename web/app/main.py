@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -102,6 +103,10 @@ class ContextPatch(BaseModel):
 class TermReplacement(BaseModel):
     old: str = Field(min_length=1)
     new: str = Field(min_length=1)
+
+
+class VocabularyRecord(BaseModel):
+    terms: list[str] = Field(default_factory=list)
 
 
 class FinalizeResponse(BaseModel):
@@ -225,6 +230,15 @@ def create_app(
             language=payload.language,
             context=payload.context,
             chunks=windows,
+        )
+        # Enregistré maintenant, pas à la fin : ajouter « Acritec » doit
+        # faire remonter les termes qui l'accompagnent dès la réunion
+        # suivante, même si celle-ci échoue.
+        db.record_vocabulary(
+            [
+                *(payload.context.get("glossary_terms") or []),
+                *([payload.context["client_company"]] if payload.context.get("client_company") else []),
+            ]
         )
         return {
             "job_id": job_id,
@@ -431,6 +445,53 @@ def create_app(
         # vers cette seule fenêtre, sans repayer les autres.
         db.set_job_status(job_id, "en_attente")
         return {"reset": index}
+
+    @app.get("/api/vocabulary")
+    def vocabulary(selected: str = "", _: int = Depends(current_user)) -> list[dict]:
+        """Suggestions de vocabulaire, communes à l'équipe."""
+        return db.suggest_vocabulary(
+            [t.strip() for t in selected.split(",") if t.strip()]
+        )
+
+    @app.post("/api/vocabulary")
+    def record_vocabulary(
+        payload: VocabularyRecord, _: int = Depends(current_user)
+    ) -> dict:
+        db.record_vocabulary(payload.terms)
+        return {"recorded": len(payload.terms)}
+
+    @app.delete(
+        "/api/vocabulary/{term}",
+        status_code=status.HTTP_204_NO_CONTENT,
+        # Sans cette classe, FastAPI prépare une réponse JSON et refuse le
+        # 204, qui n'a par définition pas de corps.
+        response_class=Response,
+    )
+    def forget_vocabulary(term: str, _: int = Depends(current_user)) -> Response:
+        db.forget_vocabulary(term)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.get("/api/settings")
+    def settings_view(_: int = Depends(current_user)) -> dict:
+        """Ce que l'interface a besoin de savoir : les modèles offerts et
+        où en est le budget d'équipe — la clé Gemini étant partagée, le
+        plafond l'est aussi."""
+        spent = db.month_spend_usd()
+        return {
+            "models": [
+                {
+                    "id": entry["id"],
+                    "label": entry.get("label") or entry["id"],
+                    "default": bool(entry.get("default")),
+                }
+                for entry in CLOUD_TRANSCRIPTION_MODELS
+                if provider_for_model(entry["id"]) == "gemini"
+            ],
+            "budget": {
+                "spent_usd": round(spent, 4),
+                "cap_usd": config.monthly_budget_usd,
+            },
+        }
 
     @app.get("/api/search")
     def search(q: str = "", owner_id: int = Depends(current_user)) -> list[dict]:

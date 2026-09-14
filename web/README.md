@@ -54,6 +54,28 @@ le même mécanisme qui sert au panneau « relancer certaines fenêtres ».
 | `POST /api/jobs/{id}/chunks/{i}/reset` | Redemande **une seule** fenêtre |
 | `GET /api/search?q=` | Recherche plein texte dans ses propres transcriptions |
 
+### Vocabulaire et réglages
+
+| Route | Rôle |
+|---|---|
+| `GET /api/vocabulary?selected=` | Suggestions, triées par **affinité** avec ce qui est déjà saisi |
+| `POST /api/vocabulary` | Enregistre des termes et leurs appariements |
+| `DELETE /api/vocabulary/{term}` | Oublie un terme |
+| `GET /api/settings` | Modèles offerts et budget d'équipe |
+
+Le vocabulaire est **partagé par toute l'équipe** : « Odoo », « Ekonum »
+et les noms de clients sont communs. C'est un gain net sur l'app macOS,
+où le glossaire était cloisonné par machine.
+
+La suggestion place la **co-occurrence avant l'usage brut**, comme
+l'app macOS : saisir « Acritec » fait remonter « CVR Contrôle », alors
+qu'« Odoo » est globalement bien plus fréquent. Sans quoi les mêmes cinq
+termes omniprésents reviendraient à chaque réunion.
+
+Les termes sont enregistrés **à la création du traitement**, pas à sa
+fin : une réunion qui échoue doit quand même avoir appris son
+vocabulaire.
+
 Quatre choix s'y lisent :
 
 **L'édition est partielle.** Un champ absent est laissé tel quel : un

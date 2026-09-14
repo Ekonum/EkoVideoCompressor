@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Bouton, Champ, Erreur } from './Communs.jsx';
 import { sonderDuree } from '../sonde.js';
+import { api } from '../api.js';
 import { usePipeline } from '../usePipeline.js';
 import { duree, mo, usd, horodatage, liste } from '../format.js';
 
@@ -133,6 +134,12 @@ export function Nouveau({ surTermine }) {
               onChange={(e) => setGlossaire(e.target.value)}
               disabled={enCours}
             />
+            <Suggestions
+              choisis={[...liste(glossaire), client.trim()].filter(Boolean)}
+              surAjout={(terme) =>
+                setGlossaire((actuel) => (actuel.trim() ? `${actuel}, ${terme}` : terme))
+              }
+            />
           </div>
         </div>
 
@@ -224,6 +231,44 @@ function Avancement({ fenetres, message }) {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+/** Vocabulaire déjà connu de l'équipe.
+ *
+ *  Trié par affinité avec ce qui est déjà saisi, pas par fréquence :
+ *  saisir « Acritec » doit faire remonter les termes de ce client, et
+ *  non les cinq mêmes mots présents dans toutes les réunions.
+ */
+function Suggestions({ choisis, surAjout }) {
+  const [termes, setTermes] = useState([]);
+  const cle = choisis.join(',');
+
+  useEffect(() => {
+    let vivant = true;
+    const attente = setTimeout(() => {
+      api.vocabulary(choisis)
+        .then((v) => vivant && setTermes(v.slice(0, 12)))
+        .catch(() => {});
+    }, 200);
+    return () => { vivant = false; clearTimeout(attente); };
+  }, [cle]);
+
+  if (termes.length === 0) return null;
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+      <span className="text-[0.8125rem] text-fonce/50">Déjà utilisés :</span>
+      {termes.map((t) => (
+        <button
+          key={t.term}
+          type="button"
+          onClick={() => surAjout(t.term)}
+          className="rounded-md border border-bord bg-white px-2 py-0.5 text-[0.8125rem] hover:border-turquoise-sombre hover:text-turquoise-sombre"
+        >
+          {t.term}
+        </button>
+      ))}
     </div>
   );
 }

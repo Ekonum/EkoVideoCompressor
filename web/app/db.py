@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import unicodedata
 import threading
 from contextlib import contextmanager
 from datetime import datetime
@@ -88,6 +89,27 @@ CREATE TABLE IF NOT EXISTS api_usage (
 );
 
 CREATE INDEX IF NOT EXISTS idx_usage_created ON api_usage(created_at);
+
+-- Vocabulaire métier, **partagé par toute l'équipe** : « Odoo »,
+-- « Ekonum » et les noms de clients sont communs. C'est un gain net sur
+-- l'app macOS, où le glossaire était cloisonné par machine.
+CREATE TABLE IF NOT EXISTS vocabulary (
+    term       TEXT PRIMARY KEY,
+    usages     INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_used  TEXT
+);
+
+-- Co-occurrences, stockées dans les deux sens comme le fait l'app macOS.
+-- C'est ce qui fait remonter « CVR Contrôle » dès qu'on saisit
+-- « Acritec », alors que CVR est globalement plus rare que Odoo ou
+-- Ekonum : la suggestion place la co-occurrence avant l'usage brut.
+CREATE TABLE IF NOT EXISTS vocabulary_pairs (
+    term  TEXT NOT NULL,
+    peer  TEXT NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (term, peer)
+);
 
 -- Recherche plein texte. Table FTS5 autonome plutôt qu'en contenu
 -- externe : les segments sont réécrits en bloc à chaque finalisation,
@@ -406,6 +428,79 @@ class Database:
                 (match, owner_id, limit),
             ).fetchall()
             return [dict(r) for r in rows]
+
+    # -- vocabulaire ---------------------------------------------------
+
+    def record_vocabulary(self, terms: list[str]) -> None:
+        """Enregistre les termes d'un traitement : usage + appariements.
+
+        Les paires sont écrites symétriquement, pour qu'une suggestion
+        fonctionne quel que soit le terme saisi en premier.
+        """
+        propres = []
+        vus: set[str] = set()
+        for brut in terms:
+            terme = unicodedata.normalize("NFC", str(brut or "").strip())
+            cle = terme.lower()
+            if terme and cle not in vus:
+                vus.add(cle)
+                propres.append(terme)
+        if not propres:
+            return
+
+        maintenant = datetime.now().isoformat(timespec="seconds")
+        with self.connect() as conn:
+            for terme in propres:
+                conn.execute(
+                    "INSERT INTO vocabulary (term, usages, last_used) VALUES (?, 1, ?) "
+                    "ON CONFLICT(term) DO UPDATE SET usages = usages + 1, last_used = ?",
+                    (terme, maintenant, maintenant),
+                )
+            for terme in propres:
+                for pair in propres:
+                    if terme == pair:
+                        continue
+                    conn.execute(
+                        "INSERT INTO vocabulary_pairs (term, peer, count) VALUES (?, ?, 1) "
+                        "ON CONFLICT(term, peer) DO UPDATE SET count = count + 1",
+                        (terme, pair),
+                    )
+
+    def suggest_vocabulary(
+        self, selected: list[str], limit: int = 30
+    ) -> list[dict[str, Any]]:
+        """Termes à proposer, les plus pertinents d'abord.
+
+        Le tri place la **co-occurrence avant l'usage brut** : c'est ce
+        qui fait remonter un terme rare mais lié à ce qui est déjà
+        sélectionné, plutôt que les mêmes cinq termes omniprésents à
+        chaque réunion.
+        """
+        deja = {unicodedata.normalize("NFC", t.strip()).lower() for t in selected if t.strip()}
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT v.term, v.usages, COALESCE(SUM(p.count), 0) AS affinite "
+                "FROM vocabulary v "
+                "LEFT JOIN vocabulary_pairs p "
+                "  ON p.term = v.term AND LOWER(p.peer) IN "
+                f"     ({','.join('?' * len(deja)) or 'NULL'}) "
+                "GROUP BY v.term "
+                "ORDER BY affinite DESC, v.usages DESC, v.term COLLATE NOCASE",
+                tuple(deja),
+            ).fetchall()
+        return [
+            {"term": r["term"], "usages": r["usages"], "affinity": r["affinite"]}
+            for r in rows
+            if r["term"].lower() not in deja
+        ][:limit]
+
+    def forget_vocabulary(self, term: str) -> None:
+        cible = unicodedata.normalize("NFC", str(term or "").strip())
+        with self.connect() as conn:
+            conn.execute("DELETE FROM vocabulary WHERE term = ?", (cible,))
+            conn.execute(
+                "DELETE FROM vocabulary_pairs WHERE term = ? OR peer = ?", (cible, cible)
+            )
 
     # -- dépenses ------------------------------------------------------
 
