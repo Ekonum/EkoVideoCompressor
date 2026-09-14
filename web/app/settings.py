@@ -34,6 +34,14 @@ class Settings:
     broker_item: str
     broker_field: str
 
+    # Odoo : enrichissement seulement. Une panne ici ne doit jamais
+    # empêcher une transcription, d'où l'absence de valeur obligatoire.
+    odoo_url: str
+    odoo_database: str
+    odoo_login: str
+    odoo_broker_item: str
+    odoo_broker_field: str
+
     # Garde-fou budget : plafond d'équipe, la clé Gemini étant partagée.
     monthly_budget_usd: float
 
@@ -71,6 +79,11 @@ class Settings:
                 "EKONUM_BROKER_ITEM", "Ekonum - API Google Gemini"
             ),
             broker_field=os.environ.get("EKONUM_BROKER_FIELD", "Clé API"),
+            odoo_url=os.environ.get("EKOVIDEO_ODOO_URL", "").strip(),
+            odoo_database=os.environ.get("EKOVIDEO_ODOO_DB", "").strip(),
+            odoo_login=os.environ.get("EKOVIDEO_ODOO_LOGIN", "").strip(),
+            odoo_broker_item=os.environ.get("EKOVIDEO_ODOO_BROKER_ITEM", "Ekonum - API Odoo"),
+            odoo_broker_field=os.environ.get("EKOVIDEO_ODOO_BROKER_FIELD", "Clé API"),
             monthly_budget_usd=float(os.environ.get("EKOVIDEO_MONTHLY_BUDGET_USD", "50")),
             dev_mode=dev,
             dev_user_email=os.environ.get("EKOVIDEO_DEV_USER", "dev@ekonum.fr").strip(),

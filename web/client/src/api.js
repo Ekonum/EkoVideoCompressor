@@ -34,4 +34,7 @@ export const api = {
   vocabulary: (selected) =>
     call('GET', `/api/vocabulary?selected=${encodeURIComponent(selected.join(','))}`),
   settings: () => call('GET', '/api/settings'),
+  odooMeetings: () => call('GET', '/api/odoo/meetings'),
+  odooContext: (model, id) =>
+    call('GET', `/api/odoo/context?model=${encodeURIComponent(model)}&record_id=${id}`),
 };

@@ -22,6 +22,7 @@ export function Nouveau({ surTermine }) {
   const [client, setClient] = useState('');
   const [participants, setParticipants] = useState('');
   const [glossaire, setGlossaire] = useState('');
+  const [contexteOdoo, setContexteOdoo] = useState('');
   const pipeline = usePipeline();
 
   const capacites = typeof AudioEncoder !== 'undefined' && window.isSecureContext;
@@ -107,6 +108,17 @@ export function Nouveau({ surTermine }) {
             Facultatif, mais c'est ce qui fait la différence entre « Réunion du
             3 juillet » et un titre utile.
           </p>
+          <Reunions
+            surChoix={({ client: societe, termes, resume }) => {
+              if (societe) setClient(societe);
+              if (termes?.length) {
+                setGlossaire((actuel) =>
+                  [...new Set([...liste(actuel), ...termes])].join(', '),
+                );
+              }
+              setContexteOdoo(resume || '');
+            }}
+          />
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <Champ
               label="Partie prenante"
@@ -156,6 +168,7 @@ export function Nouveau({ surTermine }) {
                   client_company: client.trim(),
                   expected_speaker_names: liste(participants),
                   glossary_terms: liste(glossaire),
+                  odoo_context: contexteOdoo,
                 },
               })
             }
@@ -269,6 +282,71 @@ function Suggestions({ choisis, surAjout }) {
           {t.term}
         </button>
       ))}
+    </div>
+  );
+}
+
+/** Réunions Odoo du moment.
+ *
+ *  Odoo enrichit, il ne conditionne pas : s'il est absent ou en panne,
+ *  ce bloc disparaît simplement. Rien n'empêche de transcrire.
+ */
+function Reunions({ surChoix }) {
+  const [etat, setEtat] = useState(null);
+  const [choisie, setChoisie] = useState(null);
+  const [chargement, setChargement] = useState(false);
+
+  useEffect(() => {
+    api.odooMeetings().then(setEtat).catch(() => setEtat({ available: false, meetings: [] }));
+  }, []);
+
+  if (!etat?.available || etat.meetings.length === 0) return null;
+
+  return (
+    <div className="mt-4 rounded-lg border border-bord bg-white p-4">
+      <p className="titre text-[0.9375rem] font-medium">Réunions Odoo du moment</p>
+      <p className="mt-0.5 text-[0.8125rem] text-fonce/55">
+        En choisir une remplit la partie prenante et le vocabulaire depuis la fiche.
+      </p>
+      <ul className="mt-3 space-y-1">
+        {etat.meetings.map((r) => (
+          <li key={r.id}>
+            <button
+              type="button"
+              disabled={chargement}
+              onClick={async () => {
+                setChoisie(r.id);
+                setChargement(true);
+                try {
+                  const pack = r.resource_model
+                    ? await api.odooContext(r.resource_model, r.resource_id)
+                    : {};
+                  surChoix({
+                    client: pack.client_company,
+                    termes: pack.terms,
+                    resume: pack.summary,
+                  });
+                } catch {
+                  // Le contexte est un bonus : son échec ne doit pas
+                  // empêcher de retenir la réunion choisie.
+                } finally {
+                  setChargement(false);
+                }
+              }}
+              className={`w-full rounded-md px-2 py-1.5 text-left text-[0.875rem] hover:bg-papier ${
+                choisie === r.id ? 'ring-1 ring-turquoise-sombre' : ''
+              }`}
+            >
+              <span className="titre font-medium">{r.name}</span>
+              {r.attendees.length ? (
+                <span className="block text-[0.8125rem] text-fonce/55">
+                  {r.attendees.join(', ')}
+                </span>
+              ) : null}
+            </button>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

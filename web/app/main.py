@@ -40,6 +40,7 @@ from cloud_transcription import (
 
 from .auth import AccessVerifier, AuthError
 from .db import Database
+from .odoo import OdooGateway, OdooUnavailable
 from .secrets import GeminiKey, SecretError
 from .settings import Settings
 from .terms import replace_term
@@ -124,6 +125,7 @@ def create_app(
     database: Database | None = None,
     gemini_key: GeminiKey | None = None,
     verifier: AccessVerifier | None = None,
+    odoo: OdooGateway | None = None,
 ) -> FastAPI:
     config = settings or Settings.from_env()
     db = database or Database(config.db_path)
@@ -135,6 +137,18 @@ def create_app(
         static_key=config.dev_api_key,
     )
     access = verifier or AccessVerifier(config.access_team_domain, config.access_aud)
+    odoo_gateway = odoo or OdooGateway(
+        GeminiKey(
+            url=config.broker_url,
+            token=config.broker_token,
+            item=config.odoo_broker_item,
+            field=config.odoo_broker_field,
+            static_key=os.environ.get("ODOO_API_KEY", ""),
+        ),
+        url=config.odoo_url,
+        database=config.odoo_database,
+        login=config.odoo_login,
+    )
     if not access.configured and not config.dev_mode:
         raise RuntimeError(
             "Cloudflare Access n'est pas configuré (EKOVIDEO_ACCESS_TEAM_DOMAIN "
@@ -471,6 +485,36 @@ def create_app(
         db.forget_vocabulary(term)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+    @app.get("/api/odoo/meetings")
+    def odoo_meetings(_: int = Depends(current_user)) -> dict:
+        """Réunions du moment, pour proposer « c'est celle-là ».
+
+        Une panne Odoo n'est pas une erreur ici : elle rend simplement la
+        liste vide et le dit. Odoo enrichit, il ne conditionne pas — une
+        réunion doit se transcrire même si le serveur est en maintenance.
+        """
+        if not odoo_gateway.configured:
+            return {"available": False, "reason": "Odoo n'est pas configuré.", "meetings": []}
+        try:
+            return {"available": True, "meetings": odoo_gateway.meetings()}
+        except OdooUnavailable as exc:
+            log.warning("Odoo indisponible : %s", exc)
+            return {"available": False, "reason": str(exc), "meetings": []}
+
+    @app.get("/api/odoo/context")
+    def odoo_context(
+        model: str, record_id: int, _: int = Depends(current_user)
+    ) -> dict:
+        """Pack de contexte d'une réunion : résumé, termes, société cliente."""
+        if not odoo_gateway.configured:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE, "Odoo n'est pas configuré."
+            )
+        try:
+            return odoo_gateway.context_pack(model, record_id)
+        except OdooUnavailable as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
     @app.get("/api/settings")
     def settings_view(_: int = Depends(current_user)) -> dict:
         """Ce que l'interface a besoin de savoir : les modèles offerts et
@@ -491,6 +535,7 @@ def create_app(
                 "spent_usd": round(spent, 4),
                 "cap_usd": config.monthly_budget_usd,
             },
+            "odoo": {"configured": odoo_gateway.configured},
         }
 
     @app.get("/api/search")

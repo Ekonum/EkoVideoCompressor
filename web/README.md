@@ -61,7 +61,19 @@ le même mécanisme qui sert au panneau « relancer certaines fenêtres ».
 | `GET /api/vocabulary?selected=` | Suggestions, triées par **affinité** avec ce qui est déjà saisi |
 | `POST /api/vocabulary` | Enregistre des termes et leurs appariements |
 | `DELETE /api/vocabulary/{term}` | Oublie un terme |
-| `GET /api/settings` | Modèles offerts et budget d'équipe |
+| `GET /api/settings` | Modèles offerts, budget d'équipe, état d'Odoo |
+| `GET /api/odoo/meetings` | Réunions du moment, pour proposer « c'est celle-là » |
+| `GET /api/odoo/context` | Pack de contexte : résumé, termes, société cliente |
+
+**Odoo enrichit, il ne conditionne pas.** Une réunion doit se transcrire
+même si le serveur Odoo est en maintenance : `/meetings` répond alors une
+liste vide *et une raison*, jamais une erreur, et le bloc disparaît de
+l'interface. `/context` refuse en revanche franchement — l'appelant a
+demandé une donnée précise, mieux vaut un refus qu'un pack vide qu'il
+croirait complet.
+
+`odoo_client.py` est repris tel quel, en stdlib. Les identifiants
+viennent du broker comme la clé Gemini.
 
 Le vocabulaire est **partagé par toute l'équipe** : « Odoo », « Ekonum »
 et les noms de clients sont communs. C'est un gain net sur l'app macOS,
@@ -150,6 +162,7 @@ bout sans humain. Même origine, derrière Access comme le reste.
 | `EKONUM_TOKEN` | Jeton du broker de secrets |
 | `EKONUM_BROKER_ITEM` / `EKONUM_BROKER_FIELD` | Élément du coffre à lire (défaut « Ekonum - API Google Gemini » / « Clé API ») |
 | `EKOVIDEO_MONTHLY_BUDGET_USD` | Plafond d'équipe (défaut 50) |
+| `EKOVIDEO_ODOO_URL` / `_DB` / `_LOGIN` | Odoo — facultatif ; absent, l'enrichissement se tait |
 
 ## Authentification
 

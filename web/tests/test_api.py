@@ -38,6 +38,11 @@ def _settings(root: Path, **overrides) -> Settings:
         broker_token="",
         broker_item="Ekonum - API Gemini",
         broker_field="Clé API",
+        odoo_url="",
+        odoo_database="",
+        odoo_login="",
+        odoo_broker_item="Ekonum - API Odoo",
+        odoo_broker_field="Clé API",
         monthly_budget_usd=50.0,
         dev_mode=True,
         dev_user_email="robin@ekonum.fr",
@@ -486,3 +491,49 @@ class VocabularyTestCase(_Fixture):
         self.assertTrue(any(m["default"] for m in vue["models"]))
         self.assertEqual(vue["budget"]["cap_usd"], 50.0)
         self.assertEqual(vue["budget"]["spent_usd"], 0.0)
+
+
+class OdooTestCase(_Fixture):
+    """Odoo enrichit, il ne conditionne pas."""
+
+    def test_une_panne_odoo_ne_casse_pas_la_page(self):
+        """Odoo absent renvoie une liste vide et une raison — pas une
+        erreur. Une réunion doit se transcrire même si Odoo est en
+        maintenance."""
+        vue = self.client.get("/api/odoo/meetings").json()
+        self.assertFalse(vue["available"])
+        self.assertEqual(vue["meetings"], [])
+        self.assertIn("configuré", vue["reason"])
+
+    def test_le_pack_de_contexte_refuse_franchement_si_odoo_manque(self):
+        """Là en revanche l'appelant a demandé une donnée précise : mieux
+        vaut un refus explicite qu'un pack vide qu'il croirait complet."""
+        response = self.client.get(
+            "/api/odoo/context", params={"model": "crm.lead", "record_id": 1}
+        )
+        self.assertEqual(response.status_code, 503)
+
+    def test_les_reglages_disent_si_odoo_est_branche(self):
+        self.assertFalse(self.client.get("/api/settings").json()["odoo"]["configured"])
+
+    def test_une_panne_reseau_odoo_est_rapportee_sans_500(self):
+        from app.odoo import OdooGateway, OdooUnavailable
+
+        class Panne(OdooGateway):
+            @property
+            def configured(self):
+                return True
+
+            def meetings(self, **_):
+                raise OdooUnavailable("Serveur Odoo injoignable.")
+
+        app = create_app(
+            self.settings,
+            database=self.db,
+            gemini_key=GeminiKey(url="", token="", item="", field="", static_key="k"),
+            odoo=Panne(None, url="x", database="y", login="z"),
+        )
+        with TestClient(app) as client:
+            vue = client.get("/api/odoo/meetings").json()
+        self.assertFalse(vue["available"])
+        self.assertIn("injoignable", vue["reason"])
