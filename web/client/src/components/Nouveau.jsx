@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Bouton, Champ, Erreur } from './Communs.jsx';
 import { sonderDuree } from '../sonde.js';
 import { api } from '../api.js';
+import { useCompression } from '../useCompression.js';
 import { usePipeline } from '../usePipeline.js';
 import { duree, mo, usd, horodatage, liste } from '../format.js';
 
@@ -23,7 +24,9 @@ export function Nouveau({ surTermine }) {
   const [participants, setParticipants] = useState('');
   const [glossaire, setGlossaire] = useState('');
   const [contexteOdoo, setContexteOdoo] = useState('');
+  const [mode, setMode] = useState('transcrire');
   const pipeline = usePipeline();
+  const compression = useCompression();
 
   const capacites = typeof AudioEncoder !== 'undefined' && window.isSecureContext;
 
@@ -103,7 +106,42 @@ export function Nouveau({ surTermine }) {
         </div>
 
         <div>
-          <h2 className="titre text-[1.0625rem] font-medium">2. Le contexte</h2>
+          <h2 className="titre text-[1.0625rem] font-medium">2. Que faire de ce fichier</h2>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {[
+              ['transcrire', 'Transcrire'],
+              ['compresser', 'Compresser'],
+              ['les-deux', 'Les deux'],
+            ].map(([cle, libelle]) => (
+              <button
+                key={cle}
+                type="button"
+                onClick={() => setMode(cle)}
+                aria-pressed={mode === cle}
+                className={`titre rounded-lg px-3 py-1.5 text-[0.9375rem] font-medium transition-colors ${
+                  mode === cle
+                    ? 'bg-fonce text-clair'
+                    : 'border border-bord bg-white hover:border-fonce/40'
+                }`}
+              >
+                {libelle}
+              </button>
+            ))}
+          </div>
+          {mode !== 'transcrire' ? (
+            <p className="mt-2 text-[0.8125rem] text-fonce/55">
+              La version compressée est écrite directement sur ton disque —
+              720p, HEVC, environ 92 % plus légère. Elle n'est jamais envoyée
+              au serveur.
+              {!compression.supportee
+                ? " Ce navigateur ne sait pas écrire un fichier sur le disque : utilise Chrome ou Edge."
+                : ''}
+            </p>
+          ) : null}
+        </div>
+
+        <div className={mode === 'compresser' ? 'hidden' : undefined}>
+          <h2 className="titre text-[1.0625rem] font-medium">3. Le contexte</h2>
           <p className="mt-1 text-[0.875rem] text-fonce/60">
             Facultatif, mais c'est ce qui fait la différence entre « Réunion du
             3 juillet » et un titre utile.
@@ -158,8 +196,10 @@ export function Nouveau({ surTermine }) {
         <div className="flex flex-wrap items-center gap-4">
           <Bouton
             variante="accent"
-            disabled={!fichier || enCours}
-            onClick={() =>
+            disabled={!fichier || enCours || (mode === 'compresser' && !compression.supportee)}
+            onClick={() => {
+              if (mode !== 'transcrire') compression.compresser(fichier);
+              if (mode === 'compresser') return;
               pipeline.lancer({
                 fichier,
                 duree: secondes,
@@ -170,10 +210,16 @@ export function Nouveau({ surTermine }) {
                   glossary_terms: liste(glossaire),
                   odoo_context: contexteOdoo,
                 },
-              })
-            }
+              });
+            }}
           >
-            {enCours ? 'Traitement en cours…' : 'Lancer la transcription'}
+            {enCours
+              ? 'Traitement en cours…'
+              : mode === 'compresser'
+                ? 'Compresser'
+                : mode === 'les-deux'
+                  ? 'Compresser et transcrire'
+                  : 'Lancer la transcription'}
           </Bouton>
           {pipeline.estimation !== null ? (
             <span className="text-[0.875rem] text-fonce/60">
@@ -183,6 +229,8 @@ export function Nouveau({ surTermine }) {
         </div>
 
         <Erreur>{pipeline.erreur}</Erreur>
+        <Erreur>{compression.erreur}</Erreur>
+        <Compression compression={compression} />
 
         {pipeline.fenetres.length > 0 ? (
           <Avancement fenetres={pipeline.fenetres} message={pipeline.message} />
@@ -347,6 +395,44 @@ function Reunions({ surChoix }) {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+/** Avancement de la compression.
+ *
+ *  Séparé de la transcription parce que les deux avancent en parallèle
+ *  et à des rythmes très différents : l'audio part en quelques minutes,
+ *  la vidéo prend des heures sur une longue réunion.
+ */
+function Compression({ compression }) {
+  if (compression.etat === 'repos' && !compression.resultat) return null;
+  const { resultat } = compression;
+  return (
+    <div>
+      <h2 className="titre text-[1.0625rem] font-medium">Compression</h2>
+      {resultat ? (
+        <p className="mt-2 text-[0.9375rem]">
+          {mo(resultat.source)} → <strong>{mo(resultat.bytes)}</strong>{' '}
+          <span className="text-fonce/55">
+            ({Math.round((1 - resultat.bytes / resultat.source) * 100)} % de moins,
+            en {Math.round(resultat.ms / 60000)} min) — enregistré sur ton disque.
+          </span>
+        </p>
+      ) : (
+        <>
+          <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-fonce/10">
+            <div
+              className="h-full rounded-full bg-turquoise transition-[width] duration-500"
+              style={{ width: `${compression.progression * 100}%` }}
+            />
+          </div>
+          <p className="mt-2 text-[0.875rem] text-fonce/60">
+            Encodage sur ce poste — {Math.round(compression.progression * 100)} %.
+            Garde cet onglet ouvert.
+          </p>
+        </>
+      )}
     </div>
   );
 }

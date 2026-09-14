@@ -12,7 +12,8 @@
  */
 import {
   Input, Output, Conversion, ALL_FORMATS, BlobSource,
-  BufferTarget, Mp3OutputFormat, OggOutputFormat, Quality,
+  BufferTarget, StreamTarget, Mp3OutputFormat, Mp4OutputFormat,
+  OggOutputFormat, Quality,
 } from 'mediabunny';
 // WebCodecs n'encode que l'Opus et l'AAC : le MP3 vient d'un paquet
 // d'extension Mediabunny, qui s'enregistre auprès du cœur. Il n'est pas
@@ -43,6 +44,11 @@ self.onmessage = async (event) => {
     } catch (error) {
       say({ kind: 'probe-error', message: error?.message || String(error) });
     }
+    return;
+  }
+
+  if (event.data.kind === 'compress') {
+    await compresser(event.data);
     return;
   }
 
@@ -92,3 +98,52 @@ self.onmessage = async (event) => {
     say({ kind: 'error', message: error?.message || String(error) });
   }
 };
+
+/** Compression, écrite directement sur le disque de l'utilisateur.
+ *
+ *  Le profil vient de la mesure M0 : HEVC 720p à 12 images par seconde,
+ *  ~150 kbps, audio AAC 64 kbps mono. Le débit s'est révélé sans effet
+ *  sur la lisibilité du texte à l'écran — l'encodeur plafonne vers
+ *  133 kbps et la zone de texte est identique de 60 à 250 — donc rien ne
+ *  justifie de dépenser plus.
+ *
+ *  La sortie passe par un `StreamTarget` vers un flux d'écriture : une
+ *  archive de plusieurs centaines de mégaoctets ne tient pas en mémoire,
+ *  et surtout **elle n'est jamais envoyée au serveur**.
+ */
+async function compresser({ file, handle, profile }) {
+  const debut = performance.now();
+  try {
+    const writable = await handle.createWritable();
+    const conversion = await Conversion.init({
+      input: new Input({ formats: ALL_FORMATS, source: new BlobSource(file) }),
+      output: new Output({
+        format: new Mp4OutputFormat(),
+        target: new StreamTarget(writable),
+      }),
+      video: {
+        height: profile.height,
+        fit: 'contain',
+        codec: profile.codec,
+        frameRate: profile.frameRate,
+        quality: new Quality({ bitrate: profile.videoBitrate }),
+      },
+      audio: {
+        codec: 'aac',
+        numberOfChannels: 1,
+        quality: new Quality({ bitrate: profile.audioBitrate }),
+      },
+    });
+    conversion.onProgress = (ratio) => say({ kind: 'compress-progress', ratio });
+    await conversion.execute();
+
+    const ecrit = await handle.getFile();
+    say({
+      kind: 'compressed',
+      bytes: ecrit.size,
+      ms: performance.now() - debut,
+    });
+  } catch (error) {
+    say({ kind: 'compress-error', message: error?.message || String(error) });
+  }
+}
