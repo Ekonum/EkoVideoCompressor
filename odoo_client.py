@@ -26,7 +26,26 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlparse
 
-from ekovideo_engine.logging import append_app_log, tail_text
+try:
+    from ekovideo_engine.logging import append_app_log, tail_text
+except ModuleNotFoundError:  # pragma: no cover - chemin serveur web
+    # La webapp réutilise ce module sans embarquer le moteur macOS, qui
+    # écrirait dans ~/Library/Application Support — un chemin qui n'a
+    # aucun sens dans un conteneur. Le diagnostic Odoo passe alors par le
+    # journal standard, que Docker collecte déjà.
+    import logging as _logging
+
+    _log = _logging.getLogger("ekovideo.odoo")
+
+    def append_app_log(source: str, message: str) -> None:
+        _log.info("%s %s", source, message)
+
+    def tail_text(text: str | None, limit: int = 4000) -> str:
+        # Même sémantique que la version du moteur, ellipse comprise :
+        # une divergence ici ne se verrait que dans les journaux, donc
+        # tard et mal.
+        value = (text or "").strip()
+        return value if len(value) <= limit else f"...{value[-limit:]}"
 
 
 __all__ = [

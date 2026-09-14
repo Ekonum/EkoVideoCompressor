@@ -1,0 +1,53 @@
+name: Image web
+
+# Construite sur chaque poussée touchant le serveur ou le client, pour
+# qu'une image cassée se voie avant le déploiement. Elle n'est publiée
+# que depuis `main` : une branche de travail ne doit pas pouvoir écraser
+# le tag `latest` que Watchtower surveille.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+      - 'cloud_transcription.py'
+      - 'odoo_client.py'
+      - '.github/workflows/deploy-web.yml'
+  pull_request:
+    paths:
+      - 'web/**'
+      - 'cloud_transcription.py'
+      - 'odoo_client.py'
+  workflow_dispatch:
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login au registre
+        if: github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: registry.robin-joseph.fr
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      # Le VPS est en amd64 : une image arm64 serait rejetée par
+      # Portainer, et l'erreur n'apparaîtrait qu'au déploiement.
+      - name: Construire et publier
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: web/Dockerfile
+          platforms: linux/amd64
+          push: ${{ github.ref == 'refs/heads/main' }}
+          tags: |
+            registry.robin-joseph.fr/ekovideo-web:latest
+            registry.robin-joseph.fr/ekovideo-web:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

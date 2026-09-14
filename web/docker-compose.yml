@@ -1,0 +1,54 @@
+# Stack Portainer pour transcript.ekonum.fr.
+#
+# Le conteneur rejoint le réseau externe `ekonum-broker` pour lire la clé
+# Gemini, et n'expose rien publiquement : c'est le tunnel Cloudflare qui
+# le joint, et l'application Access « Transcriptions » qui le protège.
+services:
+  ekovideo:
+    image: registry.robin-joseph.fr/ekovideo-web:latest
+    container_name: ekovideo-web
+    restart: unless-stopped
+
+    # Le VPS est petit et partagé. Le serveur ne fait que du réseau —
+    # aucun média ne le traverse — donc 256 Mo suffisent largement.
+    mem_limit: 256m
+
+    environment:
+      # Authentification. Sans ces deux valeurs le serveur refuse de
+      # démarrer : un déploiement ne doit pas pouvoir s'ouvrir par
+      # inadvertance.
+      EKOVIDEO_ACCESS_TEAM_DOMAIN: robinjoseph.cloudflareaccess.com
+      EKOVIDEO_ACCESS_AUD: 8da98a9ba900f77a8819673abb3377403e9d02970fd31bbc8f471c6593c71d15
+
+      # Clé Gemini via le broker, lue une fois au démarrage.
+      EKONUM_TOKEN: ${EKONUM_TOKEN:?jeton broker requis}
+      EKONUM_BROKER_URL: http://ekonum-secret-broker:8710/v1/secret
+      EKONUM_BROKER_ITEM: Ekonum - API Google Gemini
+      EKONUM_BROKER_FIELD: Clé API
+
+      # Plafond mensuel d'équipe — la clé étant partagée, le budget l'est.
+      EKOVIDEO_MONTHLY_BUDGET_USD: "50"
+
+      # Odoo : facultatif. Absent, l'enrichissement se tait simplement.
+      EKOVIDEO_ODOO_URL: ${EKOVIDEO_ODOO_URL:-}
+      EKOVIDEO_ODOO_DB: ${EKOVIDEO_ODOO_DB:-}
+      EKOVIDEO_ODOO_LOGIN: ${EKOVIDEO_ODOO_LOGIN:-}
+
+      EKOVIDEO_WEB_STATE: /data
+
+    volumes:
+      # Transcriptions et vocabulaire d'équipe. Les fenêtres audio en
+      # transit vivent aussi ici, mais sont effacées dès qu'elles ont
+      # servi — le disque du VPS est tendu.
+      - ekovideo-data:/data
+
+    networks:
+      - ekonum-broker
+      - default
+
+volumes:
+  ekovideo-data:
+
+networks:
+  ekonum-broker:
+    external: true
