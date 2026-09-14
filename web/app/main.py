@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from cloud_transcription import (
@@ -43,23 +45,39 @@ from .transcription import context_for_chunk, transcribe_chunk, transcript_text
 
 log = logging.getLogger("ekovideo.web")
 
-# Profil d'upload imposé au navigateur. Opus mono 16 kHz : mesuré à
-# ~10,7 Mo/heure au jalon M0, soit un plus gros segment de 4,9 Mo sur
-# une réunion de 3 h 34 — vingt fois sous le plafond de 100 Mo du
-# tunnel Cloudflare.
+# Profil d'upload imposé au navigateur — un seul endroit, parce que le
+# navigateur obéit au serveur plutôt que de décider.
+#
+# MP3 64 kbps mono 16 kHz, soit **exactement** ce que produit
+# `build_cloud_audio_cmd` aujourd'hui. Deux raisons. Gemini documente
+# ses formats audio (wav, mp3, aiff, aac, ogg, flac) et l'Opus n'y
+# figure pas : l'accepterait-il en pratique ? je n'en sais rien, et le
+# vérifier demande une vraie clé. Et à format identique, la
+# transcription issue du navigateur se compare trait pour trait à celle
+# de l'app macOS — c'est la vérification du jalon.
+#
+# L'Opus reste l'optimisation visée : ~10,7 Mo/heure mesuré en M0
+# contre ~28 en MP3. Le jour où on le valide contre l'API, c'est cette
+# constante qui change, et rien d'autre.
 AUDIO_PROFILE = {
-    "codec": "opus",
+    "codec": "mp3",
+    "container": "mp3",
     "sample_rate": 16000,
     "channels": 1,
-    "bitrate": 24000,
+    "bitrate": 64000,
 }
+
+# L'extension compte : `_audio_mime` (cloud_transcription) en déduit le
+# type déclaré à Gemini, et tout ce qui n'est pas .mp3 part en audio/wav.
+CHUNK_SUFFIX = ".mp3"
 
 # Les appels sont du réseau, pas du CPU : une concurrence basse suffit
 # et protège les 256 Mo du conteneur.
 MAX_CONCURRENT_CHUNKS = 2
 
-# Un segment Opus de 30 min pèse ~11 Mo. La marge couvre un réglage
-# plus généreux sans jamais approcher la limite du tunnel.
+# Une fenêtre de 30 min pèse ~14 Mo en MP3 64 kbps (~5 Mo en Opus). La
+# marge couvre un réglage plus généreux sans jamais approcher les 100 Mo
+# du tunnel.
 MAX_CHUNK_BYTES = 60 * 1024 * 1024
 
 
@@ -105,6 +123,7 @@ def create_app(
         )
 
     config.chunk_dir.mkdir(parents=True, exist_ok=True)
+    static_dir = Path(__file__).resolve().parent.parent / "static"
     app = FastAPI(title="EkoVideo", version="1.0")
     app.state.settings = config
     app.state.db = db
@@ -139,6 +158,10 @@ def create_app(
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/")
+    def index() -> FileResponse:
+        return FileResponse(static_dir / "index.html")
 
     @app.post("/api/jobs", status_code=status.HTTP_201_CREATED)
     def create_job(payload: JobRequest, owner_id: int = Depends(current_user)) -> dict:
@@ -207,7 +230,7 @@ def create_app(
                 "Opus mono 16 kHz.",
             )
 
-        path = config.chunk_dir / f"job{job_id}_chunk{index}.opus"
+        path = config.chunk_dir / f"job{job_id}_chunk{index}{CHUNK_SUFFIX}"
         path.write_bytes(body)
         db.set_chunk_status(job_id, index, "en_cours", error=None)
         db.set_job_status(job_id, "en_cours")
@@ -275,7 +298,7 @@ def create_app(
             cost_usd=merged.usage.cost_usd,
         )
         for c in chunks:
-            _discard(config.chunk_dir / f"job{job_id}_chunk{c['idx']}.opus")
+            _discard(config.chunk_dir / f"job{job_id}_chunk{c['idx']}{CHUNK_SUFFIX}")
         return FinalizeResponse(
             job_id=job_id,
             title=merged.title,
@@ -338,6 +361,10 @@ def create_app(
             api_key=keys.get(),
         )
 
+    # Monté en dernier pour ne pas masquer les routes ci-dessus. Le client
+    # est servi par le même conteneur : une seule application Cloudflare
+    # Access protège l'ensemble.
+    app.mount("/", StaticFiles(directory=static_dir), name="static")
     return app
 
 

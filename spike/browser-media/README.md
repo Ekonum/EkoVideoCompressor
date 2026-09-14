@@ -53,9 +53,14 @@ Deux enseignements qui **corrigent le plan** :
    était impossible en navigateur et retenait H.264 par défaut. Ici il est *plus petit et plus
    rapide* — la décision doit se reprendre sur mesure réelle.
 2. **Le MP3 est disponible** aussi (`AUDIO_CODECS`), alors que WebCodecs ne propose qu'Opus et
-   AAC : Mediabunny embarque son propre encodeur. On pourrait donc garder le format d'upload
-   actuel à l'identique. L'Opus reste préférable (≈12,8 Mo/h contre 28 Mo/h en MP3 64 kbps),
-   mais c'est désormais un choix, plus une contrainte.
+   AAC. On pourrait donc garder le format d'upload actuel à l'identique. L'Opus reste préférable
+   (≈12,8 Mo/h contre 28 Mo/h en MP3 64 kbps), mais c'est désormais un choix, plus une contrainte.
+
+   > **Correction (M2)** : j'écrivais ici que « Mediabunny embarque son propre encodeur ». C'est
+   > faux. Le cœur liste bien `mp3` dans ses codecs audio, mais échoue à l'exécution avec un
+   > message explicite : l'encodeur vit dans un paquet d'extension séparé,
+   > `@mediabunny/mp3-encoder`, à charger et enregistrer soi-même. La conclusion tient — le MP3
+   > est bien encodable dans le navigateur — mais elle coûte une dépendance de plus.
 
 ## Régénérer le clip de synthèse
 

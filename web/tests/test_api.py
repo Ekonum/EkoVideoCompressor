@@ -125,7 +125,7 @@ class ApiTestCase(unittest.TestCase):
         self.assertEqual(len(body["chunks"]), 2)
         self.assertEqual(body["chunks"][0]["start"], 0.0)
         self.assertEqual(body["chunks"][-1]["end"], 3600.0)
-        self.assertEqual(body["audio"]["codec"], "opus")
+        self.assertEqual(body["audio"]["codec"], "mp3")
         self.assertEqual(body["audio"]["sample_rate"], 16000)
 
     def test_une_reunion_courte_reste_une_seule_fenetre(self):
@@ -197,7 +197,7 @@ class ApiTestCase(unittest.TestCase):
         """Le disque du VPS est tendu : rien ne doit rester derrière."""
         body = self._create(duration=600.0)
         self.client.put(f"/api/jobs/{body['job_id']}/chunks/0", content=b"audio")
-        self.assertEqual(list(self.settings.chunk_dir.glob("*.opus")), [])
+        self.assertEqual(list(self.settings.chunk_dir.glob("*.mp3")), [])
 
     def test_une_fenetre_vide_est_refusee(self):
         body = self._create(duration=600.0)
