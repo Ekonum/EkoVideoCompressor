@@ -396,6 +396,138 @@ class GeminiClientTest(unittest.TestCase):
         self.assertIn("/v1beta/models", captured["url"])
 
 
+class TransientFailureTest(unittest.TestCase):
+    """Ce qui est réessayable, et ce qui ne doit pas l'être.
+
+    Régression du 14 septembre : quatre transcriptions d'affilée ont
+    échoué sur ``blockReason: OTHER`` sans qu'un seul réessai parte, et
+    l'utilisateur a dû relancer à la main à chaque fois. Le chemin
+    « aucun candidat » était le seul de sa famille à ne pas être marqué
+    transitoire, alors que la réponse vide et le JSON tronqué l'étaient.
+    """
+
+    def _parse(self, payload):
+        with self.assertRaises(CloudTranscriptionError) as ctx:
+            parse_cloud_response(payload, model_id=DEFAULT_CLOUD_MODEL)
+        return ctx.exception
+
+    def test_aucun_candidat_sans_raison_est_reessayable(self):
+        self.assertTrue(self._parse({"candidates": []}).retryable)
+
+    def test_aucun_candidat_raison_other_est_reessayable(self):
+        error = self._parse(
+            {"candidates": [], "promptFeedback": {"blockReason": "OTHER"}}
+        )
+        self.assertTrue(error.retryable)
+        self.assertIn("OTHER", str(error))
+
+    def test_un_refus_de_contenu_nest_pas_reessayable(self):
+        """Réessayer un blocage SAFETY ne ferait que repayer le refus."""
+        for reason in ("SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST"):
+            with self.subTest(reason=reason):
+                error = self._parse(
+                    {"candidates": [], "promptFeedback": {"blockReason": reason}}
+                )
+                self.assertFalse(error.retryable)
+
+    def test_reponse_valide_sans_segment_est_reessayable(self):
+        payload = {
+            "candidates": [
+                {"content": {"parts": [{"text": json.dumps({"segments": []})}]}}
+            ]
+        }
+        self.assertTrue(self._parse(payload).retryable)
+
+    def test_ingestion_echouee_est_reessayable(self):
+        client = GeminiClient("test-key", opener=lambda *a, **k: None)
+        with self.assertRaises(CloudTranscriptionError) as ctx:
+            client.wait_until_active({"state": "FAILED", "name": "files/x"})
+        self.assertTrue(ctx.exception.retryable)
+
+
+class ResumableUploadTest(unittest.TestCase):
+    """Le téléversement est la seule étape qui pousse plusieurs Mo :
+    c'est elle qui casse en premier sur une mauvaise connexion, et elle
+    partait jusqu'ici en un bloc, sans reprise."""
+
+    class _Response:
+        def __init__(self, body=b"", headers=None):
+            self._body = body
+            self.headers = headers or {}
+
+        def read(self):
+            return self._body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def _client(self, opener):
+        return GeminiClient("test-key", opener=opener)
+
+    def test_envoi_par_tranches_et_finalisation_sur_la_derniere(self):
+        from cloud_transcription import _UPLOAD_SLICE_BYTES
+
+        seen = []
+
+        def opener(request, timeout=0):
+            seen.append(
+                (
+                    request.get_header("X-goog-upload-offset"),
+                    request.get_header("X-goog-upload-command"),
+                    len(request.data),
+                )
+            )
+            return self._Response(b'{"file": {"uri": "u", "name": "files/x"}}')
+
+        payload = b"x" * (_UPLOAD_SLICE_BYTES + 1000)
+        body = self._client(opener)._push_upload("https://upload", payload, "audio/mp3")
+
+        self.assertEqual(body["file"]["uri"], "u")
+        self.assertEqual([s[0] for s in seen], ["0", str(_UPLOAD_SLICE_BYTES)])
+        self.assertEqual([s[1] for s in seen], ["upload", "upload, finalize"])
+        self.assertEqual(sum(s[2] for s in seen), len(payload))
+
+    def test_reprise_a_loffset_reellement_recu(self):
+        """Après une coupure, on renvoie ce qui manque — pas tout."""
+        import urllib.error
+
+        calls = []
+        state = {"failed": False}
+
+        def opener(request, timeout=0):
+            command = request.get_header("X-goog-upload-command")
+            if command == "query":
+                return self._Response(headers={"x-goog-upload-size-received": "400"})
+            calls.append((int(request.get_header("X-goog-upload-offset")), len(request.data)))
+            if not state["failed"]:
+                state["failed"] = True
+                raise urllib.error.URLError("connexion perdue")
+            return self._Response(b'{"file": {"uri": "u"}}')
+
+        slept = []
+        body = self._client(opener)._push_upload(
+            "https://upload", b"y" * 1000, "audio/mp3", sleeper=slept.append
+        )
+
+        self.assertEqual(body["file"]["uri"], "u")
+        self.assertEqual(calls, [(0, 1000), (400, 600)])
+        self.assertEqual(slept, [2])
+
+    def test_une_erreur_non_reseau_ne_boucle_pas(self):
+        """Une clé refusée ne se répare pas en réessayant."""
+        import urllib.error
+
+        def opener(request, timeout=0):
+            raise urllib.error.HTTPError("https://upload", 401, "Unauthorized", {}, None)
+
+        with self.assertRaises(CloudTranscriptionError) as ctx:
+            self._client(opener)._push_upload("https://upload", b"z" * 10, "audio/mp3")
+        self.assertFalse(ctx.exception.retryable)
+
+
 class UsageLedgerTest(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
