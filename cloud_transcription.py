@@ -1200,6 +1200,24 @@ def merge_chunk_results(chunks: list[CloudChunkResult]) -> CloudChunkResult:
 # ---------------------------------------------------------------------------
 
 
+def _read_response(response: Any, label: str) -> bytes:
+    """Lit le corps d'une réponse en classant les incidents réseau.
+
+    La lecture a lieu après la sortie de ``_open`` : une coupure ou une
+    lenteur ici remonterait sinon en ``OSError`` nue, non marquée
+    transitoire, donc sans réessai — l'angle mort exact d'une mauvaise
+    connexion.
+    """
+    try:
+        return response.read()
+    except OSError as exc:
+        raise CloudTranscriptionError(
+            f"Connexion interrompue en lisant la réponse {label} : {exc}. "
+            "Vérifiez la connexion internet.",
+            code="cloud_network",
+        ) from exc
+
+
 def _ssl_context() -> ssl.SSLContext:
     if certifi is not None:
         return ssl.create_default_context(cafile=certifi.where())
@@ -1293,6 +1311,17 @@ class GeminiClient:
                 "Vérifiez la connexion internet.",
                 code="cloud_network",
             ) from exc
+        except OSError as exc:
+            # urllib n'emballe dans URLError que l'échec de connexion ;
+            # une coupure ou une lenteur pendant la lecture de la réponse
+            # remonte en TimeoutError/OSError nue. Sans ce cas, elle
+            # sortait non classée et ne déclenchait aucun réessai — le
+            # symptôme même d'une mauvaise connexion.
+            raise CloudTranscriptionError(
+                f"Connexion interrompue avec l'API Gemini : {exc}. "
+                "Vérifiez la connexion internet.",
+                code="cloud_network",
+            ) from exc
 
     def _json_request(
         self,
@@ -1309,7 +1338,7 @@ class GeminiClient:
         for key, value in (headers or {}).items():
             request.add_header(key, value)
         with self._open(request) as response:
-            raw = response.read().decode("utf-8", errors="replace")
+            raw = _read_response(response, "Gemini").decode("utf-8", errors="replace")
             response_headers = {k.lower(): v for k, v in response.headers.items()}
         body: dict = {}
         if raw.strip():
@@ -1383,7 +1412,7 @@ class GeminiClient:
         request.add_header("X-Goog-Upload-Command", "query")
         try:
             with self._open(request) as response:
-                response.read()
+                _read_response(response, "Gemini")
                 received = response.headers.get("x-goog-upload-size-received")
         except CloudTranscriptionError:
             # La requête d'état a échoué elle aussi : on repart de ce
@@ -1430,7 +1459,9 @@ class GeminiClient:
             request.add_header("Content-Type", mime)
             try:
                 with self._open(request) as response:
-                    raw = response.read().decode("utf-8", errors="replace")
+                    raw = _read_response(response, "Gemini").decode(
+                        "utf-8", errors="replace"
+                    )
             except CloudTranscriptionError as exc:
                 if exc.code != "cloud_network" or attempts >= len(
                     _UPLOAD_RETRY_BACKOFF_SECONDS
@@ -1822,6 +1853,13 @@ class CloudProvider:
                 "Vérifiez la connexion internet.",
                 code="cloud_network",
             ) from exc
+        except OSError as exc:
+            # Même angle mort que côté Gemini : voir le commentaire là-bas.
+            raise CloudTranscriptionError(
+                f"Connexion interrompue avec l'API {self.provider_label} : {exc}. "
+                "Vérifiez la connexion internet.",
+                code="cloud_network",
+            ) from exc
 
     def _request(
         self,
@@ -1835,7 +1873,7 @@ class CloudProvider:
         for key, value in (headers or {}).items():
             request.add_header(key, value)
         with self._open(request) as response:
-            raw = response.read()
+            raw = _read_response(response, self.provider_label)
             resp_headers = {k.lower(): v for k, v in response.headers.items()}
         return raw, resp_headers
 

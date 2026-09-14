@@ -15,12 +15,17 @@ Pins the contracts the rest of the app builds on:
 
 from __future__ import annotations
 
+import io
 import json
 import tempfile
 import unittest
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from cloud_transcription import (
+    GeminiProvider,
+    _read_response,
     CLOUD_PROVIDERS,
     CLOUD_TRANSCRIPTION_MODELS,
     CLOUD_CHUNK_SECONDS,
@@ -1091,3 +1096,63 @@ class STTProviderParsingTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReadTimeoutClassificationTests(unittest.TestCase):
+    """Un délai dépassé doit être transitoire, donc réessayé.
+
+    C'est l'angle mort qui a coûté une transcription le 14 septembre :
+    urllib n'emballe dans ``URLError`` que l'échec de *connexion*. Tout
+    ce qui lâche pendant la lecture de la réponse — ``getresponse()``,
+    ``read()`` — remonte en ``TimeoutError`` nue, sortait non classé, et
+    ne déclenchait aucun réessai.
+    """
+
+    def _provider(self, opener):
+        return GeminiProvider("cle-de-test", opener=opener)
+
+    def test_un_timeout_a_la_connexion_est_transitoire(self):
+        def opener(request, timeout=None):
+            raise TimeoutError("The read operation timed out")
+
+        provider = self._provider(opener)
+        with self.assertRaises(CloudTranscriptionError) as caught:
+            provider._open(urllib.request.Request("https://example.invalid"))
+        self.assertEqual(caught.exception.code, "cloud_network")
+        self.assertTrue(caught.exception.retryable)
+
+    def test_un_timeout_en_lisant_le_corps_est_transitoire(self):
+        class Response:
+            def read(self):
+                raise TimeoutError("The read operation timed out")
+
+        with self.assertRaises(CloudTranscriptionError) as caught:
+            _read_response(Response(), "Gemini")
+        self.assertEqual(caught.exception.code, "cloud_network")
+        self.assertTrue(caught.exception.retryable)
+
+    def test_une_connexion_refusee_reste_transitoire(self):
+        def opener(request, timeout=None):
+            raise ConnectionResetError("Connection reset by peer")
+
+        provider = self._provider(opener)
+        with self.assertRaises(CloudTranscriptionError) as caught:
+            provider._open(urllib.request.Request("https://example.invalid"))
+        self.assertEqual(caught.exception.code, "cloud_network")
+
+    def test_une_erreur_http_garde_son_classement(self):
+        """Le nouveau filet ne doit pas avaler les erreurs HTTP : un 400
+        reste définitif, un 503 reste transitoire."""
+        for status, expected in ((400, False), (503, True)):
+            with self.subTest(status=status):
+                def opener(request, timeout=None, status=status):
+                    raise urllib.error.HTTPError(
+                        "https://example.invalid", status, "boom", {}, io.BytesIO(b"{}")
+                    )
+
+                provider = self._provider(opener)
+                with self.assertRaises(
+                    CloudTranscriptionError
+                ) as caught:
+                    provider._open(urllib.request.Request("https://example.invalid"))
+                self.assertEqual(caught.exception.retryable, expected)
