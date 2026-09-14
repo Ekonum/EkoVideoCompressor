@@ -1,0 +1,63 @@
+@import "tailwindcss";
+
+/* Fontes officielles Ekonum. Variables : un fichier couvre toutes les
+   graisses, ce qui évite six requêtes pour une interface qui en utilise
+   trois. Servies par le conteneur, jamais par un CDN. */
+@font-face {
+  font-family: "Chillax";
+  src: url("/fonts/Chillax-Variable.woff2") format("woff2-variations");
+  font-weight: 200 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Synonym";
+  src: url("/fonts/Synonym-Variable.woff2") format("woff2-variations");
+  font-weight: 200 700;
+  font-display: swap;
+}
+
+@theme {
+  /* Palette officielle, telle quelle. Les nuances dérivées ne servent
+     qu'aux surfaces et aux bordures : elles ne créent pas de nouvelle
+     couleur de marque. */
+  --color-fonce: #021A1A;
+  --color-fonce-doux: #0A2726;
+  --color-clair: #EAEAEA;
+  --color-papier: #F4F5F4;
+  --color-turquoise: #2AD39F;
+  --color-turquoise-sombre: #14A87B;
+  --color-violet: #9645D6;
+  --color-bord: #D2D8D6;
+
+  --font-titre: "Chillax", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-texte: "Synonym", -apple-system, BlinkMacSystemFont, sans-serif;
+
+  /* Progression d'environ 1,6 entre paragraphe, sous-titre et titre,
+     comme la charte le demande — resserrée pour une interface, où les
+     titres sont nombreux et répétés. */
+  --text-corps: 0.9375rem;
+  --text-sous-titre: 1.0625rem;
+  --text-titre: 1.5rem;
+}
+
+html { background: var(--color-papier); }
+
+body {
+  font-family: var(--font-texte);
+  font-size: var(--text-corps);
+  color: var(--color-fonce);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, .titre { font-family: var(--font-titre); }
+
+/* Le turquoise porte les actions et la continuité ; on le garde aussi
+   comme couleur de focus plutôt que le bleu par défaut du navigateur. */
+:focus-visible {
+  outline: 2px solid var(--color-turquoise-sombre);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}

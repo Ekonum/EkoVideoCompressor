@@ -1,0 +1,229 @@
+import { useEffect, useState } from 'react';
+import { Bouton, Champ, Erreur } from './Communs.jsx';
+import { sonderDuree } from '../sonde.js';
+import { usePipeline } from '../usePipeline.js';
+import { duree, mo, usd, horodatage, liste } from '../format.js';
+
+const MODELE = 'gemini-3.8-flash';
+
+/** Assistant de lancement.
+ *
+ *  L'intention : rendre lisible et rassurant un traitement long. D'où
+ *  une seule colonne, trois moments — le fichier, le contexte, puis
+ *  l'avancement — et une phrase qui dit franchement que le média ne
+ *  quitte pas le poste. C'est la promesse centrale de l'outil ; elle
+ *  mérite d'être écrite, pas déduite.
+ */
+export function Nouveau({ surTermine }) {
+  const [fichier, setFichier] = useState(null);
+  const [secondes, setSecondes] = useState(0);
+  const [lecture, setLecture] = useState('');
+  const [client, setClient] = useState('');
+  const [participants, setParticipants] = useState('');
+  const [glossaire, setGlossaire] = useState('');
+  const pipeline = usePipeline();
+
+  const capacites = typeof AudioEncoder !== 'undefined' && window.isSecureContext;
+
+  useEffect(() => {
+    if (pipeline.etat === 'termine' && pipeline.resultat) surTermine?.(pipeline.jobId);
+  }, [pipeline.etat, pipeline.resultat, pipeline.jobId, surTermine]);
+
+  // Entrée de rodage : « ?source=/chemin » charge un fichier servi par le
+  // serveur au lieu de passer par le sélecteur, ce qui rend la chaîne
+  // vérifiable de bout en bout sans intervention. Même origine, derrière
+  // Access comme le reste — rien n'est contourné.
+  useEffect(() => {
+    const source = new URLSearchParams(window.location.search).get('source');
+    if (!source) return;
+    (async () => {
+      setLecture(`Chargement de ${source}…`);
+      const blob = await (await fetch(source)).blob();
+      const charge = new File([blob], source.split('/').pop(), { type: blob.type });
+      const total = await sonderDuree(charge);
+      setFichier(charge);
+      setSecondes(total);
+      setLecture(`${mo(charge.size)} · ${duree(total)} (rodage)`);
+    })().catch((e) => setLecture(`Rodage impossible : ${e.message}`));
+  }, []);
+
+  async function choisir(event) {
+    const choisi = event.target.files[0] || null;
+    setFichier(null);
+    setSecondes(0);
+    if (!choisi) return setLecture('');
+    setLecture('Lecture des métadonnées…');
+    try {
+      const total = await sonderDuree(choisi);
+      setFichier(choisi);
+      setSecondes(total);
+      setLecture(`${mo(choisi.size)} · ${duree(total)}`);
+    } catch (e) {
+      setFichier(null);
+      setLecture(`Fichier illisible : ${e.message}`);
+    }
+  }
+
+  if (!capacites) {
+    return (
+      <section className="mx-auto max-w-2xl px-6 py-16">
+        <h1 className="titre text-[1.5rem] font-semibold">Navigateur non supporté</h1>
+        <p className="mt-3 text-fonce/70">
+          Le découpage se fait sur ton poste, ce qui demande WebCodecs et une
+          connexion sécurisée. Chrome, Edge ou Safari 26 et plus conviennent.
+        </p>
+      </section>
+    );
+  }
+
+  const enCours = pipeline.etat === 'traitement' || pipeline.etat === 'creation';
+
+  return (
+    <section className="mx-auto max-w-3xl px-6 py-10">
+      <h1 className="titre text-[1.5rem] font-semibold">Nouvelle transcription</h1>
+      <p className="mt-2 max-w-xl text-fonce/70">
+        Le découpage et l'encodage se font sur ce poste. Seules des fenêtres
+        audio de quelques mégaoctets partent au serveur — ta vidéo, elle, ne
+        quitte pas ta machine.
+      </p>
+
+      <div className="mt-8 space-y-8">
+        <div>
+          <h2 className="titre text-[1.0625rem] font-medium">1. Le fichier</h2>
+          <input
+            type="file"
+            accept="video/*,audio/*"
+            onChange={choisir}
+            disabled={enCours}
+            className="mt-3 block w-full cursor-pointer rounded-lg border border-dashed border-bord bg-white px-4 py-6 text-fonce/70 file:mr-4 file:rounded-md file:border-0 file:bg-fonce file:px-3 file:py-1.5 file:text-clair"
+          />
+          {lecture ? <p className="mt-2 text-[0.875rem] text-fonce/60">{lecture}</p> : null}
+        </div>
+
+        <div>
+          <h2 className="titre text-[1.0625rem] font-medium">2. Le contexte</h2>
+          <p className="mt-1 text-[0.875rem] text-fonce/60">
+            Facultatif, mais c'est ce qui fait la différence entre « Réunion du
+            3 juillet » et un titre utile.
+          </p>
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <Champ
+              label="Partie prenante"
+              aide="Préfixe du titre : « Acritec - Sujet »"
+              placeholder="Acritec"
+              value={client}
+              onChange={(e) => setClient(e.target.value)}
+              disabled={enCours}
+            />
+            <Champ
+              label="Participants attendus"
+              aide="Séparés par des virgules"
+              placeholder="Robin, Lùka"
+              value={participants}
+              onChange={(e) => setParticipants(e.target.value)}
+              disabled={enCours}
+            />
+          </div>
+          <div className="mt-4">
+            <Champ
+              label="Vocabulaire métier"
+              aide="Les termes que le modèle risque d'écorcher"
+              placeholder="Odoo, Wedophone, EDOF"
+              value={glossaire}
+              onChange={(e) => setGlossaire(e.target.value)}
+              disabled={enCours}
+            />
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-4">
+          <Bouton
+            variante="accent"
+            disabled={!fichier || enCours}
+            onClick={() =>
+              pipeline.lancer({
+                fichier,
+                duree: secondes,
+                modele: MODELE,
+                contexte: {
+                  client_company: client.trim(),
+                  expected_speaker_names: liste(participants),
+                  glossary_terms: liste(glossaire),
+                },
+              })
+            }
+          >
+            {enCours ? 'Traitement en cours…' : 'Lancer la transcription'}
+          </Bouton>
+          {pipeline.estimation !== null ? (
+            <span className="text-[0.875rem] text-fonce/60">
+              Coût estimé {usd(pipeline.estimation)}
+            </span>
+          ) : null}
+        </div>
+
+        <Erreur>{pipeline.erreur}</Erreur>
+
+        {pipeline.fenetres.length > 0 ? (
+          <Avancement fenetres={pipeline.fenetres} message={pipeline.message} />
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+const LIBELLES = {
+  attendue: 'en attente',
+  encodage: 'encodage sur ce poste',
+  envoi: 'envoi',
+  transcription: 'transcription',
+  terminee: 'terminée',
+  erreur: 'erreur',
+};
+
+/** Avancement par fenêtre.
+ *
+ *  Une ligne par fenêtre plutôt qu'une barre unique : sur une réunion de
+ *  trois heures, savoir *laquelle* patine est la seule information qui
+ *  aide — c'est aussi elle qu'on pourra relancer seule.
+ */
+function Avancement({ fenetres, message }) {
+  const finies = fenetres.filter((f) => f.etat === 'terminee').length;
+  return (
+    <div>
+      <div className="flex items-baseline justify-between">
+        <h2 className="titre text-[1.0625rem] font-medium">3. Avancement</h2>
+        <span className="text-[0.875rem] text-fonce/60">
+          {finies} / {fenetres.length} fenêtres
+        </span>
+      </div>
+
+      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-fonce/10">
+        <div
+          className="h-full rounded-full bg-turquoise transition-[width] duration-500"
+          style={{ width: `${(finies / fenetres.length) * 100}%` }}
+        />
+      </div>
+      {message ? <p className="mt-2 text-[0.875rem] text-fonce/60">{message}</p> : null}
+
+      <ul className="mt-4 divide-y divide-bord rounded-lg border border-bord bg-white">
+        {fenetres.map((f) => (
+          <li key={f.index} className="flex items-center gap-4 px-4 py-2.5">
+            <span className="w-16 shrink-0 text-[0.875rem] tabular-nums text-fonce/55">
+              {horodatage(f.start)}
+            </span>
+            <span className={`flex-1 text-[0.9375rem] ${f.etat === 'erreur' ? 'text-[#8c1d18]' : ''}`}>
+              {f.etat === 'erreur' ? f.erreur : LIBELLES[f.etat]}
+              {f.etat === 'encodage' && f.progression
+                ? ` ${Math.round(f.progression * 100)} %`
+                : ''}
+            </span>
+            <span className="shrink-0 text-[0.875rem] tabular-nums text-fonce/45">
+              {f.octets ? mo(f.octets) : ''}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
