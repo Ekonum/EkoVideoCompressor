@@ -164,6 +164,7 @@ bout sans humain. Même origine, derrière Access comme le reste.
 | `EKOVIDEO_WEB_STATE` | Racine de la base et des fenêtres en transit (défaut `./state`) |
 | `EKOVIDEO_ACCESS_TEAM_DOMAIN` / `EKOVIDEO_ACCESS_AUD` | Vérification du jeton Access |
 | `EKONUM_TOKEN` | Jeton du broker de secrets |
+| `EKONUM_BROKER` | URL de base du broker (convention du parc ; `EKONUM_BROKER_URL` surcharge l'URL complète) |
 | `EKONUM_BROKER_ITEM` / `EKONUM_BROKER_FIELD` | Élément du coffre à lire (défaut « Ekonum - API Google Gemini » / « Clé API ») |
 | `EKOVIDEO_MONTHLY_BUDGET_USD` | Plafond d'équipe (défaut 50) |
 | `EKOVIDEO_ODOO_URL` / `_DB` / `_LOGIN` | Odoo — facultatif ; absent, l'enrichissement se tait |
@@ -202,7 +203,7 @@ renvoie 404, pas 403, qui révélerait son existence).
 ## Mise en production
 
 ```bash
-docker build --platform linux/amd64 -f web/Dockerfile -t registry.robin-joseph.fr/ekovideo-web:latest .
+docker build --platform linux/amd64 -f web/Dockerfile -t registry.robin-joseph.fr/transcript:latest .
 ```
 
 Image de **65 Mo** : Vite construit le client dans une première étape, et
@@ -212,10 +213,24 @@ utilisateur non privilégié et porte un `HEALTHCHECK` sur `/healthz`.
 `linux/amd64` n'est pas décoratif : le VPS est en amd64 et une image
 arm64 serait rejetée par Portainer — au déploiement, donc tard.
 
-La stack est dans `web/docker-compose.yml`. Elle rejoint le réseau
-externe `ekonum-broker` pour lire la clé, n'expose aucun port
-publiquement — c'est le tunnel Cloudflare qui la joint — et se plafonne à
-256 Mo, le serveur ne faisant que du réseau.
+La stack est dans `web/docker-compose.yml`, calquée sur
+`partners-dashboard`. Elle rejoint le réseau externe `ekonum-broker` pour
+lire la clé et se plafonne à 256 Mo, le serveur ne faisant que du réseau.
+
+**Le port publié n'est pas facultatif** : le `cloudflared` de ce serveur
+tourne en réseau *host*, ne voit pas les réseaux Docker des stacks, et ne
+joint les services que par `http://localhost:<port>`. D'où
+`127.0.0.1:39488:8080` — lié à la boucle locale, donc invisible depuis le
+réseau du VPS, et joignable par le seul tunnel.
+
+Le label `com.centurylinklabs.watchtower.enable` n'est pas facultatif non
+plus : Watchtower tourne en `--label-enable` et ne met à jour que les
+conteneurs qui le demandent. Sans lui, publier une image ne redéploie
+rien, et il n'y a ni webhook ni appel Portainer pour compenser.
+
+Deux tags : `latest`, publié depuis `main` et surveillé par Watchtower, et
+`preprod`, publié à la demande depuis une branche pour éprouver une
+version avant de fusionner.
 
 ### Cloudflare Access
 
