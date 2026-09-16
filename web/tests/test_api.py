@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import app as _app_package  # noqa: F401  (installe la racine du dépôt dans sys.path)
 
+import json
 import tempfile
 
 from fastapi.testclient import TestClient
@@ -537,3 +538,84 @@ class OdooTestCase(_Fixture):
             vue = client.get("/api/odoo/meetings").json()
         self.assertFalse(vue["available"])
         self.assertIn("injoignable", vue["reason"])
+
+
+class ApiTokenTestCase(_Fixture):
+    """Jetons d'API : ce qui ouvre la porte aux appels machine."""
+
+    def _mint(self, name="script de test") -> str:
+        response = self.client.post("/api/tokens", json={"name": name})
+        self.assertEqual(response.status_code, 201, response.text)
+        return response.json()["token"]
+
+    def test_un_jeton_ouvre_l_api(self):
+        jeton = self._mint()
+        client = TestClient(self.app, headers={"Authorization": f"Bearer {jeton}"})
+        response = client.post(
+            "/api/jobs",
+            json={
+                "filename": "machine.mov",
+                "duration_seconds": 600,
+                "model": "gemini-3.8-flash",
+            },
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+
+    def test_le_jeton_en_clair_n_est_pas_en_base(self):
+        """Un vol de base ne doit pas rendre les jetons utilisables."""
+        jeton = self._mint()
+        with self.db.connect() as conn:
+            lignes = conn.execute("SELECT * FROM api_tokens").fetchall()
+        self.assertEqual(len(lignes), 1)
+        self.assertNotIn(jeton, json.dumps([dict(r) for r in lignes]))
+
+    def test_un_jeton_inconnu_est_refuse(self):
+        client = TestClient(self.app, headers={"Authorization": "Bearer ekt_inconnu"})
+        self.assertEqual(client.get("/api/jobs").status_code, 401)
+
+    def test_un_jeton_revoque_ne_sert_plus(self):
+        jeton = self._mint()
+        identifiant = self.client.get("/api/tokens").json()[0]["id"]
+        self.assertEqual(self.client.delete(f"/api/tokens/{identifiant}").status_code, 204)
+
+        client = TestClient(self.app, headers={"Authorization": f"Bearer {jeton}"})
+        self.assertEqual(client.get("/api/jobs").status_code, 401)
+
+    def test_un_jeton_ne_peut_pas_en_fabriquer_un_autre(self):
+        """Un jeton volé ne doit pas pouvoir se reproduire ni révoquer
+        ceux des collègues."""
+        jeton = self._mint()
+        client = TestClient(self.app, headers={"Authorization": f"Bearer {jeton}"})
+        self.assertEqual(client.post("/api/tokens", json={"name": "x"}).status_code, 403)
+        self.assertEqual(client.get("/api/tokens").status_code, 403)
+        self.assertEqual(client.delete("/api/tokens/1").status_code, 403)
+
+    def test_le_jeton_porte_l_identite_de_son_proprietaire(self):
+        """Les traitements créés par API appartiennent à la personne, pas
+        à une identité machine anonyme : le cloisonnement et l'attribution
+        des coûts valent donc comme pour une session humaine."""
+        jeton = self._mint()
+        client = TestClient(self.app, headers={"Authorization": f"Bearer {jeton}"})
+        cree = client.post(
+            "/api/jobs",
+            json={"filename": "machine.mov", "duration_seconds": 600,
+                  "model": "gemini-3.8-flash"},
+        ).json()
+        # Visible depuis la session humaine du même compte.
+        self.assertIn(cree["job_id"], [j["job_id"] for j in self.client.get("/api/jobs").json()])
+
+    def test_le_dernier_usage_est_trace(self):
+        jeton = self._mint()
+        self.assertIsNone(self.client.get("/api/tokens").json()[0]["last_used_at"])
+        TestClient(self.app, headers={"Authorization": f"Bearer {jeton}"}).get("/api/jobs")
+        self.assertIsNotNone(self.client.get("/api/tokens").json()[0]["last_used_at"])
+
+    def test_un_jeton_ne_voit_pas_les_traitements_d_un_autre_compte(self):
+        jeton = self._mint()
+        autre = self.db.user_id_for_email("luka@ekonum.fr")
+        prive = self.db.create_job(
+            owner_id=autre, filename="prive.mov", duration_seconds=60,
+            model="gemini-3.8-flash", language="fr", context={}, chunks=[(0.0, 60.0)],
+        )
+        client = TestClient(self.app, headers={"Authorization": f"Bearer {jeton}"})
+        self.assertEqual(client.get(f"/api/jobs/{prive}").status_code, 404)
