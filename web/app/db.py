@@ -12,8 +12,10 @@ pyannote.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+import secrets
 import sqlite3
 import unicodedata
 import threading
@@ -90,6 +92,22 @@ CREATE TABLE IF NOT EXISTS api_usage (
 
 CREATE INDEX IF NOT EXISTS idx_usage_created ON api_usage(created_at);
 
+-- Jetons d'API, pour les appels machine : un script, une intégration
+-- Odoo, un serveur MCP. Seule l'empreinte est stockée — un vol de base
+-- ne doit pas rendre les jetons utilisables, et personne (pas même
+-- l'interface) ne peut réafficher un jeton après sa création.
+CREATE TABLE IF NOT EXISTS api_tokens (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_id     INTEGER NOT NULL REFERENCES users(id),
+    name         TEXT NOT NULL,
+    token_sha256 TEXT NOT NULL UNIQUE,
+    created_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_used_at TEXT,
+    revoked_at   TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_tokens_owner ON api_tokens(owner_id, id DESC);
+
 -- Vocabulaire métier, **partagé par toute l'équipe** : « Odoo »,
 -- « Ekonum » et les noms de clients sont communs. C'est un gain net sur
 -- l'app macOS, où le glossaire était cloisonné par machine.
@@ -123,6 +141,10 @@ CREATE VIRTUAL TABLE IF NOT EXISTS segments_fts USING fts5(
     speaker      UNINDEXED
 );
 """
+
+
+def _digest(secret: str) -> str:
+    return hashlib.sha256(secret.encode("utf-8")).hexdigest()
 
 
 class Database:
@@ -428,6 +450,67 @@ class Database:
                 (match, owner_id, limit),
             ).fetchall()
             return [dict(r) for r in rows]
+
+    # -- jetons d'API ---------------------------------------------------
+
+    def create_api_token(self, owner_id: int, name: str) -> tuple[int, str]:
+        """Fabrique un jeton et n'en garde que l'empreinte.
+
+        Renvoie ``(id, jeton en clair)`` — la seule fois où la valeur
+        existe. L'appelant doit la montrer puis l'oublier.
+        """
+        secret = "ekt_" + secrets.token_urlsafe(32)
+        with self.connect() as conn:
+            cursor = conn.execute(
+                "INSERT INTO api_tokens (owner_id, name, token_sha256) "
+                "VALUES (?, ?, ?)",
+                (owner_id, (name or "").strip() or "sans nom", _digest(secret)),
+            )
+            return int(cursor.lastrowid), secret
+
+    def owner_for_api_token(self, secret: str) -> int | None:
+        """Propriétaire d'un jeton valide, ou None.
+
+        La recherche se fait sur l'empreinte : le jeton en clair ne
+        touche jamais la base, et l'index porte donc sur une valeur de
+        longueur fixe, insensible au contenu du jeton.
+        """
+        raw = (secret or "").strip()
+        if not raw:
+            return None
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT id, owner_id FROM api_tokens "
+                "WHERE token_sha256 = ? AND revoked_at IS NULL",
+                (_digest(raw),),
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                "UPDATE api_tokens SET last_used_at = ? WHERE id = ?",
+                (datetime.now().isoformat(timespec="seconds"), row["id"]),
+            )
+            return int(row["owner_id"])
+
+    def list_api_tokens(self, owner_id: int) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT id, name, created_at, last_used_at, revoked_at "
+                "FROM api_tokens WHERE owner_id = ? ORDER BY id DESC",
+                (owner_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def revoke_api_token(self, owner_id: int, token_id: int) -> bool:
+        """Révoque sans supprimer : la ligne garde la trace du dernier
+        usage, qui est précisément ce qu'on veut consulter après coup."""
+        with self.connect() as conn:
+            cursor = conn.execute(
+                "UPDATE api_tokens SET revoked_at = ? "
+                "WHERE id = ? AND owner_id = ? AND revoked_at IS NULL",
+                (datetime.now().isoformat(timespec="seconds"), token_id, owner_id),
+            )
+            return cursor.rowcount > 0
 
     # -- vocabulaire ---------------------------------------------------
 

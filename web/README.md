@@ -188,6 +188,36 @@ Pas de clé par utilisateur : le broker est en lecture seule côté
 application. L'attribution des coûts reste fine malgré la clé partagée,
 via `api_usage` joint à `jobs.owner_id`.
 
+## Jetons d'API
+
+Un appel machine — script, intégration Odoo, futur serveur MCP — franchit
+**deux verrous indépendants**, comme pour le broker :
+
+```bash
+curl https://transcript.ekonum.fr/api/jobs \
+  -H "CF-Access-Client-Id: …"      -H "CF-Access-Client-Secret: …" \
+  -H "Authorization: Bearer ekt_…"
+```
+
+Le jeton de service prouve la *machine* à Cloudflare Access ; le jeton
+d'API prouve l'*identité* à l'application. Aucun des deux ne suffit seul,
+et le second porte le compte d'une vraie personne : le cloisonnement des
+traitements et l'attribution des coûts valent donc comme pour une session
+humaine.
+
+La base ne garde que l'empreinte SHA-256. Un jeton ne peut **ni en
+fabriquer d'autres ni en révoquer** — la gestion des jetons exige une
+connexion personnelle, sinon un jeton volé se reproduirait tout seul.
+
+Amorçage, depuis le conteneur :
+
+```bash
+docker exec transcript python web/bin/mint_token.py robin@ekonum.fr "script de test"
+```
+
+Cette porte exige un accès shell au conteneur, c'est-à-dire déjà plus de
+pouvoir qu'un jeton n'en donnera jamais.
+
 ## Tests
 
 ```bash

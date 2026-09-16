@@ -27,6 +27,10 @@ RUN pip install --no-cache-dir -r web/requirements.txt
 # phase de parité.
 COPY cloud_transcription.py odoo_client.py ./
 COPY web/app ./web/app
+# Les outils d'opérateur : fabrication d'un jeton d'amorçage, reprise de la
+# bibliothèque macOS. Ils n'ont d'intérêt que lancés *dans* le conteneur,
+# là où vivent la base et la configuration.
+COPY web/bin ./web/bin
 COPY --from=client /client/dist ./web/client/dist
 
 # Utilisateur non privilégié : rien ici n'a besoin de root.

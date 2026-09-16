@@ -106,6 +106,10 @@ class TermReplacement(BaseModel):
     new: str = Field(min_length=1)
 
 
+class TokenRequest(BaseModel):
+    name: str = Field(default="", max_length=120)
+
+
 class VocabularyRecord(BaseModel):
     terms: list[str] = Field(default_factory=list)
 
@@ -173,6 +177,29 @@ def create_app(
     # -- identité ------------------------------------------------------
 
     def current_user(request: Request) -> int:
+        """Qui fait cette requête.
+
+        Deux voies. Un humain arrive avec un jeton Cloudflare Access ; un
+        appel machine — script, intégration Odoo, serveur MCP — arrive
+        avec un jeton d'API en `Authorization: Bearer`. Les deux
+        aboutissent au même identifiant d'utilisateur, donc l'attribution
+        des coûts et le cloisonnement des traitements valent pareil dans
+        les deux cas.
+
+        Le jeton d'API est examiné en premier : il est explicite, alors
+        qu'un jeton Access peut traîner dans un cookie et servir par
+        accident.
+        """
+        entete = request.headers.get("Authorization", "")
+        if entete.startswith("Bearer "):
+            owner = db.owner_for_api_token(entete[7:])
+            if owner is None:
+                raise HTTPException(
+                    status.HTTP_401_UNAUTHORIZED,
+                    "Jeton d'API inconnu ou révoqué.",
+                )
+            return owner
+
         if config.dev_mode:
             return db.user_id_for_email(config.dev_user_email)
         token = request.headers.get("Cf-Access-Jwt-Assertion", "")
@@ -181,6 +208,20 @@ def create_app(
         except AuthError as exc:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
         return db.user_id_for_email(email)
+
+    def human_user(request: Request) -> int:
+        """Comme ci-dessus, mais refuse un jeton d'API.
+
+        Garde la gestion des jetons hors de portée des jetons eux-mêmes :
+        un jeton volé ne doit pas pouvoir s'en fabriquer d'autres, ni
+        révoquer ceux des collègues.
+        """
+        if request.headers.get("Authorization", "").startswith("Bearer "):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "La gestion des jetons demande une connexion personnelle.",
+            )
+        return current_user(request)
 
     def owned_job(job_id: int, owner_id: int) -> dict[str, Any]:
         job = db.get_job(job_id)
@@ -459,6 +500,28 @@ def create_app(
         # vers cette seule fenêtre, sans repayer les autres.
         db.set_job_status(job_id, "en_attente")
         return {"reset": index}
+
+    @app.post("/api/tokens", status_code=status.HTTP_201_CREATED)
+    def create_token(payload: TokenRequest, owner_id: int = Depends(human_user)) -> dict:
+        """Fabrique un jeton. **La valeur n'est renvoyée qu'ici.**"""
+        token_id, secret = db.create_api_token(owner_id, payload.name)
+        return {
+            "id": token_id,
+            "name": payload.name.strip() or "sans nom",
+            "token": secret,
+            "avertissement": "Ce jeton ne sera plus jamais affiché.",
+        }
+
+    @app.get("/api/tokens")
+    def list_tokens(owner_id: int = Depends(human_user)) -> list[dict]:
+        return db.list_api_tokens(owner_id)
+
+    @app.delete("/api/tokens/{token_id}", status_code=status.HTTP_204_NO_CONTENT,
+                response_class=Response)
+    def revoke_token(token_id: int, owner_id: int = Depends(human_user)) -> Response:
+        if not db.revoke_api_token(owner_id, token_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Jeton introuvable.")
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.get("/api/vocabulary")
     def vocabulary(selected: str = "", _: int = Depends(current_user)) -> list[dict]:
