@@ -1,0 +1,75 @@
+name: Image web
+
+# Construite sur chaque poussée touchant le serveur ou le client, pour
+# qu'une image cassée se voie avant le déploiement.
+#
+# Deux tags, deux usages. `latest` n'est publié que depuis `main` : c'est
+# celui que Watchtower surveille, une branche de travail ne doit pas
+# pouvoir l'écraser. `preprod` se publie à la demande depuis n'importe
+# quelle branche, pour éprouver une version sur le serveur avant de
+# fusionner — le motif `ancestors-preprod` existe déjà pour ça.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+      - 'cloud_transcription.py'
+      - 'odoo_client.py'
+      - '.github/workflows/deploy-web.yml'
+  pull_request:
+    paths:
+      - 'web/**'
+      - 'cloud_transcription.py'
+      - 'odoo_client.py'
+  workflow_dispatch:
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # `main` publie le tag que Watchtower surveille ; toute autre branche
+      # publie `preprod`, pour éprouver une version avant de fusionner.
+      - name: Choisir les tags
+        id: tags
+        run: |
+          set -euo pipefail
+          image=registry.robin-joseph.fr/transcript
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            mobile=latest
+          else
+            mobile=preprod
+          fi
+          # Valeur multi-ligne : la syntaxe à délimiteur est la seule qui
+          # passe dans $GITHUB_OUTPUT.
+          {
+            echo "list<<TAGS"
+            echo "$image:$mobile"
+            echo "$image:${{ github.sha }}"
+            echo "TAGS"
+          } >> "$GITHUB_OUTPUT"
+
+      # Le registre accepte les pushs anonymes, comme pour sync-hub,
+      # templiers et partners-dashboard : aucun identifiant serveur ne
+      # dort dans GitHub.
+      #
+      # Le VPS est en amd64 : une image arm64 serait rejetée par
+      # Portainer, et l'erreur n'apparaîtrait qu'au déploiement.
+      - name: Construire et publier
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: web/Dockerfile
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.tags.outputs.list }}
+          # `registry:2` digère mal les manifestes d'attestation.
+          provenance: false
+          sbom: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

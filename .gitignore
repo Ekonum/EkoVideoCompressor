@@ -14,7 +14,7 @@ build/
 *.spec
 !video_compactor.spec
 !ekovideo_engine.spec
-bin/
+/bin/
 RELEASE_NOTES.md
 _build_version.py
 

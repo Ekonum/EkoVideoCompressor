@@ -19,6 +19,21 @@ def _flag(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _broker_url() -> str:
+    """URL complète du broker.
+
+    La convention du parc est `EKONUM_BROKER` = URL de base — c'est ce
+    que posent les stacks de partners-dashboard et du broker lui-même.
+    On y ajoute le chemin ; `EKONUM_BROKER_URL` reste accepté pour
+    surcharger l'ensemble.
+    """
+    complete = os.environ.get("EKONUM_BROKER_URL", "").strip()
+    if complete:
+        return complete
+    base = os.environ.get("EKONUM_BROKER", "http://ekonum-secret-broker:8710").strip()
+    return base.rstrip("/") + "/v1/secret"
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     db_path: Path
@@ -68,9 +83,7 @@ class Settings:
             chunk_dir=Path(os.environ.get("EKOVIDEO_WEB_CHUNKS", state / "chunks")),
             access_team_domain=team,
             access_aud=os.environ.get("EKOVIDEO_ACCESS_AUD", "").strip(),
-            broker_url=os.environ.get(
-                "EKONUM_BROKER_URL", "http://ekonum-secret-broker:8710/v1/secret"
-            ).strip(),
+            broker_url=_broker_url(),
             broker_token=os.environ.get("EKONUM_TOKEN", "").strip(),
             broker_item=os.environ.get(
                 # Le nom exact dans le coffre — vérifié avec « ekonum-secret

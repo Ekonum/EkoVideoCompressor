@@ -1,0 +1,67 @@
+# Stack Portainer pour transcript.ekonum.fr.
+#
+# Calquée sur `partners-dashboard`, le stack le plus proche du parc : même
+# accès broker, même application Cloudflare Access, même plafond mémoire.
+services:
+  transcript:
+    image: registry.robin-joseph.fr/transcript:preprod
+    container_name: transcript
+    restart: unless-stopped
+    pull_policy: always
+
+    # Le tunnel de ce serveur tourne en réseau *host* : il ne voit pas les
+    # réseaux Docker des stacks et ne joint les services que par un port
+    # publié sur localhost. Sans cette ligne, la route du tunnel n'a rien
+    # à joindre et répond 502.
+    ports:
+      - "127.0.0.1:39488:8080"
+
+    # Le VPS est petit et partagé. Le serveur ne fait que du réseau —
+    # aucun média ne le traverse — donc 256 Mo suffisent largement.
+    mem_limit: 256m
+
+    environment:
+      # Authentification. Sans ces deux valeurs le serveur refuse de
+      # démarrer : un déploiement ne doit pas pouvoir s'ouvrir par
+      # inadvertance. Le tag AUD n'est pas un secret — il identifie
+      # l'application, il ne l'ouvre pas ; c'est la signature du jeton
+      # qui fait foi.
+      EKOVIDEO_ACCESS_TEAM_DOMAIN: "robinjoseph.cloudflareaccess.com"
+      EKOVIDEO_ACCESS_AUD: "8da98a9ba900f77a8819673abb3377403e9d02970fd31bbc8f471c6593c71d15"
+
+      # Clé Gemini via le broker, lue une fois au démarrage.
+      EKONUM_TOKEN: "${EKONUM_TOKEN:?jeton broker requis}"
+      EKONUM_BROKER: "http://ekonum-secret-broker:8710"
+      EKONUM_BROKER_ITEM: "Ekonum - API Google Gemini"
+      EKONUM_BROKER_FIELD: "Clé API"
+
+      # Plafond mensuel d'équipe — la clé étant partagée, le budget l'est.
+      EKOVIDEO_MONTHLY_BUDGET_USD: "50"
+
+      # Odoo : facultatif. Absent, l'enrichissement se tait simplement.
+      EKOVIDEO_ODOO_URL: "${EKOVIDEO_ODOO_URL:-}"
+      EKOVIDEO_ODOO_DB: "${EKOVIDEO_ODOO_DB:-}"
+      EKOVIDEO_ODOO_LOGIN: "${EKOVIDEO_ODOO_LOGIN:-}"
+
+      EKOVIDEO_WEB_STATE: "/data"
+
+    volumes:
+      # Transcriptions et vocabulaire d'équipe. Les fenêtres audio en
+      # transit vivent aussi ici, mais sont effacées dès qu'elles ont
+      # servi — le disque du VPS est tendu.
+      - transcript-data:/data
+
+    labels:
+      # Watchtower tourne en --label-enable : il ne met à jour que les
+      # conteneurs qui le demandent. Avec ce label, publier l'image suffit,
+      # il la récupère dans la minute. Pas de webhook à gérer.
+      com.centurylinklabs.watchtower.enable: "true"
+
+    networks: [ekonum-broker]
+
+volumes:
+  transcript-data:
+
+networks:
+  ekonum-broker:
+    external: true

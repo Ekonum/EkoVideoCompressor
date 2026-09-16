@@ -72,8 +72,12 @@ l'interface. `/context` refuse en revanche franchement — l'appelant a
 demandé une donnée précise, mieux vaut un refus qu'un pack vide qu'il
 croirait complet.
 
-`odoo_client.py` est repris tel quel, en stdlib. Les identifiants
-viennent du broker comme la clé Gemini.
+`odoo_client.py` est repris tel quel. Les identifiants viennent du broker
+comme la clé Gemini. *Correction à ce que j'avais écrit* : il n'est pas
+en stdlib pur — il importe le journal du moteur macOS, qui écrit dans
+`~/Library/Application Support`, sans aucun sens dans un conteneur.
+L'import est donc désormais tolérant et se rabat sur le journal standard,
+que Docker collecte déjà.
 
 Le vocabulaire est **partagé par toute l'équipe** : « Odoo », « Ekonum »
 et les noms de clients sont communs. C'est un gain net sur l'app macOS,
@@ -160,6 +164,7 @@ bout sans humain. Même origine, derrière Access comme le reste.
 | `EKOVIDEO_WEB_STATE` | Racine de la base et des fenêtres en transit (défaut `./state`) |
 | `EKOVIDEO_ACCESS_TEAM_DOMAIN` / `EKOVIDEO_ACCESS_AUD` | Vérification du jeton Access |
 | `EKONUM_TOKEN` | Jeton du broker de secrets |
+| `EKONUM_BROKER` | URL de base du broker (convention du parc ; `EKONUM_BROKER_URL` surcharge l'URL complète) |
 | `EKONUM_BROKER_ITEM` / `EKONUM_BROKER_FIELD` | Élément du coffre à lire (défaut « Ekonum - API Google Gemini » / « Clé API ») |
 | `EKOVIDEO_MONTHLY_BUDGET_USD` | Plafond d'équipe (défaut 50) |
 | `EKOVIDEO_ODOO_URL` / `_DB` / `_LOGIN` | Odoo — facultatif ; absent, l'enrichissement se tait |
@@ -194,3 +199,70 @@ contrat — plan autoritatif, garde-fou budget **avant** le premier octet,
 202 immédiat, reprise par fenêtres manquantes, effacement des fenêtres
 après usage, et cloisonnement entre utilisateurs (le job d'un collègue
 renvoie 404, pas 403, qui révélerait son existence).
+
+## Mise en production
+
+```bash
+docker build --platform linux/amd64 -f web/Dockerfile -t registry.robin-joseph.fr/transcript:latest .
+```
+
+Image de **65 Mo** : Vite construit le client dans une première étape, et
+l'image finale n'embarque ni Node ni `node_modules`. Elle tourne sous un
+utilisateur non privilégié et porte un `HEALTHCHECK` sur `/healthz`.
+
+`linux/amd64` n'est pas décoratif : le VPS est en amd64 et une image
+arm64 serait rejetée par Portainer — au déploiement, donc tard.
+
+La stack est dans `web/docker-compose.yml`, calquée sur
+`partners-dashboard`. Elle rejoint le réseau externe `ekonum-broker` pour
+lire la clé et se plafonne à 256 Mo, le serveur ne faisant que du réseau.
+
+**Le port publié n'est pas facultatif** : le `cloudflared` de ce serveur
+tourne en réseau *host*, ne voit pas les réseaux Docker des stacks, et ne
+joint les services que par `http://localhost:<port>`. D'où
+`127.0.0.1:39488:8080` — lié à la boucle locale, donc invisible depuis le
+réseau du VPS, et joignable par le seul tunnel.
+
+Le label `com.centurylinklabs.watchtower.enable` n'est pas facultatif non
+plus : Watchtower tourne en `--label-enable` et ne met à jour que les
+conteneurs qui le demandent. Sans lui, publier une image ne redéploie
+rien, et il n'y a ni webhook ni appel Portainer pour compenser.
+
+Deux tags : `latest`, publié depuis `main` et surveillé par Watchtower, et
+`preprod`, publié à la demande depuis une branche pour éprouver une
+version avant de fusionner.
+
+### Cloudflare Access
+
+Application **« Transcriptions »**, `transcript.ekonum.fr`, calquée sur
+« Tableau de bord Partenaires » : même fournisseur d'identité, session de
+24 h, règle « comptes Google Ekonum » (`email_domain: ekonum.fr`).
+
+Les deux valeurs que le serveur exige pour démarrer :
+
+| Variable | Valeur |
+|---|---|
+| `EKOVIDEO_ACCESS_TEAM_DOMAIN` | `robinjoseph.cloudflareaccess.com` |
+| `EKOVIDEO_ACCESS_AUD` | l'`aud` de l'application, dans la stack |
+
+### Reprise de la bibliothèque macOS
+
+```bash
+python3 web/bin/import_library.py \
+  --source ~/Library/Application\ Support/EkoVideo\ Compressor/library.db \
+  --destination ./state/ekovideo.db \
+  --owner robin@ekonum.fr
+```
+
+Mesuré sur la vraie bibliothèque : **82 réunions, 35 651 segments**, et le
+vocabulaire d'équipe amorcé au passage (Odoo 74 usages, Ekonum 28,
+API 25…) — à la bascule, les suggestions ne partent pas de zéro.
+
+La base source est ouverte en **lecture seule** et le script est
+**idempotent** : une reprise de plusieurs années de bibliothèque ne
+réussit jamais du premier coup, il faut pouvoir recommencer.
+
+*Piège rencontré* : `review_path` n'est pas une transcription mais la
+liste des passages à vérifier. Le classer en premier importait
+82 réunions vidées de leur contenu — 655 caractères pour 114 minutes de
+réunion — et le défaut ne se serait vu qu'à la lecture.
