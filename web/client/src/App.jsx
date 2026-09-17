@@ -3,6 +3,7 @@ import { Entete } from './components/Marque.jsx';
 import { Bibliotheque } from './components/Bibliotheque.jsx';
 import { Nouveau } from './components/Nouveau.jsx';
 import { Detail } from './components/Detail.jsx';
+import { Compte } from './components/Compte.jsx';
 
 export default function App() {
   const [vue, setVue] = useState('bibliotheque');
@@ -20,6 +21,8 @@ export default function App() {
       <main>
         {ouvert !== null ? (
           <Detail jobId={ouvert} surRetour={() => setOuvert(null)} />
+        ) : vue === 'compte' ? (
+          <Compte />
         ) : vue === 'nouveau' ? (
           <Nouveau surTermine={(id) => { setVue('bibliotheque'); setOuvert(id); }} />
         ) : (

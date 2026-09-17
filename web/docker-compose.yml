@@ -38,10 +38,19 @@ services:
       # Plafond mensuel d'équipe — la clé étant partagée, le budget l'est.
       EKOVIDEO_MONTHLY_BUDGET_USD: "50"
 
-      # Odoo : facultatif. Absent, l'enrichissement se tait simplement.
-      EKOVIDEO_ODOO_URL: "${EKOVIDEO_ODOO_URL:-}"
-      EKOVIDEO_ODOO_DB: "${EKOVIDEO_ODOO_DB:-}"
-      EKOVIDEO_ODOO_LOGIN: "${EKOVIDEO_ODOO_LOGIN:-}"
+      # Odoo. La lecture (suggestions de réunion, pack de contexte) passe
+      # par la clé partagée du broker ; **l'écriture dans le chatter passe
+      # par la clé personnelle de chacun**, enregistrée depuis son compte.
+      # Sans quoi toutes les notes seraient signées du même utilisateur et
+      # l'attribution disparaîtrait.
+      EKOVIDEO_ODOO_URL: "https://www.ekonum.fr"
+      EKOVIDEO_ODOO_DB: "${EKOVIDEO_ODOO_DB:-openerp}"
+      EKOVIDEO_ODOO_LOGIN: "${EKOVIDEO_ODOO_LOGIN:-contact@ekonum.fr}"
+
+      # Chiffre les clés API Odoo personnelles au repos. Absente, le
+      # serveur refuse d'en enregistrer une : stocker en clair « en
+      # attendant » est le genre de provisoire qui reste.
+      EKOVIDEO_SECRET_KEY: "${EKOVIDEO_SECRET_KEY:?clé de chiffrement requise}"
 
       EKOVIDEO_WEB_STATE: "/data"
 

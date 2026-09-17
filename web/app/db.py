@@ -163,6 +163,12 @@ class Database:
         nouvelles colonnes s'ajoutent, la table ne se recrée pas.
         """
         for colonne, ddl in (
+            ("odoo_login", "TEXT"),
+            ("odoo_key_chiffree", "TEXT"),
+        ):
+            self._ensure_column(conn, "users", colonne, ddl)
+
+        for colonne, ddl in (
             ("odoo_model", "TEXT"),
             ("odoo_record_id", "INTEGER"),
             ("odoo_message_id", "INTEGER"),
@@ -218,6 +224,35 @@ class Database:
                 "SELECT email FROM users WHERE id = ?", (owner_id,)
             ).fetchone()
             return str(row["email"]) if row else ""
+
+    def set_odoo_credentials(
+        self, owner_id: int, *, login: str, key_chiffree: str
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE users SET odoo_login = ?, odoo_key_chiffree = ? WHERE id = ?",
+                (login.strip(), key_chiffree, owner_id),
+            )
+
+    def odoo_credentials(self, owner_id: int) -> tuple[str, str]:
+        """Identifiant et clé **chiffrée**. Le déchiffrement est ailleurs :
+        la base ne doit jamais rendre un secret en clair."""
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT odoo_login, odoo_key_chiffree FROM users WHERE id = ?",
+                (owner_id,),
+            ).fetchone()
+            if not row:
+                return "", ""
+            return str(row["odoo_login"] or ""), str(row["odoo_key_chiffree"] or "")
+
+    def clear_odoo_credentials(self, owner_id: int) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE users SET odoo_login = NULL, odoo_key_chiffree = NULL "
+                "WHERE id = ?",
+                (owner_id,),
+            )
 
     # -- jobs ----------------------------------------------------------
 

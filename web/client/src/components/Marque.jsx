@@ -43,7 +43,7 @@ export function Entete({ vue, surVue }) {
           ))}
         </nav>
 
-        <Compte moi={moi} />
+        <Compte moi={moi} surVue={surVue} actif={vue === 'compte'} />
       </div>
     </header>
   );
@@ -55,18 +55,25 @@ export function Entete({ vue, surVue }) {
  *  cherche sur un outil d'équipe — surtout un outil qui dépense de
  *  l'argent et où le vocabulaire est partagé.
  */
-function Compte({ moi }) {
+function Compte({ moi, surVue, actif }) {
   if (!moi?.email) return <span className="ml-auto" />;
   const initiales = moi.email.slice(0, 2).toUpperCase();
   return (
-    <div className="ml-auto flex items-center gap-2.5" title={`Connecté via ${moi.via}`}>
-      <span className="hidden text-[0.875rem] text-clair/70 sm:inline">{moi.email}</span>
+    <button
+      onClick={() => surVue('compte')}
+      title={`Connecté via ${moi.via}`}
+      aria-current={actif ? 'page' : undefined}
+      className={`ml-auto flex items-center gap-2.5 rounded-full py-1 pl-3 pr-1 transition-colors ${
+        actif ? 'bg-clair/15' : 'hover:bg-clair/10'
+      }`}
+    >
+      <span className="hidden text-[0.875rem] text-clair/75 sm:inline">{moi.email}</span>
       <span
         aria-hidden
         className="titre grid h-8 w-8 place-items-center rounded-full bg-turquoise text-[0.8125rem] font-semibold text-fonce"
       >
         {initiales}
       </span>
-    </div>
+    </button>
   );
 }

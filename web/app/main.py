@@ -39,7 +39,8 @@ from cloud_transcription import (
 )
 
 from .auth import AccessVerifier, AuthError
-from .chatter import ChatterError, OdooChatter, composer
+from .chatter import ChatterError, composer
+from .coffre import Coffre, CoffreIndisponible
 from .db import Database
 from .odoo import OdooGateway, OdooUnavailable
 from .secrets import GeminiKey, SecretError
@@ -115,6 +116,19 @@ class ImportedJob(BaseModel):
     segments: list[ImportedSegment] = Field(default_factory=list)
 
 
+class OdooCredentials(BaseModel):
+    """Clé API Odoo **personnelle**.
+
+    Pas de clé partagée : la note déposée dans le chatter porte
+    l'identité du propriétaire de la clé. Avec une clé commune, tout
+    serait signé du même compte et l'attribution — la raison d'être du
+    chatter — disparaîtrait.
+    """
+
+    login: str = Field(min_length=1, max_length=254)
+    api_key: str = Field(min_length=8, max_length=512)
+
+
 class OdooPublication(BaseModel):
     model: str = Field(min_length=1, max_length=64)
     record_id: int = Field(gt=0)
@@ -170,6 +184,7 @@ def create_app(
         static_key=config.dev_api_key,
     )
     access = verifier or AccessVerifier(config.access_team_domain, config.access_aud)
+    coffre = Coffre(config.secret_key)
     odoo_gateway = odoo or OdooGateway(
         GeminiKey(
             url=config.broker_url,
@@ -568,6 +583,41 @@ def create_app(
             "via": "jeton d'API" if par_jeton else "Cloudflare Access",
         }
 
+    @app.get("/api/me/odoo")
+    def voir_odoo(owner_id: int = Depends(current_user)) -> dict:
+        """État du raccordement Odoo. **Ne rend jamais la clé.**"""
+        login, chiffree = db.odoo_credentials(owner_id)
+        return {
+            "configured": bool(login and chiffree),
+            "login": login,
+            "server": config.odoo_url,
+            "chiffrement_disponible": coffre.disponible,
+        }
+
+    @app.put("/api/me/odoo")
+    def poser_odoo(
+        payload: OdooCredentials, owner_id: int = Depends(human_user)
+    ) -> dict:
+        """Enregistre la clé API personnelle, chiffrée.
+
+        Réservé à une connexion humaine : un jeton d'API ne doit pas
+        pouvoir déposer une identité Odoo à la place de quelqu'un.
+        """
+        try:
+            chiffree = coffre.chiffrer(payload.api_key)
+        except CoffreIndisponible as exc:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)
+            ) from exc
+        db.set_odoo_credentials(owner_id, login=payload.login, key_chiffree=chiffree)
+        return {"configured": True, "login": payload.login.strip()}
+
+    @app.delete("/api/me/odoo", status_code=status.HTTP_204_NO_CONTENT,
+                response_class=Response)
+    def retirer_odoo(owner_id: int = Depends(human_user)) -> Response:
+        db.clear_odoo_credentials(owner_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
     @app.post("/api/tokens", status_code=status.HTTP_201_CREATED)
     def create_token(payload: TokenRequest, owner_id: int = Depends(human_user)) -> dict:
         """Fabrique un jeton. **La valeur n'est renvoyée qu'ici.**"""
@@ -658,10 +708,19 @@ def create_app(
             transcript,
             entete=payload.header,
         )
-        try:
-            message_id = odoo_gateway.chatter().publier(
-                payload.model, payload.record_id, corps
+        login, chiffree = db.odoo_credentials(owner_id)
+        if not (login and chiffree):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Aucune clé API Odoo personnelle enregistrée. La note doit "
+                "porter ton identité, pas celle d'un compte partagé — "
+                "ajoute ta clé dans ton compte.",
             )
+        try:
+            chatter = odoo_gateway.chatter_for(coffre.dechiffrer(chiffree))
+            message_id = chatter.publier(payload.model, payload.record_id, corps)
+        except CoffreIndisponible as exc:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
         except ChatterError as exc:
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 

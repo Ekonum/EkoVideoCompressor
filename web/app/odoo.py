@@ -124,17 +124,18 @@ class OdooGateway:
             for l in (lignes or [])
         ]
 
-    def chatter(self):
-        """Client d'écriture dans le chatter.
+    def chatter_for(self, api_key: str):
+        """Client d'écriture, pour **une** clé API personnelle.
 
-        Séparé de la lecture : `odoo_client.py` ne sait que lire, et
-        écrire dans le dossier d'un client mérite un chemin explicite.
+        Séparé de la lecture à dessein : `odoo_client.py` ne sait que
+        lire avec la clé partagée, alors qu'écrire dans le dossier d'un
+        client doit porter l'identité de la personne qui le fait.
         """
         from .chatter import OdooChatter
 
         if not self.configured:
             raise OdooUnavailable("Odoo n'est pas configuré.")
-        return OdooChatter(self._url, self._secrets.get())
+        return OdooChatter(self._url, api_key)
 
     def context_pack(self, model: str, record_id: int) -> dict[str, Any]:
         """Pack de contexte prêt pour le prompt, et ce qu'on en tire.

@@ -57,6 +57,11 @@ class Settings:
     odoo_broker_item: str
     odoo_broker_field: str
 
+    # Chiffre les clés API Odoo personnelles. Absente, le serveur refuse
+    # d'en enregistrer une : stocker en clair « en attendant » est le
+    # genre de provisoire qui reste.
+    secret_key: str
+
     # Garde-fou budget : plafond d'équipe, la clé Gemini étant partagée.
     monthly_budget_usd: float
 
@@ -97,6 +102,7 @@ class Settings:
             odoo_login=os.environ.get("EKOVIDEO_ODOO_LOGIN", "").strip(),
             odoo_broker_item=os.environ.get("EKOVIDEO_ODOO_BROKER_ITEM", "Ekonum - API Odoo"),
             odoo_broker_field=os.environ.get("EKOVIDEO_ODOO_BROKER_FIELD", "Clé API"),
+            secret_key=os.environ.get("EKOVIDEO_SECRET_KEY", "").strip(),
             monthly_budget_usd=float(os.environ.get("EKOVIDEO_MONTHLY_BUDGET_USD", "50")),
             dev_mode=dev,
             dev_user_email=os.environ.get("EKOVIDEO_DEV_USER", "dev@ekonum.fr").strip(),

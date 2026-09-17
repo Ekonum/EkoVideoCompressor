@@ -22,11 +22,15 @@ import tempfile
 from fastapi.testclient import TestClient
 
 from app import transcription
+from app.coffre import Coffre
 from app.db import Database
 from app.main import create_app
 from app.secrets import GeminiKey
 from app.settings import Settings
 from cloud_transcription import CloudChunkResult, CloudTranscriptionError, CloudUsage
+
+
+_CLE_DE_TEST = Coffre.nouvelle_cle()
 
 
 def _settings(root: Path, **overrides) -> Settings:
@@ -44,6 +48,7 @@ def _settings(root: Path, **overrides) -> Settings:
         odoo_login="",
         odoo_broker_item="Ekonum - API Odoo",
         odoo_broker_field="Clé API",
+        secret_key=_CLE_DE_TEST,
         monthly_budget_usd=50.0,
         dev_mode=True,
         dev_user_email="robin@ekonum.fr",
@@ -713,9 +718,13 @@ class ChatterTestCase(_Fixture):
             def configured(self):
                 return True
 
-            def chatter(self):
+            def chatter_for(self, api_key):
                 return publier
 
+        # Le dépôt exige une clé personnelle : sans elle, la note serait
+        # signée d'un compte partagé.
+        self.client.put("/api/me/odoo",
+                        json={"login": "robin@ekonum.fr", "api_key": "cle-odoo"})
         return create_app(
             self.settings, database=self.db,
             gemini_key=GeminiKey(url="", token="", item="", field="", static_key="k"),
@@ -802,3 +811,75 @@ class ChatterTestCase(_Fixture):
             vue = client.post(f"/api/jobs/{body['job_id']}/odoo/publish",
                               json={"model": "crm.lead", "record_id": 364})
         self.assertEqual(vue.status_code, 409)
+
+
+class OdooPersonnelTestCase(_Fixture):
+    """Chacun sa clé : la note doit porter l'identité de son auteur."""
+
+    def test_sans_cle_personnelle_le_depot_est_refuse(self):
+        """Avec une clé partagée, toutes les notes seraient signées du même
+        compte et l'attribution — la raison d'être du chatter — sauterait."""
+        from app.odoo import OdooGateway
+
+        class Passerelle(OdooGateway):
+            @property
+            def configured(self):
+                return True
+
+        app = create_app(
+            self.settings, database=self.db,
+            gemini_key=GeminiKey(url="", token="", item="", field="", static_key="k"),
+            odoo=Passerelle(None, url="https://odoo.test", database="d", login="l"),
+        )
+        with TestClient(app) as client:
+            job = client.post("/api/jobs/import", json={
+                "filename": "r.mov", "created_at": "2026-07-06 18:01:04",
+                "title": "T", "transcript": "texte",
+            }).json()["job_id"]
+            vue = client.post(f"/api/jobs/{job}/odoo/publish",
+                              json={"model": "crm.lead", "record_id": 364})
+        self.assertEqual(vue.status_code, 409)
+        self.assertIn("ta clé", vue.json()["detail"])
+
+    def test_la_cle_est_chiffree_et_jamais_rendue(self):
+        pose = self.client.put("/api/me/odoo",
+                               json={"login": "robin@ekonum.fr", "api_key": "cle-odoo-secrete"})
+        self.assertEqual(pose.status_code, 200)
+
+        vue = self.client.get("/api/me/odoo").json()
+        self.assertTrue(vue["configured"])
+        self.assertEqual(vue["login"], "robin@ekonum.fr")
+        self.assertNotIn("cle-odoo-secrete", json.dumps(vue))
+
+        with self.db.connect() as conn:
+            lignes = json.dumps([dict(r) for r in conn.execute("SELECT * FROM users")])
+        self.assertNotIn("cle-odoo-secrete", lignes)
+
+    def test_un_jeton_d_api_ne_pose_pas_d_identite_odoo(self):
+        """Un jeton volé ne doit pas pouvoir déposer une identité Odoo à la
+        place de quelqu'un."""
+        jeton = self.client.post("/api/tokens", json={"name": "s"}).json()["token"]
+        client = TestClient(self.app, headers={"Authorization": f"Bearer {jeton}"})
+        vue = client.put("/api/me/odoo",
+                         json={"login": "x@ekonum.fr", "api_key": "12345678"})
+        self.assertEqual(vue.status_code, 403)
+
+    def test_sans_chiffrement_le_serveur_refuse_le_secret(self):
+        """Stocker en clair « en attendant » est le genre de provisoire qui
+        reste : on refuse plutôt que de dégrader."""
+        with tempfile.TemporaryDirectory() as tmp:
+            racine = Path(tmp)
+            app = create_app(
+                _settings(racine, secret_key=""), database=Database(racine / "d.db"),
+                gemini_key=GeminiKey(url="", token="", item="", field="", static_key="k"),
+            )
+            with TestClient(app) as client:
+                vue = client.put("/api/me/odoo",
+                                 json={"login": "a@b.fr", "api_key": "12345678"})
+        self.assertEqual(vue.status_code, 503)
+
+    def test_la_cle_peut_etre_retiree(self):
+        self.client.put("/api/me/odoo",
+                        json={"login": "robin@ekonum.fr", "api_key": "cle-odoo"})
+        self.assertEqual(self.client.delete("/api/me/odoo").status_code, 204)
+        self.assertFalse(self.client.get("/api/me/odoo").json()["configured"])
