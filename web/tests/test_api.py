@@ -619,3 +619,17 @@ class ApiTokenTestCase(_Fixture):
         )
         client = TestClient(self.app, headers={"Authorization": f"Bearer {jeton}"})
         self.assertEqual(client.get(f"/api/jobs/{prive}").status_code, 404)
+
+
+class IdentityTestCase(_Fixture):
+    def test_l_interface_sait_qui_est_connecte(self):
+        vue = self.client.get("/api/me").json()
+        self.assertEqual(vue["email"], "robin@ekonum.fr")
+        self.assertEqual(vue["via"], "Cloudflare Access")
+
+    def test_un_appel_machine_se_signale_comme_tel(self):
+        jeton = self.client.post("/api/tokens", json={"name": "script"}).json()["token"]
+        client = TestClient(self.app, headers={"Authorization": f"Bearer {jeton}"})
+        vue = client.get("/api/me").json()
+        self.assertEqual(vue["email"], "robin@ekonum.fr")
+        self.assertEqual(vue["via"], "jeton d'API")

@@ -37,7 +37,7 @@ export function Detail({ jobId, surRetour }) {
       <div className="mt-8 grid gap-10 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <div>
           <h2 className="titre text-[1.0625rem] font-medium">Transcription</h2>
-          <div className="mt-3 max-h-[34rem] overflow-y-auto rounded-lg border border-bord bg-white">
+          <div className="verre mt-3 max-h-[34rem] overflow-y-auto rounded-xl">
             {fiche.segments.length === 0 ? (
               <p className="px-4 py-6 text-fonce/50">Pas encore de segment.</p>
             ) : (
@@ -167,7 +167,7 @@ function Fenetres({ jobId, surNote, surErreur }) {
   return (
     <div>
       <h2 className="titre text-[1.0625rem] font-medium">Fenêtres</h2>
-      <ul className="mt-3 divide-y divide-bord rounded-lg border border-bord bg-white">
+      <ul className="verre mt-3 divide-y divide-bord/60 rounded-xl">
         {vue.chunks.map((c) => (
           <li key={c.index} className="flex items-center gap-3 px-3 py-2 text-[0.875rem]">
             <span className="w-12 shrink-0 tabular-nums text-fonce/45">{horodatage(c.start)}</span>
@@ -200,7 +200,7 @@ function Versions({ versions }) {
       <h2 className="titre text-[1.0625rem] font-medium">Versions précédentes</h2>
       <ul className="mt-3 space-y-2">
         {versions.map((v, rang) => (
-          <li key={rang} className="rounded-lg border border-violet/25 bg-white px-3 py-2">
+          <li key={rang} className="verre rounded-lg border-violet/25 px-3 py-2">
             <span className="text-[0.8125rem] text-fonce/55">{jour(v.archived_at)}</span>
             <span className="block truncate text-[0.875rem]">{v.title || 'Sans titre'}</span>
           </li>

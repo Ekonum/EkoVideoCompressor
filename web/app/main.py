@@ -501,6 +501,20 @@ def create_app(
         db.set_job_status(job_id, "en_attente")
         return {"reset": index}
 
+    @app.get("/api/me")
+    def me(request: Request, owner_id: int = Depends(current_user)) -> dict:
+        """Qui suis-je, et comment suis-je entré.
+
+        L'interface l'affiche : savoir sous quel compte on travaille est
+        la première chose qu'on cherche sur un outil d'équipe, et son
+        absence rendait la page anonyme.
+        """
+        par_jeton = request.headers.get("Authorization", "").startswith("Bearer ")
+        return {
+            "email": db.email_for_user(owner_id),
+            "via": "jeton d'API" if par_jeton else "Cloudflare Access",
+        }
+
     @app.post("/api/tokens", status_code=status.HTTP_201_CREATED)
     def create_token(payload: TokenRequest, owner_id: int = Depends(human_user)) -> dict:
         """Fabrique un jeton. **La valeur n'est renvoyée qu'ici.**"""

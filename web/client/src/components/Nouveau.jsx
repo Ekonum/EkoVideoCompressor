@@ -100,7 +100,7 @@ export function Nouveau({ surTermine }) {
             accept="video/*,audio/*"
             onChange={choisir}
             disabled={enCours}
-            className="mt-3 block w-full cursor-pointer rounded-lg border border-dashed border-bord bg-white px-4 py-6 text-fonce/70 file:mr-4 file:rounded-md file:border-0 file:bg-fonce file:px-3 file:py-1.5 file:text-clair"
+            className="verre mt-3 block w-full cursor-pointer rounded-xl border-dashed px-4 py-6 text-fonce/70 file:mr-4 file:rounded-md file:border-0 file:bg-fonce file:px-3 file:py-1.5 file:text-clair"
           />
           {lecture ? <p className="mt-2 text-[0.875rem] text-fonce/60">{lecture}</p> : null}
         </div>
@@ -274,7 +274,7 @@ function Avancement({ fenetres, message }) {
       </div>
       {message ? <p className="mt-2 text-[0.875rem] text-fonce/60">{message}</p> : null}
 
-      <ul className="mt-4 divide-y divide-bord rounded-lg border border-bord bg-white">
+      <ul className="verre mt-4 divide-y divide-bord/60 rounded-xl">
         {fenetres.map((f) => (
           <li key={f.index} className="flex items-center gap-4 px-4 py-2.5">
             <span className="w-16 shrink-0 text-[0.875rem] tabular-nums text-fonce/55">
@@ -351,7 +351,7 @@ function Reunions({ surChoix }) {
   if (!etat?.available || etat.meetings.length === 0) return null;
 
   return (
-    <div className="mt-4 rounded-lg border border-bord bg-white p-4">
+    <div className="verre mt-4 rounded-xl p-4">
       <p className="titre text-[0.9375rem] font-medium">Réunions Odoo du moment</p>
       <p className="mt-0.5 text-[0.8125rem] text-fonce/55">
         En choisir une remplit la partie prenante et le vocabulaire depuis la fiche.

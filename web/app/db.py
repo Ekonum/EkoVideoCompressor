@@ -197,6 +197,13 @@ class Database:
             cursor = conn.execute("INSERT INTO users (email) VALUES (?)", (normalized,))
             return int(cursor.lastrowid)
 
+    def email_for_user(self, owner_id: int) -> str:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT email FROM users WHERE id = ?", (owner_id,)
+            ).fetchone()
+            return str(row["email"]) if row else ""
+
     # -- jobs ----------------------------------------------------------
 
     def create_job(
