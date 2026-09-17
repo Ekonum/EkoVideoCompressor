@@ -690,3 +690,115 @@ class ImportTestCase(_Fixture):
         jeton = self.client.post("/api/tokens", json={"name": "reprise"}).json()["token"]
         client = TestClient(self.app, headers={"Authorization": f"Bearer {jeton}"})
         self.assertTrue(client.post("/api/jobs/import", json=self.REUNION).json()["imported"])
+
+
+class ChatterTestCase(_Fixture):
+    """Dépôt dans le chatter Odoo — le geste qui remplace la recopie."""
+
+    def _job_termine(self) -> int:
+        vue = self.client.post("/api/jobs/import", json={
+            "filename": "reunion.mov", "created_at": "2026-07-06 18:01:04",
+            "title": "Acritec - Revue mensuelle",
+            "transcript": "Robin : on migre vers Odoo 19.",
+            "segments": [{"start": 0, "end": 5, "speaker": "Robin", "text": "on migre"}],
+        }).json()
+        return vue["job_id"]
+
+    def _avec_odoo(self, publier):
+        """Monte l'app avec une passerelle Odoo dont l'écriture est doublée."""
+        from app.odoo import OdooGateway
+
+        class Passerelle(OdooGateway):
+            @property
+            def configured(self):
+                return True
+
+            def chatter(self):
+                return publier
+
+        return create_app(
+            self.settings, database=self.db,
+            gemini_key=GeminiKey(url="", token="", item="", field="", static_key="k"),
+            odoo=Passerelle(None, url="https://odoo.test", database="d", login="l"),
+        )
+
+    def test_la_note_est_un_accordeon_et_une_note_interne(self):
+        """Une transcription de réunion ne doit pas partir en e-mail aux
+        abonnés du dossier, et ne doit pas noyer le chatter."""
+        vus = {}
+
+        class Faux:
+            def publier(self, modele, record_id, corps):
+                vus.update(modele=modele, record_id=record_id, corps=corps)
+                return 119205
+
+        job_id = self._job_termine()
+        app = self._avec_odoo(Faux())
+        with TestClient(app) as client:
+            vue = client.post(
+                f"/api/jobs/{job_id}/odoo/publish",
+                json={"model": "crm.lead", "record_id": 364},
+            )
+        self.assertEqual(vue.status_code, 200, vue.text)
+        self.assertEqual(vue.json()["message_id"], 119205)
+        self.assertEqual(vus["modele"], "crm.lead")
+        self.assertIn("<details", vus["corps"])
+        self.assertIn("Odoo 19", vus["corps"])
+
+    def test_le_lien_est_conserve_et_visible(self):
+        class Faux:
+            def publier(self, *_a):
+                return 119205
+
+        job_id = self._job_termine()
+        app = self._avec_odoo(Faux())
+        with TestClient(app) as client:
+            client.post(f"/api/jobs/{job_id}/odoo/publish",
+                        json={"model": "crm.lead", "record_id": 364})
+            detail = client.get(f"/api/jobs/{job_id}/detail").json()
+        self.assertEqual(detail["odoo"]["record_id"], 364)
+        self.assertEqual(detail["odoo"]["message_id"], 119205)
+        self.assertIsNotNone(detail["odoo"]["published_at"])
+
+    def test_on_ne_depose_pas_deux_fois(self):
+        """Reposter empilerait deux copies du même texte dans le dossier."""
+        class Faux:
+            def publier(self, *_a):
+                return 119205
+
+        job_id = self._job_termine()
+        app = self._avec_odoo(Faux())
+        with TestClient(app) as client:
+            self.assertEqual(client.post(
+                f"/api/jobs/{job_id}/odoo/publish",
+                json={"model": "crm.lead", "record_id": 364}).status_code, 200)
+            second = client.post(
+                f"/api/jobs/{job_id}/odoo/publish",
+                json={"model": "crm.lead", "record_id": 364})
+        self.assertEqual(second.status_code, 409)
+
+    def test_une_panne_odoo_ne_perd_pas_la_transcription(self):
+        from app.chatter import ChatterError
+
+        class EnPanne:
+            def publier(self, *_a):
+                raise ChatterError("Odoo injoignable.")
+
+        job_id = self._job_termine()
+        app = self._avec_odoo(EnPanne())
+        with TestClient(app) as client:
+            vue = client.post(f"/api/jobs/{job_id}/odoo/publish",
+                              json={"model": "crm.lead", "record_id": 364})
+            detail = client.get(f"/api/jobs/{job_id}/detail").json()
+        self.assertEqual(vue.status_code, 502)
+        # Rien n'est enregistré : un nouvel essai reste possible.
+        self.assertIsNone(detail["odoo"]["message_id"])
+        self.assertIn("Odoo 19", detail["transcript"])
+
+    def test_une_reunion_sans_transcription_est_refusee(self):
+        body = self._create(duration=600.0)
+        app = self._avec_odoo(object())
+        with TestClient(app) as client:
+            vue = client.post(f"/api/jobs/{body['job_id']}/odoo/publish",
+                              json={"model": "crm.lead", "record_id": 364})
+        self.assertEqual(vue.status_code, 409)

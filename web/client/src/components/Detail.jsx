@@ -64,6 +64,7 @@ export function Detail({ jobId, surRetour }) {
           <Interlocuteurs fiche={fiche} jobId={jobId} surMaj={recharger} surNote={setNote} surErreur={setErreur} />
           <Termes fiche={fiche} jobId={jobId} surMaj={recharger} surNote={setNote} surErreur={setErreur} />
           <Fenetres jobId={jobId} surNote={setNote} surErreur={setErreur} />
+          <Odoo fiche={fiche} jobId={jobId} surMaj={recharger} surNote={setNote} surErreur={setErreur} />
           <Versions versions={fiche.previous_versions} />
         </aside>
       </div>
@@ -206,6 +207,93 @@ function Versions({ versions }) {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+/** Dépôt dans le chatter Odoo.
+ *
+ *  Remplace la recopie manuelle qui a fini par gonfler des opportunités
+ *  jusqu'à 300 000 caractères. La transcription part en accordéon : le
+ *  texte intégral reste disponible sans noyer l'historique commercial.
+ */
+function Odoo({ fiche, jobId, surMaj, surNote, surErreur }) {
+  const [requete, setRequete] = useState('');
+  const [candidats, setCandidats] = useState(null);
+  const [envoi, setEnvoi] = useState(false);
+  const lien = fiche.odoo || {};
+
+  useEffect(() => {
+    const terme = requete.trim();
+    if (terme.length < 2) { setCandidats(null); return undefined; }
+    const attente = setTimeout(() => {
+      api.odooRecords(terme).then((v) => setCandidats(v.records)).catch(() => setCandidats([]));
+    }, 300);
+    return () => clearTimeout(attente);
+  }, [requete]);
+
+  if (lien.message_id) {
+    return (
+      <div>
+        <h2 className="titre text-[1.0625rem] font-medium">Odoo</h2>
+        <p className="mt-2 text-[0.875rem] text-turquoise-sombre">
+          Déposée dans le chatter le {jour(lien.published_at)}.
+        </p>
+        <p className="mt-0.5 text-[0.8125rem] text-fonce/50">
+          {lien.model} #{lien.record_id}
+        </p>
+      </div>
+    );
+  }
+
+  if (!fiche.transcript?.trim()) return null;
+
+  return (
+    <div>
+      <h2 className="titre text-[1.0625rem] font-medium">Odoo</h2>
+      <p className="mt-1 text-[0.8125rem] text-fonce/55">
+        Déposer la transcription dans le chatter, repliée en accordéon.
+      </p>
+      <div className="mt-2">
+        <Champ
+          label="Chercher l'opportunité"
+          placeholder="Acritec, Canolle…"
+          value={requete}
+          onChange={(e) => setRequete(e.target.value)}
+        />
+      </div>
+
+      {candidats?.length === 0 ? (
+        <p className="mt-2 text-[0.8125rem] text-fonce/50">Aucun dossier trouvé.</p>
+      ) : null}
+
+      {candidats?.length ? (
+        <ul className="mt-2 space-y-1">
+          {candidats.map((c) => (
+            <li key={`${c.model}-${c.id}`}>
+              <button
+                type="button"
+                disabled={envoi}
+                onClick={async () => {
+                  setEnvoi(true);
+                  try {
+                    await api.odooPublish(jobId, { model: c.model, record_id: c.id });
+                    surNote(`Déposée dans « ${c.name} ».`);
+                    surMaj();
+                  } catch (e) { surErreur(e.message); }
+                  finally { setEnvoi(false); }
+                }}
+                className="w-full rounded-md px-2 py-1.5 text-left text-[0.875rem] transition-colors hover:bg-white/60 disabled:opacity-40"
+              >
+                <span className="titre font-medium">{c.name}</span>
+                <span className="block text-[0.8125rem] text-fonce/50">
+                  {c.partner || c.model} · {c.updated}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </div>
   );
 }

@@ -84,6 +84,58 @@ class OdooGateway:
             for event in events
         ]
 
+    def search_records(self, terme: str, limit: int = 8) -> list[dict[str, Any]]:
+        """Cherche un dossier où déposer la transcription.
+
+        Limité aux opportunités pour l'instant : c'est de loin le cas le
+        plus fréquent, et ouvrir d'emblée à tous les modèles rendrait la
+        liste illisible avant qu'on sache la classer (jalon M8.3).
+        """
+        requete = (terme or "").strip()
+        if len(requete) < 2:
+            return []
+        from odoo_client import _json2_call  # client JSON-2 déjà éprouvé
+
+        try:
+            lignes = _json2_call(
+                self._config(),
+                "crm.lead",
+                "search_read",
+                {
+                    "domain": ["|", ["name", "ilike", requete],
+                               ["partner_id.name", "ilike", requete]],
+                    "fields": ["name", "partner_id", "write_date"],
+                    "limit": limit,
+                    "order": "write_date desc",
+                },
+            )
+        except OdooError as exc:
+            raise OdooUnavailable(str(exc)) from exc
+
+        return [
+            {
+                "model": "crm.lead",
+                "id": l.get("id"),
+                "name": l.get("name") or "",
+                "partner": (l.get("partner_id") or [None, ""])[1]
+                if isinstance(l.get("partner_id"), list) else "",
+                "updated": (l.get("write_date") or "")[:10],
+            }
+            for l in (lignes or [])
+        ]
+
+    def chatter(self):
+        """Client d'écriture dans le chatter.
+
+        Séparé de la lecture : `odoo_client.py` ne sait que lire, et
+        écrire dans le dossier d'un client mérite un chemin explicite.
+        """
+        from .chatter import OdooChatter
+
+        if not self.configured:
+            raise OdooUnavailable("Odoo n'est pas configuré.")
+        return OdooChatter(self._url, self._secrets.get())
+
     def context_pack(self, model: str, record_id: int) -> dict[str, Any]:
         """Pack de contexte prêt pour le prompt, et ce qu'on en tire.
 

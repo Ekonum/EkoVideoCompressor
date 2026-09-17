@@ -39,6 +39,7 @@ from cloud_transcription import (
 )
 
 from .auth import AccessVerifier, AuthError
+from .chatter import ChatterError, OdooChatter, composer
 from .db import Database
 from .odoo import OdooGateway, OdooUnavailable
 from .secrets import GeminiKey, SecretError
@@ -112,6 +113,12 @@ class ImportedJob(BaseModel):
     technical_terms: list[str] = Field(default_factory=list)
     cost_usd: float = 0.0
     segments: list[ImportedSegment] = Field(default_factory=list)
+
+
+class OdooPublication(BaseModel):
+    model: str = Field(min_length=1, max_length=64)
+    record_id: int = Field(gt=0)
+    header: str = Field(default="", max_length=500)
 
 
 class ContextPatch(BaseModel):
@@ -482,6 +489,12 @@ def create_app(
             "technical_terms": json.loads(job["technical_terms_json"] or "[]"),
             "segments": db.segments_for_job(job_id),
             "previous_versions": json.loads(job["previous_versions_json"] or "[]"),
+            "odoo": {
+                "model": job["odoo_model"],
+                "record_id": job["odoo_record_id"],
+                "message_id": job["odoo_message_id"],
+                "published_at": job["odoo_published_at"],
+            },
         }
 
     @app.patch("/api/jobs/{job_id}")
@@ -601,6 +614,65 @@ def create_app(
     def forget_vocabulary(term: str, _: int = Depends(current_user)) -> Response:
         db.forget_vocabulary(term)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.get("/api/odoo/records")
+    def odoo_records(q: str = "", _: int = Depends(current_user)) -> dict:
+        """Dossiers candidats, pour choisir où déposer."""
+        if not odoo_gateway.configured:
+            return {"available": False, "records": []}
+        try:
+            return {"available": True, "records": odoo_gateway.search_records(q)}
+        except OdooUnavailable as exc:
+            log.warning("recherche Odoo indisponible : %s", exc)
+            return {"available": False, "reason": str(exc), "records": []}
+
+    @app.post("/api/jobs/{job_id}/odoo/publish")
+    def publier_odoo(
+        job_id: int, payload: OdooPublication, owner_id: int = Depends(current_user)
+    ) -> dict:
+        """Dépose la transcription dans le chatter, en accordéon.
+
+        Remplace la recopie manuelle qui a fini par gonfler des
+        opportunités jusqu'à 300 000 caractères. L'accordéon garde le
+        texte intégral disponible sans noyer l'historique commercial.
+        """
+        job = owned_job(job_id, owner_id)
+        transcript = (job["transcript"] or "").strip()
+        if not transcript:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Cette réunion n'a pas de transcription à déposer.",
+            )
+        if not odoo_gateway.configured:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE, "Odoo n'est pas configuré."
+            )
+        if job["odoo_message_id"]:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Déjà déposée dans Odoo — la reposter empilerait deux copies.",
+            )
+
+        corps = composer(
+            job["title"] or "Transcription complète",
+            transcript,
+            entete=payload.header,
+        )
+        try:
+            message_id = odoo_gateway.chatter().publier(
+                payload.model, payload.record_id, corps
+            )
+        except ChatterError as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+        db.set_odoo_link(
+            job_id,
+            model=payload.model,
+            record_id=payload.record_id,
+            message_id=message_id,
+        )
+        return {"message_id": message_id, "model": payload.model,
+                "record_id": payload.record_id}
 
     @app.get("/api/odoo/meetings")
     def odoo_meetings(_: int = Depends(current_user)) -> dict:

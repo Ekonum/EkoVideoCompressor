@@ -154,6 +154,21 @@ class Database:
         self._local = threading.local()
         with self.connect() as conn:
             conn.executescript(SCHEMA)
+            self._migrate(conn)
+
+    def _migrate(self, conn) -> None:
+        """Migrations additives, jouées à chaque démarrage.
+
+        La base de production porte déjà l'historique repris : les
+        nouvelles colonnes s'ajoutent, la table ne se recrée pas.
+        """
+        for colonne, ddl in (
+            ("odoo_model", "TEXT"),
+            ("odoo_record_id", "INTEGER"),
+            ("odoo_message_id", "INTEGER"),
+            ("odoo_published_at", "TEXT"),
+        ):
+            self._ensure_column(conn, "jobs", colonne, ddl)
 
     def _ensure_column(self, conn, table: str, column: str, ddl: str) -> None:
         """Ajout de colonne idempotent — le pendant du helper de sync-hub.
@@ -507,6 +522,24 @@ class Database:
                 (match, owner_id, limit),
             ).fetchall()
             return [dict(r) for r in rows]
+
+    def set_odoo_link(
+        self, job_id: int, *, model: str, record_id: int, message_id: int | None
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET odoo_model = ?, odoo_record_id = ?, "
+                "odoo_message_id = ?, odoo_published_at = ?, updated_at = ? "
+                "WHERE id = ?",
+                (
+                    model,
+                    record_id,
+                    message_id,
+                    datetime.now().isoformat(timespec="seconds") if message_id else None,
+                    datetime.now().isoformat(timespec="seconds"),
+                    job_id,
+                ),
+            )
 
     # -- jetons d'API ---------------------------------------------------
 
