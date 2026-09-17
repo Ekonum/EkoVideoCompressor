@@ -509,9 +509,9 @@ class OdooTestCase(_Fixture):
         vue = self.client.get("/api/odoo/meetings").json()
         self.assertFalse(vue["available"])
         self.assertEqual(vue["meetings"], [])
-        self.assertIn("configuré", vue["reason"])
+        self.assertIn("ton compte", vue["reason"])
 
-    def test_le_pack_de_contexte_refuse_franchement_si_odoo_manque(self):
+    def test_le_pack_de_contexte_refuse_franchement_sans_cle(self):
         """Là en revanche l'appelant a demandé une donnée précise : mieux
         vaut un refus explicite qu'un pack vide qu'il croirait complet."""
         response = self.client.get(
@@ -526,10 +526,6 @@ class OdooTestCase(_Fixture):
         from app.odoo import OdooGateway, OdooUnavailable
 
         class Panne(OdooGateway):
-            @property
-            def configured(self):
-                return True
-
             def meetings(self, **_):
                 raise OdooUnavailable("Serveur Odoo injoignable.")
 
@@ -537,7 +533,7 @@ class OdooTestCase(_Fixture):
             self.settings,
             database=self.db,
             gemini_key=GeminiKey(url="", token="", item="", field="", static_key="k"),
-            odoo=Panne(None, url="x", database="y", login="z"),
+            odoo_factory=lambda _: Panne(url="x", database="y", login="z", api_key="k"),
         )
         with TestClient(app) as client:
             vue = client.get("/api/odoo/meetings").json()
@@ -718,7 +714,7 @@ class ChatterTestCase(_Fixture):
             def configured(self):
                 return True
 
-            def chatter_for(self, api_key):
+            def chatter(self):
                 return publier
 
         # Le dépôt exige une clé personnelle : sans elle, la note serait
@@ -728,7 +724,8 @@ class ChatterTestCase(_Fixture):
         return create_app(
             self.settings, database=self.db,
             gemini_key=GeminiKey(url="", token="", item="", field="", static_key="k"),
-            odoo=Passerelle(None, url="https://odoo.test", database="d", login="l"),
+            odoo_factory=lambda _: Passerelle(
+                url="https://odoo.test", database="d", login="l", api_key="k"),
         )
 
     def test_la_note_est_un_accordeon_et_une_note_interne(self):
@@ -819,17 +816,11 @@ class OdooPersonnelTestCase(_Fixture):
     def test_sans_cle_personnelle_le_depot_est_refuse(self):
         """Avec une clé partagée, toutes les notes seraient signées du même
         compte et l'attribution — la raison d'être du chatter — sauterait."""
-        from app.odoo import OdooGateway
-
-        class Passerelle(OdooGateway):
-            @property
-            def configured(self):
-                return True
-
         app = create_app(
-            self.settings, database=self.db,
+            _settings(self.root, odoo_url="https://www.ekonum.fr",
+                      odoo_database="openerp"),
+            database=self.db,
             gemini_key=GeminiKey(url="", token="", item="", field="", static_key="k"),
-            odoo=Passerelle(None, url="https://odoo.test", database="d", login="l"),
         )
         with TestClient(app) as client:
             job = client.post("/api/jobs/import", json={
@@ -885,25 +876,29 @@ class OdooPersonnelTestCase(_Fixture):
         self.assertFalse(self.client.get("/api/me/odoo").json()["configured"])
 
 
-class OdooSecretTestCase(_Fixture):
-    """Une clé absente du coffre doit se dire, pas sortir en 500."""
+class OdooSansClePersonnelleTestCase(_Fixture):
+    """Sans clé personnelle, Odoo se tait — mais le dit."""
 
-    def test_une_cle_introuvable_donne_un_message_pas_une_erreur_500(self):
-        from app.odoo import OdooGateway
-        from app.secrets import SecretError
+    def test_la_recherche_invite_a_poser_sa_cle(self):
+        vue = self.client.get("/api/odoo/records", params={"q": "Acritec"}).json()
+        self.assertFalse(vue["available"])
+        self.assertIn("ton compte", vue["reason"])
+        self.assertEqual(vue["records"], [])
 
-        class CoffreVide:
-            def get(self):
-                raise SecretError("Le broker a répondu sans valeur exploitable.")
+    def test_les_suggestions_de_reunion_aussi(self):
+        vue = self.client.get("/api/odoo/meetings").json()
+        self.assertFalse(vue["available"])
+        self.assertEqual(vue["meetings"], [])
 
+    def test_une_cle_posee_rend_odoo_disponible(self):
         app = create_app(
-            self.settings, database=self.db,
+            _settings(self.root, odoo_url="https://www.ekonum.fr",
+                      odoo_database="openerp"),
+            database=self.db,
             gemini_key=GeminiKey(url="", token="", item="", field="", static_key="k"),
-            odoo=OdooGateway(CoffreVide(), url="https://odoo.test",
-                             database="d", login="l"),
         )
         with TestClient(app) as client:
-            vue = client.get("/api/odoo/records", params={"q": "Acritec"})
-        self.assertEqual(vue.status_code, 200)
-        self.assertFalse(vue.json()["available"])
-        self.assertIn("broker", vue.json()["reason"])
+            self.assertFalse(client.get("/api/settings").json()["odoo"]["configured"])
+            client.put("/api/me/odoo",
+                       json={"login": "robin@ekonum.fr", "api_key": "cle-odoo"})
+            self.assertTrue(client.get("/api/settings").json()["odoo"]["configured"])

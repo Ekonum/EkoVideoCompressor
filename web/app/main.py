@@ -172,7 +172,7 @@ def create_app(
     database: Database | None = None,
     gemini_key: GeminiKey | None = None,
     verifier: AccessVerifier | None = None,
-    odoo: OdooGateway | None = None,
+    odoo_factory=None,
 ) -> FastAPI:
     config = settings or Settings.from_env()
     db = database or Database(config.db_path)
@@ -185,18 +185,24 @@ def create_app(
     )
     access = verifier or AccessVerifier(config.access_team_domain, config.access_aud)
     coffre = Coffre(config.secret_key)
-    odoo_gateway = odoo or OdooGateway(
-        GeminiKey(
-            url=config.broker_url,
-            token=config.broker_token,
-            item=config.odoo_broker_item,
-            field=config.odoo_broker_field,
-            static_key=os.environ.get("ODOO_API_KEY", ""),
-        ),
-        url=config.odoo_url,
-        database=config.odoo_database,
-        login=config.odoo_login,
-    )
+
+    def odoo_pour(owner_id: int) -> OdooGateway:
+        """La passerelle Odoo **de cette personne**.
+
+        Pas de clé de service partagée, même en lecture : une recherche
+        faite sous un compte commun ignorerait les règles d'accès de la
+        personne et lui montrerait des dossiers qui ne sont pas les
+        siens.
+        """
+        if odoo_factory is not None:
+            return odoo_factory(owner_id)
+        login, chiffree = db.odoo_credentials(owner_id)
+        return OdooGateway(
+            url=config.odoo_url,
+            database=config.odoo_database,
+            login=login,
+            api_key=coffre.dechiffrer(chiffree) if (login and chiffree) else "",
+        )
     if not access.configured and not config.dev_mode:
         raise RuntimeError(
             "Cloudflare Access n'est pas configuré (EKOVIDEO_ACCESS_TEAM_DOMAIN "
@@ -666,12 +672,17 @@ def create_app(
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.get("/api/odoo/records")
-    def odoo_records(q: str = "", _: int = Depends(current_user)) -> dict:
+    def odoo_records(q: str = "", owner_id: int = Depends(current_user)) -> dict:
         """Dossiers candidats, pour choisir où déposer."""
-        if not odoo_gateway.configured:
-            return {"available": False, "records": []}
+        passerelle = odoo_pour(owner_id)
+        if not passerelle.configured:
+            return {
+                "available": False,
+                "reason": "Ajoute ta clé API Odoo dans ton compte.",
+                "records": [],
+            }
         try:
-            return {"available": True, "records": odoo_gateway.search_records(q)}
+            return {"available": True, "records": passerelle.search_records(q)}
         except OdooUnavailable as exc:
             log.warning("recherche Odoo indisponible : %s", exc)
             return {"available": False, "reason": str(exc), "records": []}
@@ -693,10 +704,6 @@ def create_app(
                 status.HTTP_409_CONFLICT,
                 "Cette réunion n'a pas de transcription à déposer.",
             )
-        if not odoo_gateway.configured:
-            raise HTTPException(
-                status.HTTP_503_SERVICE_UNAVAILABLE, "Odoo n'est pas configuré."
-            )
         if job["odoo_message_id"]:
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
@@ -708,8 +715,11 @@ def create_app(
             transcript,
             entete=payload.header,
         )
-        login, chiffree = db.odoo_credentials(owner_id)
-        if not (login and chiffree):
+        try:
+            passerelle = odoo_pour(owner_id)
+        except CoffreIndisponible as exc:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+        if not passerelle.configured:
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
                 "Aucune clé API Odoo personnelle enregistrée. La note doit "
@@ -717,11 +727,10 @@ def create_app(
                 "ajoute ta clé dans ton compte.",
             )
         try:
-            chatter = odoo_gateway.chatter_for(coffre.dechiffrer(chiffree))
-            message_id = chatter.publier(payload.model, payload.record_id, corps)
-        except CoffreIndisponible as exc:
-            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
-        except ChatterError as exc:
+            message_id = passerelle.chatter().publier(
+                payload.model, payload.record_id, corps
+            )
+        except (ChatterError, OdooUnavailable) as exc:
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 
         db.set_odoo_link(
@@ -734,39 +743,44 @@ def create_app(
                 "record_id": payload.record_id}
 
     @app.get("/api/odoo/meetings")
-    def odoo_meetings(_: int = Depends(current_user)) -> dict:
+    def odoo_meetings(owner_id: int = Depends(current_user)) -> dict:
         """Réunions du moment, pour proposer « c'est celle-là ».
 
         Une panne Odoo n'est pas une erreur ici : elle rend simplement la
         liste vide et le dit. Odoo enrichit, il ne conditionne pas — une
         réunion doit se transcrire même si le serveur est en maintenance.
         """
-        if not odoo_gateway.configured:
-            return {"available": False, "reason": "Odoo n'est pas configuré.", "meetings": []}
+        passerelle = odoo_pour(owner_id)
+        if not passerelle.configured:
+            return {
+                "available": False,
+                "reason": "Ajoute ta clé API Odoo dans ton compte.",
+                "meetings": [],
+            }
         try:
-            return {"available": True, "meetings": odoo_gateway.meetings()}
+            return {"available": True, "meetings": passerelle.meetings()}
         except OdooUnavailable as exc:
             log.warning("Odoo indisponible : %s", exc)
             return {"available": False, "reason": str(exc), "meetings": []}
 
     @app.get("/api/odoo/context")
     def odoo_context(
-        model: str, record_id: int, _: int = Depends(current_user)
+        model: str, record_id: int, owner_id: int = Depends(current_user)
     ) -> dict:
         """Pack de contexte d'une réunion : résumé, termes, société cliente."""
-        if not odoo_gateway.configured:
+        passerelle = odoo_pour(owner_id)
+        if not passerelle.configured:
             raise HTTPException(
-                status.HTTP_503_SERVICE_UNAVAILABLE, "Odoo n'est pas configuré."
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "Ajoute ta clé API Odoo dans ton compte.",
             )
         try:
-            return odoo_gateway.context_pack(model, record_id)
+            return passerelle.context_pack(model, record_id)
         except OdooUnavailable as exc:
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
-        except SecretError as exc:
-            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
 
     @app.get("/api/settings")
-    def settings_view(_: int = Depends(current_user)) -> dict:
+    def settings_view(owner_id: int = Depends(current_user)) -> dict:
         """Ce que l'interface a besoin de savoir : les modèles offerts et
         où en est le budget d'équipe — la clé Gemini étant partagée, le
         plafond l'est aussi."""
@@ -785,7 +799,7 @@ def create_app(
                 "spent_usd": round(spent, 4),
                 "cap_usd": config.monthly_budget_usd,
             },
-            "odoo": {"configured": odoo_gateway.configured},
+            "odoo": {"configured": odoo_pour(owner_id).configured},
         }
 
     @app.get("/api/search")

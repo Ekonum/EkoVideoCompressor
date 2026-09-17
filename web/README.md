@@ -66,18 +66,26 @@ le même mécanisme qui sert au panneau « relancer certaines fenêtres ».
 | `GET /api/odoo/context` | Pack de contexte : résumé, termes, société cliente |
 
 **Odoo enrichit, il ne conditionne pas.** Une réunion doit se transcrire
-même si le serveur Odoo est en maintenance : `/meetings` répond alors une
-liste vide *et une raison*, jamais une erreur, et le bloc disparaît de
-l'interface. `/context` refuse en revanche franchement — l'appelant a
-demandé une donnée précise, mieux vaut un refus qu'un pack vide qu'il
-croirait complet.
+même si le serveur Odoo est en maintenance, ou si la personne n'a pas
+encore posé sa clé : `/meetings` répond alors une liste vide *et une
+raison*, jamais une erreur, et le bloc disparaît de l'interface.
+`/context` refuse en revanche franchement — l'appelant a demandé une
+donnée précise, mieux vaut un refus qu'un pack vide qu'il croirait
+complet.
 
-`odoo_client.py` est repris tel quel. Les identifiants viennent du broker
-comme la clé Gemini. *Correction à ce que j'avais écrit* : il n'est pas
-en stdlib pur — il importe le journal du moteur macOS, qui écrit dans
-`~/Library/Application Support`, sans aucun sens dans un conteneur.
-L'import est donc désormais tolérant et se rabat sur le journal standard,
-que Docker collecte déjà.
+**Chacun sa clé API, lecture comprise.** Aucune clé de service partagée
+sur le chemin Odoo : une note déposée sous un compte commun perdrait son
+auteur, et une *recherche* faite sous ce compte ignorerait les règles
+d'accès de la personne et lui montrerait des dossiers qui ne sont pas les
+siens. La clé est chiffrée au repos, et le serveur refuse de
+l'enregistrer sans `EKOVIDEO_SECRET_KEY` — stocker en clair « en
+attendant » est le genre de provisoire qui reste.
+
+`odoo_client.py` est repris tel quel. *Correction à ce que j'avais
+écrit* : il n'est pas en stdlib pur — il importe le journal du moteur
+macOS, qui écrit dans `~/Library/Application Support`, sans aucun sens
+dans un conteneur. L'import est donc tolérant et se rabat sur le journal
+standard, que Docker collecte déjà.
 
 Le vocabulaire est **partagé par toute l'équipe** : « Odoo », « Ekonum »
 et les noms de clients sont communs. C'est un gain net sur l'app macOS,

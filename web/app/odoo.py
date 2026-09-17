@@ -2,14 +2,17 @@
 
 `odoo_client.py` est repris tel quel — il est en stdlib pur et connaît
 déjà le JSON-2, la recherche de réunions, le pack de contexte et
-l'extraction de noms propres. Ce module ne fait que deux choses que le
-moteur macOS n'avait pas à faire : lire les identifiants dans le broker
-plutôt que dans les réglages d'une app, et ne jamais laisser une panne
-Odoo faire échouer une transcription.
+l'extraction de noms propres. Deux partis pris s'y ajoutent.
 
-Ce dernier point est le vrai parti pris : Odoo enrichit, il ne
-conditionne pas. Une réunion doit se transcrire même si le serveur Odoo
-est en maintenance.
+**Tout passe par la clé personnelle.** Pas de clé de service partagée,
+même en lecture : une recherche faite avec un compte commun ignorerait
+les règles d'accès de la personne et lui montrerait des dossiers qui ne
+sont pas les siens. Un seul chemin d'identité, donc, pour lire comme
+pour écrire.
+
+**Odoo enrichit, il ne conditionne pas.** Une réunion doit se
+transcrire même si le serveur Odoo est en maintenance, ou si la personne
+n'a pas encore posé sa clé.
 """
 
 from __future__ import annotations
@@ -18,7 +21,6 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from .secrets import SecretError
 from odoo_client import (
     OdooConfig,
     OdooError,
@@ -36,36 +38,29 @@ class OdooUnavailable(RuntimeError):
 
 
 class OdooGateway:
-    """Charge les identifiants une fois, puis sert les appels."""
+    """Accès Odoo **d'une personne**, avec sa propre clé."""
 
-    def __init__(self, secrets, *, url: str, database: str, login: str) -> None:
-        self._secrets = secrets
+    def __init__(self, *, url: str, database: str, login: str, api_key: str) -> None:
         self._url = url
         self._database = database
         self._login = login
+        self._api_key = api_key
 
     @property
     def configured(self) -> bool:
-        return bool(self._url and self._database and self._login)
+        return bool(self._url and self._database and self._login and self._api_key)
 
     def _config(self) -> OdooConfig:
         if not self.configured:
             raise OdooUnavailable(
-                "Odoo n'est pas configuré (URL, base et identifiant). "
-                "Les suggestions de réunion sont désactivées."
+                "Aucune clé API Odoo personnelle. Ajoute-la dans ton compte "
+                "pour voir tes réunions et tes dossiers."
             )
-        try:
-            api_key = self._secrets.get()
-        except SecretError as exc:
-            # Une clé absente du coffre est une indisponibilité d'Odoo
-            # comme une autre. Sans ce rattrapage elle sortait en 500,
-            # et l'utilisateur n'apprenait rien de ce qui manquait.
-            raise OdooUnavailable(str(exc)) from exc
         return OdooConfig(
             url=self._url,
             database=self._database,
             login=self._login,
-            api_key=api_key,
+            api_key=self._api_key,
         )
 
     def meetings(self, *, near: datetime | None = None, window_hours: float = 2.0) -> list[dict]:
@@ -132,18 +127,16 @@ class OdooGateway:
             for l in (lignes or [])
         ]
 
-    def chatter_for(self, api_key: str):
-        """Client d'écriture, pour **une** clé API personnelle.
-
-        Séparé de la lecture à dessein : `odoo_client.py` ne sait que
-        lire avec la clé partagée, alors qu'écrire dans le dossier d'un
-        client doit porter l'identité de la personne qui le fait.
-        """
+    def chatter(self):
+        """Client d'écriture dans le chatter, sous la même identité."""
         from .chatter import OdooChatter
 
         if not self.configured:
-            raise OdooUnavailable("Odoo n'est pas configuré.")
-        return OdooChatter(self._url, api_key)
+            raise OdooUnavailable(
+                "Aucune clé API Odoo personnelle. La note doit porter ton "
+                "identité : ajoute ta clé dans ton compte."
+            )
+        return OdooChatter(self._url, self._api_key)
 
     def context_pack(self, model: str, record_id: int) -> dict[str, Any]:
         """Pack de contexte prêt pour le prompt, et ce qu'on en tire.
