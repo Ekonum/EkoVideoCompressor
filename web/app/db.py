@@ -239,6 +239,56 @@ class Database:
             )
             return job_id
 
+    def import_job(self, *, owner_id: int, payload: dict[str, Any]) -> tuple[int, bool]:
+        """Reprend une réunion déjà transcrite ailleurs.
+
+        Idempotent sur (propriétaire, nom de fichier, date de création) :
+        une reprise de plusieurs années de bibliothèque ne réussit jamais
+        du premier coup, il faut pouvoir relancer sans doubler.
+        """
+        nom = str(payload.get("filename") or "").strip() or "sans nom"
+        cree = str(payload.get("created_at") or "").strip() or datetime.now().isoformat(timespec="seconds")
+
+        with self.connect() as conn:
+            existant = conn.execute(
+                "SELECT id FROM jobs WHERE owner_id = ? AND filename = ? AND created_at = ?",
+                (owner_id, nom, cree),
+            ).fetchone()
+            if existant:
+                return int(existant["id"]), False
+
+            cursor = conn.execute(
+                "INSERT INTO jobs (owner_id, filename, duration_seconds, model, "
+                "language, status, chunk_count, context_json, title, transcript, "
+                "speaker_map_json, technical_terms_json, cloud_cost_usd, "
+                "created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, 'fr', 'termine', 1, '{}', ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    owner_id,
+                    nom,
+                    float(payload.get("duration_seconds") or 0),
+                    str(payload.get("model") or ""),
+                    str(payload.get("title") or ""),
+                    str(payload.get("transcript") or ""),
+                    json.dumps(payload.get("speakers") or {}, ensure_ascii=False),
+                    json.dumps(payload.get("technical_terms") or [], ensure_ascii=False),
+                    float(payload.get("cost_usd") or 0),
+                    cree,
+                    cree,
+                ),
+            )
+            job_id = int(cursor.lastrowid)
+
+        segments = payload.get("segments") or []
+        if segments:
+            self.replace_segments(job_id, segments)
+        termes = payload.get("technical_terms") or []
+        if termes:
+            # Le vocabulaire d'équipe hérite de tout l'historique : à la
+            # bascule, les suggestions ne partent pas de zéro.
+            self.record_vocabulary([str(t) for t in termes])
+        return job_id, True
+
     def get_job(self, job_id: int) -> dict[str, Any] | None:
         with self.connect() as conn:
             row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()

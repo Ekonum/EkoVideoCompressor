@@ -92,6 +92,28 @@ class JobRequest(BaseModel):
     context: dict[str, Any] = Field(default_factory=dict)
 
 
+class ImportedSegment(BaseModel):
+    start: float = 0.0
+    end: float = 0.0
+    speaker: str = ""
+    text: str = ""
+
+
+class ImportedJob(BaseModel):
+    """Une réunion déjà transcrite, reprise depuis l'app macOS."""
+
+    filename: str = Field(min_length=1, max_length=512)
+    created_at: str = ""
+    title: str = ""
+    duration_seconds: float = 0.0
+    model: str = ""
+    transcript: str = ""
+    speakers: dict[str, str] = Field(default_factory=dict)
+    technical_terms: list[str] = Field(default_factory=list)
+    cost_usd: float = 0.0
+    segments: list[ImportedSegment] = Field(default_factory=list)
+
+
 class ContextPatch(BaseModel):
     """Édition partielle : un champ absent est laissé tel quel, pour qu'un
     formulaire qui n'affiche pas les termes ne les efface pas."""
@@ -425,6 +447,24 @@ def create_app(
             }
             for job in db.list_jobs(owner_id)
         ]
+
+    @app.post("/api/jobs/import", status_code=status.HTTP_200_OK)
+    def import_job(payload: ImportedJob, owner_id: int = Depends(current_user)) -> dict:
+        """Reprend une réunion déjà transcrite, sans repasser par Gemini.
+
+        C'est la bascule de la bibliothèque macOS : pousser depuis le
+        poste plutôt que d'aller écrire dans le volume du conteneur.
+        Idempotent, donc relançable — une reprise de plusieurs années ne
+        réussit jamais du premier coup.
+        """
+        job_id, nouveau = db.import_job(
+            owner_id=owner_id,
+            payload={
+                **payload.model_dump(exclude={"segments"}),
+                "segments": [s.model_dump() for s in payload.segments],
+            },
+        )
+        return {"job_id": job_id, "imported": nouveau}
 
     @app.get("/api/jobs/{job_id}/detail")
     def job_detail(job_id: int, owner_id: int = Depends(current_user)) -> dict:
