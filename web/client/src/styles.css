@@ -40,7 +40,19 @@
   --text-titre: 1.5rem;
 }
 
-html { background: var(--color-papier); }
+/* Un dégradé doux, posé une fois, et le contenu directement dessus : la
+   charte demande un seul effet dominant par zone visible. C'est lui qui
+   donne au verre quelque chose à laisser voir — une surface vitrée sur
+   un aplat uni n'est qu'un cadre gris de plus. Deux foyers seulement,
+   diffus, jamais derrière un texte long. */
+html {
+  background:
+    radial-gradient(1200px 760px at 10% -10%, color-mix(in oklab, var(--color-turquoise) 42%, transparent), transparent 60%),
+    radial-gradient(1000px 620px at 106% 4%, color-mix(in oklab, var(--color-violet) 16%, transparent), transparent 56%),
+    radial-gradient(1400px 900px at 50% 118%, color-mix(in oklab, var(--color-turquoise) 20%, transparent), transparent 62%),
+    var(--color-papier);
+  background-attachment: fixed;
+}
 
 body {
   font-family: var(--font-texte);
@@ -60,4 +72,41 @@ h1, h2, h3, .titre { font-family: var(--font-titre); }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+/* Le verre Ekonum : le fond reste visible à travers la matière, le flou
+   est modéré, la bordure fine et claire, l'ombre courte. Ce n'est ni un
+   panneau blanc opaque, ni un verre presque invisible.
+
+   Réservé aux surfaces qui le méritent — la navigation, les contenants
+   d'objets, le panneau de résultat. Jamais une ligne de liste ni un
+   paragraphe : la charte met explicitement en garde contre le verre
+   comme contenant automatique. */
+.verre {
+  background: color-mix(in oklab, #ffffff 58%, transparent);
+  backdrop-filter: blur(18px) saturate(1.25);
+  -webkit-backdrop-filter: blur(18px) saturate(1.25);
+  /* Bordure fine et claire, plus un liseré intérieur : c'est lui qui
+     donne l'arête de la matière, sans recourir à une ombre lourde que la
+     charte déconseille. */
+  border: 1px solid color-mix(in oklab, #ffffff 82%, var(--color-bord));
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.55),
+    0 1px 2px rgb(2 26 26 / 0.04),
+    0 10px 30px -14px rgb(2 26 26 / 0.20);
+}
+
+/* Variante sombre, pour la navigation posée sur le dégradé. */
+.verre-sombre {
+  background: color-mix(in oklab, var(--color-fonce) 82%, transparent);
+  backdrop-filter: blur(16px) saturate(1.2);
+  -webkit-backdrop-filter: blur(16px) saturate(1.2);
+  border-bottom: 1px solid color-mix(in oklab, var(--color-turquoise) 22%, transparent);
+}
+
+/* Repli honnête là où le flou n'existe pas : on rend la surface opaque
+   plutôt que de laisser un texte flotter sur un fond illisible. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .verre { background: #ffffff; }
+  .verre-sombre { background: var(--color-fonce); }
 }

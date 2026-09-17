@@ -23,7 +23,7 @@ export function useCompression() {
 
   const supportee = typeof window !== 'undefined' && 'showSaveFilePicker' in window;
 
-  const compresser = useCallback(async (fichier) => {
+  const compresser = useCallback(async (fichier, trim = null) => {
     setErreur('');
     setResultat(null);
 
@@ -57,7 +57,7 @@ export function useCompression() {
         worker.terminate();
       }
     };
-    worker.postMessage({ kind: 'compress', file: fichier, handle, profile: PROFIL });
+    worker.postMessage({ kind: 'compress', file: fichier, handle, profile: PROFIL, trim });
   }, []);
 
   return { supportee, etat, progression, resultat, erreur, compresser };

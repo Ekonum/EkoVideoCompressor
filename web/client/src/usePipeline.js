@@ -28,7 +28,7 @@ export function usePipeline() {
     );
   }, []);
 
-  const lancer = useCallback(async ({ fichier, duree, contexte, modele }) => {
+  const lancer = useCallback(async ({ fichier, duree, contexte, modele, offset = 0 }) => {
     setErreur('');
     setResultat(null);
     setEtat('creation');
@@ -80,6 +80,7 @@ export function usePipeline() {
       chunks: job.chunks,
       audio: job.audio,
       pending: restant,
+      offset,
     });
 
     setEtat('traitement');

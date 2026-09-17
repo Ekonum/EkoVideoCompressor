@@ -52,7 +52,7 @@ self.onmessage = async (event) => {
     return;
   }
 
-  const { file, jobId, chunks, audio, pending } = event.data;
+  const { file, jobId, chunks, audio, pending, offset = 0 } = event.data;
   const todo = new Set(pending);
 
   try {
@@ -65,7 +65,9 @@ self.onmessage = async (event) => {
       const conversion = await Conversion.init({
         input: new Input({ formats: ALL_FORMATS, source: new BlobSource(file) }),
         output: new Output({ format, target }),
-        trim: { start: chunk.start, end: chunk.end },
+        // Le plan de découpage est exprimé dans le temps *retenu* ;
+        // l'offset le ramène sur la source quand l'utilisateur a rogné.
+        trim: { start: offset + chunk.start, end: offset + chunk.end },
         video: { discard: true },
         audio: {
           codec: audio.codec,
@@ -111,7 +113,7 @@ self.onmessage = async (event) => {
  *  archive de plusieurs centaines de mégaoctets ne tient pas en mémoire,
  *  et surtout **elle n'est jamais envoyée au serveur**.
  */
-async function compresser({ file, handle, profile }) {
+async function compresser({ file, handle, profile, trim }) {
   const debut = performance.now();
   try {
     const writable = await handle.createWritable();
@@ -121,6 +123,9 @@ async function compresser({ file, handle, profile }) {
         format: new Mp4OutputFormat(),
         target: new StreamTarget(writable),
       }),
+      // Si l'utilisateur a rogné, l'archive suit : garder ce qu'on a
+      // décidé de ne pas transcrire n'aurait pas de sens.
+      ...(trim ? { trim } : {}),
       video: {
         height: profile.height,
         fit: 'contain',

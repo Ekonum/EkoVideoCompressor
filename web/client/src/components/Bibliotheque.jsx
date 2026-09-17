@@ -80,7 +80,7 @@ export function Bibliotheque({ surOuvrir }) {
           restera sur ton poste.
         </Vide>
       ) : (
-        <div className="mt-6 overflow-x-auto rounded-lg border border-bord bg-white">
+        <div className="verre mt-6 overflow-x-auto rounded-xl">
           <table className="w-full min-w-[46rem] border-collapse">
             <thead className="border-b border-bord">
               <tr>
@@ -96,7 +96,7 @@ export function Bibliotheque({ surOuvrir }) {
                 <tr
                   key={job.job_id}
                   onClick={() => surOuvrir(job.job_id)}
-                  className="cursor-pointer border-b border-bord/60 last:border-0 hover:bg-papier"
+                  className="cursor-pointer border-b border-bord/50 last:border-0 transition-colors hover:bg-white/45"
                 >
                   <td className="px-4 py-3">
                     <span className="titre font-medium">{job.title || job.filename}</span>
@@ -128,12 +128,12 @@ function Resultats({ resultats, surOuvrir }) {
     return <Vide titre="Rien trouvé">Aucun passage ne contient ces mots.</Vide>;
   }
   return (
-    <ul className="mt-6 divide-y divide-bord rounded-lg border border-bord bg-white">
+    <ul className="verre mt-6 divide-y divide-bord/60 rounded-xl">
       {resultats.map((hit, rang) => (
         <li key={`${hit.job_id}-${rang}`}>
           <button
             onClick={() => surOuvrir(hit.job_id)}
-            className="block w-full px-4 py-3 text-left hover:bg-papier"
+            className="block w-full px-4 py-3 text-left transition-colors hover:bg-white/45"
           >
             <span className="text-[0.8125rem] text-fonce/50">
               {hit.title || hit.filename} · {horodatage(hit.start_second)}

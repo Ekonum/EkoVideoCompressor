@@ -10,7 +10,7 @@ export function Bouton({ variante = 'primaire', className = '', ...props }) {
   const styles = {
     primaire: 'bg-fonce text-clair hover:bg-fonce-doux disabled:opacity-40',
     accent: 'bg-turquoise text-fonce hover:bg-turquoise-sombre hover:text-clair disabled:opacity-40',
-    discret: 'border border-bord bg-white text-fonce hover:border-fonce/40 disabled:opacity-40',
+    discret: 'border border-bord/80 bg-white/70 text-fonce hover:border-fonce/40 hover:bg-white disabled:opacity-40',
   }[variante];
   return (
     <button
@@ -26,7 +26,7 @@ export function Champ({ label, aide, ...props }) {
       <span className="mb-1 block text-[0.8125rem] text-fonce/65">{label}</span>
       <input
         {...props}
-        className="w-full rounded-lg border border-bord bg-white px-3 py-2 text-fonce placeholder:text-fonce/35"
+        className="w-full rounded-lg border border-bord/80 bg-white/70 px-3 py-2 text-fonce transition-colors placeholder:text-fonce/35 focus:bg-white"
       />
       {aide ? <span className="mt-1 block text-[0.8125rem] text-fonce/50">{aide}</span> : null}
     </label>

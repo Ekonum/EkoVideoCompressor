@@ -619,3 +619,74 @@ class ApiTokenTestCase(_Fixture):
         )
         client = TestClient(self.app, headers={"Authorization": f"Bearer {jeton}"})
         self.assertEqual(client.get(f"/api/jobs/{prive}").status_code, 404)
+
+
+class IdentityTestCase(_Fixture):
+    def test_l_interface_sait_qui_est_connecte(self):
+        vue = self.client.get("/api/me").json()
+        self.assertEqual(vue["email"], "robin@ekonum.fr")
+        self.assertEqual(vue["via"], "Cloudflare Access")
+
+    def test_un_appel_machine_se_signale_comme_tel(self):
+        jeton = self.client.post("/api/tokens", json={"name": "script"}).json()["token"]
+        client = TestClient(self.app, headers={"Authorization": f"Bearer {jeton}"})
+        vue = client.get("/api/me").json()
+        self.assertEqual(vue["email"], "robin@ekonum.fr")
+        self.assertEqual(vue["via"], "jeton d'API")
+
+
+class ImportTestCase(_Fixture):
+    """Reprise de la bibliothèque macOS, poussée depuis le poste."""
+
+    REUNION = {
+        "filename": "Enregistrement de l'écran 2026-07-03.mov",
+        "created_at": "2026-07-06 18:01:04",
+        "title": "Acritec - Revue mensuelle",
+        "duration_seconds": 5400,
+        "model": "gemini-2.5-flash",
+        "transcript": "Robin : on migre vers Odoo 19.",
+        "speakers": {"Intervenant 1": "Robin"},
+        "technical_terms": ["Odoo", "Acritec"],
+        "cost_usd": 0.42,
+        "segments": [
+            {"start": 0, "end": 5, "speaker": "Robin", "text": "on migre vers Odoo 19"},
+        ],
+    }
+
+    def test_une_reunion_reprise_arrive_complete(self):
+        vue = self.client.post("/api/jobs/import", json=self.REUNION).json()
+        self.assertTrue(vue["imported"])
+
+        detail = self.client.get(f"/api/jobs/{vue['job_id']}/detail").json()
+        self.assertEqual(detail["title"], "Acritec - Revue mensuelle")
+        self.assertEqual(detail["status"], "termine")
+        self.assertEqual(detail["speakers"], {"Intervenant 1": "Robin"})
+        self.assertEqual(len(detail["segments"]), 1)
+        self.assertIn("Odoo 19", detail["transcript"])
+
+    def test_la_reprise_est_rejouable_sans_doublon(self):
+        """Une reprise de plusieurs années ne réussit jamais du premier
+        coup : il faut pouvoir relancer."""
+        premier = self.client.post("/api/jobs/import", json=self.REUNION).json()
+        second = self.client.post("/api/jobs/import", json=self.REUNION).json()
+        self.assertTrue(premier["imported"])
+        self.assertFalse(second["imported"])
+        self.assertEqual(premier["job_id"], second["job_id"])
+        self.assertEqual(len(self.client.get("/api/jobs").json()), 1)
+
+    def test_le_vocabulaire_d_equipe_herite_de_l_historique(self):
+        self.client.post("/api/jobs/import", json=self.REUNION)
+        termes = [t["term"] for t in self.client.get("/api/vocabulary").json()]
+        self.assertIn("Acritec", termes)
+        self.assertIn("Odoo", termes)
+
+    def test_une_reunion_reprise_est_cherchable(self):
+        self.client.post("/api/jobs/import", json=self.REUNION)
+        hits = self.client.get("/api/search", params={"q": "migre"}).json()
+        self.assertEqual(len(hits), 1)
+
+    def test_la_reprise_passe_par_un_jeton_d_api(self):
+        """C'est le chemin réel : un script sur le poste, pas un humain."""
+        jeton = self.client.post("/api/tokens", json={"name": "reprise"}).json()["token"]
+        client = TestClient(self.app, headers={"Authorization": f"Bearer {jeton}"})
+        self.assertTrue(client.post("/api/jobs/import", json=self.REUNION).json()["imported"])

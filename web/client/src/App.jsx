@@ -8,8 +8,11 @@ export default function App() {
   const [vue, setVue] = useState('bibliotheque');
   const [ouvert, setOuvert] = useState(null);
 
+  // Pas de fond sur ce conteneur : le dégradé vit sur `html`, et un aplat
+  // posé par-dessus le masquerait — le verre n'aurait alors plus rien à
+  // laisser voir.
   return (
-    <div className="min-h-screen bg-papier">
+    <div className="min-h-screen">
       <Entete
         vue={vue}
         surVue={(cible) => { setOuvert(null); setVue(cible); }}
