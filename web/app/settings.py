@@ -100,7 +100,11 @@ class Settings:
             odoo_url=os.environ.get("EKOVIDEO_ODOO_URL", "").strip(),
             odoo_database=os.environ.get("EKOVIDEO_ODOO_DB", "").strip(),
             odoo_login=os.environ.get("EKOVIDEO_ODOO_LOGIN", "").strip(),
-            odoo_broker_item=os.environ.get("EKOVIDEO_ODOO_BROKER_ITEM", "Ekonum - API Odoo"),
+            odoo_broker_item=os.environ.get(
+                # Nom exact dans le coffre, vérifié avec « ekonum-secret
+                # list » : « Ekonum - API Odoo » n'existe pas.
+                "EKOVIDEO_ODOO_BROKER_ITEM", "contact - API Odoo"
+            ),
             odoo_broker_field=os.environ.get("EKOVIDEO_ODOO_BROKER_FIELD", "Clé API"),
             secret_key=os.environ.get("EKOVIDEO_SECRET_KEY", "").strip(),
             monthly_budget_usd=float(os.environ.get("EKOVIDEO_MONTHLY_BUDGET_USD", "50")),

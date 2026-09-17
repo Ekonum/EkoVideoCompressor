@@ -18,6 +18,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from .secrets import SecretError
 from odoo_client import (
     OdooConfig,
     OdooError,
@@ -53,11 +54,18 @@ class OdooGateway:
                 "Odoo n'est pas configuré (URL, base et identifiant). "
                 "Les suggestions de réunion sont désactivées."
             )
+        try:
+            api_key = self._secrets.get()
+        except SecretError as exc:
+            # Une clé absente du coffre est une indisponibilité d'Odoo
+            # comme une autre. Sans ce rattrapage elle sortait en 500,
+            # et l'utilisateur n'apprenait rien de ce qui manquait.
+            raise OdooUnavailable(str(exc)) from exc
         return OdooConfig(
             url=self._url,
             database=self._database,
             login=self._login,
-            api_key=self._secrets.get(),
+            api_key=api_key,
         )
 
     def meetings(self, *, near: datetime | None = None, window_hours: float = 2.0) -> list[dict]:

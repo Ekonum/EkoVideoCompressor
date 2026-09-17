@@ -883,3 +883,27 @@ class OdooPersonnelTestCase(_Fixture):
                         json={"login": "robin@ekonum.fr", "api_key": "cle-odoo"})
         self.assertEqual(self.client.delete("/api/me/odoo").status_code, 204)
         self.assertFalse(self.client.get("/api/me/odoo").json()["configured"])
+
+
+class OdooSecretTestCase(_Fixture):
+    """Une clé absente du coffre doit se dire, pas sortir en 500."""
+
+    def test_une_cle_introuvable_donne_un_message_pas_une_erreur_500(self):
+        from app.odoo import OdooGateway
+        from app.secrets import SecretError
+
+        class CoffreVide:
+            def get(self):
+                raise SecretError("Le broker a répondu sans valeur exploitable.")
+
+        app = create_app(
+            self.settings, database=self.db,
+            gemini_key=GeminiKey(url="", token="", item="", field="", static_key="k"),
+            odoo=OdooGateway(CoffreVide(), url="https://odoo.test",
+                             database="d", login="l"),
+        )
+        with TestClient(app) as client:
+            vue = client.get("/api/odoo/records", params={"q": "Acritec"})
+        self.assertEqual(vue.status_code, 200)
+        self.assertFalse(vue.json()["available"])
+        self.assertIn("broker", vue.json()["reason"])

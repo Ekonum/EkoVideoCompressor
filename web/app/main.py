@@ -762,6 +762,8 @@ def create_app(
             return odoo_gateway.context_pack(model, record_id)
         except OdooUnavailable as exc:
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+        except SecretError as exc:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
 
     @app.get("/api/settings")
     def settings_view(_: int = Depends(current_user)) -> dict:
