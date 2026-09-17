@@ -3,6 +3,7 @@ import { Bouton, Champ, Erreur } from './Communs.jsx';
 import { sonderDuree } from '../sonde.js';
 import { api } from '../api.js';
 import { useCompression } from '../useCompression.js';
+import { Apercu } from './Apercu.jsx';
 import { usePipeline } from '../usePipeline.js';
 import { duree, mo, usd, horodatage, liste } from '../format.js';
 
@@ -25,6 +26,8 @@ export function Nouveau({ surTermine }) {
   const [glossaire, setGlossaire] = useState('');
   const [contexteOdoo, setContexteOdoo] = useState('');
   const [mode, setMode] = useState('transcrire');
+  const [debut, setDebut] = useState(0);
+  const [fin, setFin] = useState(0);
   const pipeline = usePipeline();
   const compression = useCompression();
 
@@ -48,6 +51,8 @@ export function Nouveau({ surTermine }) {
       const total = await sonderDuree(charge);
       setFichier(charge);
       setSecondes(total);
+      setDebut(0);
+      setFin(total);
       setLecture(`${mo(charge.size)} · ${duree(total)} (rodage)`);
     })().catch((e) => setLecture(`Rodage impossible : ${e.message}`));
   }, []);
@@ -62,6 +67,8 @@ export function Nouveau({ surTermine }) {
       const total = await sonderDuree(choisi);
       setFichier(choisi);
       setSecondes(total);
+      setDebut(0);
+      setFin(total);
       setLecture(`${mo(choisi.size)} · ${duree(total)}`);
     } catch (e) {
       setFichier(null);
@@ -103,6 +110,15 @@ export function Nouveau({ surTermine }) {
             className="verre mt-3 block w-full cursor-pointer rounded-xl border-dashed px-4 py-6 text-fonce/70 file:mr-4 file:rounded-md file:border-0 file:bg-fonce file:px-3 file:py-1.5 file:text-clair"
           />
           {lecture ? <p className="mt-2 text-[0.875rem] text-fonce/60">{lecture}</p> : null}
+          <Apercu
+            fichier={fichier}
+            duree={secondes}
+            debut={debut}
+            fin={fin || secondes}
+            surDebut={setDebut}
+            surFin={setFin}
+            actif={enCours}
+          />
         </div>
 
         <div>
@@ -198,11 +214,16 @@ export function Nouveau({ surTermine }) {
             variante="accent"
             disabled={!fichier || enCours || (mode === 'compresser' && !compression.supportee)}
             onClick={() => {
-              if (mode !== 'transcrire') compression.compresser(fichier);
+              const borne = debut > 0 || (fin && fin < secondes)
+                ? { start: debut, end: fin || secondes }
+                : null;
+              if (mode !== 'transcrire') compression.compresser(fichier, borne);
               if (mode === 'compresser') return;
               pipeline.lancer({
                 fichier,
-                duree: secondes,
+                // Seule la partie retenue est transcrite — donc payée.
+                duree: (fin || secondes) - debut,
+                offset: debut,
                 modele: MODELE,
                 contexte: {
                   client_company: client.trim(),
