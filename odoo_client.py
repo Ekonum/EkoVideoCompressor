@@ -37,8 +37,8 @@ except ModuleNotFoundError:  # pragma: no cover - chemin serveur web
 
     _log = _logging.getLogger("ekovideo.odoo")
 
-    def append_app_log(source: str, message: str) -> None:
-        _log.info("%s %s", source, message)
+    def append_app_log(message: str) -> None:
+        _log.info("%s", message)
 
     def tail_text(text: str | None, limit: int = 4000) -> str:
         # Même sémantique que la version du moteur, ellipse comprise :

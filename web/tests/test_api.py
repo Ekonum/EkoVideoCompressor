@@ -306,9 +306,22 @@ class SettingsTestCase(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 create_app(settings, database=Database(root / "a.db"))
 
+class OdooClientSansMoteurTest(unittest.TestCase):
+    def test_repli_de_journalisation(self):
+        """Le conteneur n'embarque pas ekovideo_engine : le repli de
+        journalisation doit accepter exactement les appels du module."""
+        import subprocess
 
-if __name__ == "__main__":
-    unittest.main()
+        code = (
+            "import sys; sys.modules['ekovideo_engine'] = None; "
+            "sys.modules['ekovideo_engine.logging'] = None; "
+            "import odoo_client as o; "
+            "assert o.append_app_log.__module__ == 'odoo_client'; "
+            "o.append_app_log('odoo_json2_request host=x'); "
+            "assert o.tail_text('abcdef', 3) == '...def'"
+        )
+        racine = Path(__file__).resolve().parents[2]
+        subprocess.run([sys.executable, "-c", code], cwd=racine, check=True)
 
 
 class LibraryTestCase(_Fixture):
@@ -902,3 +915,7 @@ class OdooSansClePersonnelleTestCase(_Fixture):
             client.put("/api/me/odoo",
                        json={"login": "robin@ekonum.fr", "api_key": "cle-odoo"})
             self.assertTrue(client.get("/api/settings").json()["odoo"]["configured"])
+
+
+if __name__ == "__main__":
+    unittest.main()
