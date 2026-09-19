@@ -18,6 +18,7 @@ n'a pas encore posé sa clé.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -35,6 +36,20 @@ log = logging.getLogger("ekovideo.web")
 
 class OdooUnavailable(RuntimeError):
     """Odoo est injoignable ou mal configuré — message pour l'utilisateur."""
+
+
+def _lisible(exc: OdooError, base: str) -> str:
+    """Ramène une erreur Odoo à une phrase qu'on peut afficher.
+
+    Sur une base inconnue, Odoo répond par une page HTML entière que
+    `odoo_client` recopie telle quelle : c'est un diagnostic de
+    développeur, pas un message d'interface.
+    """
+    brut = str(exc)
+    if "No database is selected" in brut:
+        return f"La base Odoo « {base} » est introuvable sur ce serveur."
+    texte = " ".join(re.sub(r"<[^>]+>", " ", brut).split())
+    return texte if len(texte) <= 240 else texte[:239] + "…"
 
 
 class OdooGateway:
@@ -73,7 +88,7 @@ class OdooGateway:
         try:
             events = search_meeting_events(self._config(), near=moment, window_hours=window_hours)
         except OdooError as exc:
-            raise OdooUnavailable(str(exc)) from exc
+            raise OdooUnavailable(_lisible(exc, self._database)) from exc
         return [
             {
                 "id": event.get("id"),
@@ -113,7 +128,7 @@ class OdooGateway:
                 },
             )
         except OdooError as exc:
-            raise OdooUnavailable(str(exc)) from exc
+            raise OdooUnavailable(_lisible(exc, self._database)) from exc
 
         return [
             {
@@ -147,7 +162,7 @@ class OdooGateway:
         try:
             pack = fetch_related_context_pack(self._config(), model, record_id)
         except OdooError as exc:
-            raise OdooUnavailable(str(exc)) from exc
+            raise OdooUnavailable(_lisible(exc, self._database)) from exc
         return {
             "summary": pack.get("summary") or "",
             "terms": extract_odoo_glossary_candidates(pack) or list(pack.get("terms") or []),

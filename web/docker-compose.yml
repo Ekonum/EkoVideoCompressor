@@ -44,7 +44,7 @@ services:
       # qui ne sont pas les siens. Aucune clé de service ici — seulement
       # l'adresse du serveur et la base.
       EKOVIDEO_ODOO_URL: "https://www.ekonum.fr"
-      EKOVIDEO_ODOO_DB: "${EKOVIDEO_ODOO_DB:-openerp}"
+      EKOVIDEO_ODOO_DB: "${EKOVIDEO_ODOO_DB:-ekonum}"
 
       # Chiffre les clés API Odoo personnelles au repos. Absente, le
       # serveur refuse d'en enregistrer une : stocker en clair « en

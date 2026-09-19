@@ -306,6 +306,25 @@ class SettingsTestCase(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 create_app(settings, database=Database(root / "a.db"))
 
+class OdooMessageLisibleTest(unittest.TestCase):
+    def test_une_base_inconnue_se_dit_en_une_phrase(self):
+        from app.odoo import _lisible
+        from odoo_client import OdooError
+
+        page = ("Erreur Odoo HTTP 404 : <!DOCTYPE html>\n<title>404 Not Found</title>"
+                "<p>No database is selected and the requested URL was not found</p>")
+        self.assertEqual(_lisible(OdooError(page), "openerp"),
+                         "La base Odoo « openerp » est introuvable sur ce serveur.")
+
+    def test_le_html_est_retire_et_le_message_borne(self):
+        from app.odoo import _lisible
+        from odoo_client import OdooError
+
+        message = _lisible(OdooError("<h1>Erreur</h1> " + "x" * 500), "ekonum")
+        self.assertNotIn("<", message)
+        self.assertLessEqual(len(message), 240)
+
+
 class OdooClientSansMoteurTest(unittest.TestCase):
     def test_repli_de_journalisation(self):
         """Le conteneur n'embarque pas ekovideo_engine : le repli de
@@ -831,7 +850,7 @@ class OdooPersonnelTestCase(_Fixture):
         compte et l'attribution — la raison d'être du chatter — sauterait."""
         app = create_app(
             _settings(self.root, odoo_url="https://www.ekonum.fr",
-                      odoo_database="openerp"),
+                      odoo_database="ekonum"),
             database=self.db,
             gemini_key=GeminiKey(url="", token="", item="", field="", static_key="k"),
         )
@@ -906,7 +925,7 @@ class OdooSansClePersonnelleTestCase(_Fixture):
     def test_une_cle_posee_rend_odoo_disponible(self):
         app = create_app(
             _settings(self.root, odoo_url="https://www.ekonum.fr",
-                      odoo_database="openerp"),
+                      odoo_database="ekonum"),
             database=self.db,
             gemini_key=GeminiKey(url="", token="", item="", field="", static_key="k"),
         )
