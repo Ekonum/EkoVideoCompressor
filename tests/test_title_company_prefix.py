@@ -45,16 +45,17 @@ class ExtractCompanyNameFromPackTests(unittest.TestCase):
         }
         self.assertEqual(extract_company_name_from_pack(pack), "Caste")
 
-    def test_strips_contact_name_keeps_company_after_separator(self):
-        # Odoo partner names sometimes carry the contact in front:
-        # "Jean Dupont, Caste" or "Jean Dupont (Caste)".
+    def test_strips_contact_name_keeps_company(self):
+        # Odoo renders a contact company first — "ACRITEC, David
+        # JAUCH" is a real partner_id from the Ekonum base — while
+        # hand-typed names may put it in parentheses.
         pack_comma = {
             "primary": {
-                "raw": {"partner_id": [1, "Jean Dupont, Caste"]},
+                "raw": {"partner_id": [2046, "ACRITEC, David JAUCH"]},
             }
         }
         self.assertEqual(
-            extract_company_name_from_pack(pack_comma), "Caste"
+            extract_company_name_from_pack(pack_comma), "ACRITEC"
         )
         pack_paren = {
             "primary": {

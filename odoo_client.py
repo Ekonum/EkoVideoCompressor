@@ -1083,11 +1083,17 @@ def extract_company_name_from_pack(pack: dict | None) -> str:
         _, partner_name = _scalar_from_many2one(partner_value)
         if partner_name:
             cleaned = partner_name.strip()
-            # Many partners in Odoo include the company in
-            # parentheses or after a comma: "Jean Dupont, Caste"
-            # or "Jean Dupont (Caste)". Prefer the company part
-            # because the title needs the org, not the contact.
-            for sep in (", ", " (", ":"):
+            # Odoo names a contact after its company, company first:
+            # ``res.partner._get_complete_name`` renders
+            # "ACRITEC, David JAUCH". The title needs the org, not the
+            # contact, so the part *before* the comma wins.
+            if ", " in cleaned:
+                candidate = cleaned.split(", ", 1)[0].strip()
+                if candidate:
+                    return candidate
+            # Hand-typed names sometimes carry the company in
+            # parentheses instead: "Jean Dupont (Caste)".
+            for sep in (" (", ":"):
                 if sep in cleaned:
                     candidate = cleaned.split(sep, 1)[1].rstrip(")")
                     if candidate.strip():
