@@ -325,6 +325,30 @@ class OdooMessageLisibleTest(unittest.TestCase):
         self.assertLessEqual(len(message), 240)
 
 
+class OdooPackDeContexteTest(unittest.TestCase):
+    def test_le_pack_passe_par_les_vraies_fonctions_du_client(self):
+        """Ce chemin n'était couvert que par une fausse passerelle : un
+        appel à la mauvaise signature n'a été vu qu'en production."""
+        from unittest import mock
+
+        from app import odoo as module
+
+        pack = {
+            "primary": {"display_name": "Acritec",
+                        "raw": {"partner_id": [2046, "ACRITEC, David JAUCH"]}},
+            "related": [],
+            "summary": "Opportunité Acritec : facturation électronique.",
+            "terms": ["Acritec", "VISIOTEC"],
+        }
+        passerelle = module.OdooGateway(url="https://odoo.test", database="ekonum",
+                                        login="robin@ekonum.fr", api_key="k")
+        with mock.patch.object(module, "fetch_related_context_pack", return_value=pack):
+            vue = passerelle.context_pack("crm.lead", 983)
+        self.assertEqual(vue["terms"], ["Acritec", "VISIOTEC"])
+        self.assertEqual(vue["client_company"], "ACRITEC")
+        self.assertIn("facturation", vue["summary"])
+
+
 class OdooClientSansMoteurTest(unittest.TestCase):
     def test_repli_de_journalisation(self):
         """Le conteneur n'embarque pas ekovideo_engine : le repli de

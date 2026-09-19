@@ -26,7 +26,6 @@ from odoo_client import (
     OdooConfig,
     OdooError,
     extract_company_name_from_pack,
-    extract_odoo_glossary_candidates,
     fetch_related_context_pack,
     search_meeting_events,
 )
@@ -165,6 +164,9 @@ class OdooGateway:
             raise OdooUnavailable(_lisible(exc, self._database)) from exc
         return {
             "summary": pack.get("summary") or "",
-            "terms": extract_odoo_glossary_candidates(pack) or list(pack.get("terms") or []),
+            # `fetch_related_context_pack` a déjà extrait les termes du
+            # dossier et de ses liés : les recalculer ici ne ferait que
+            # risquer une divergence.
+            "terms": list(pack.get("terms") or []),
             "client_company": extract_company_name_from_pack(pack) or "",
         }
