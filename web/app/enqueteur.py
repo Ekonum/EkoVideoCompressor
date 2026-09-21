@@ -295,6 +295,57 @@ def enqueter(
     )
 
 
+def enqueter_confirme(
+    indices: dict[str, Any],
+    *,
+    chercher: Callable[[str, list[str] | None], list[dict]],
+    lire: Callable[[str, int], dict],
+    api_key: str,
+    **kwargs: Any,
+) -> Conclusion:
+    """Enquête, puis **fait confirmer** avant d'autoriser l'automatique.
+
+    Deux enquêtes sur la même réunion ont rendu deux dossiers
+    différents, tous deux défendables, l'une et l'autre « certaines ».
+    Tant qu'un humain valide, c'est sans conséquence ; pour déposer
+    sans demander, ça ne suffit pas.
+
+    La seconde enquête ne coûte que dans le cas qui l'exige — une
+    conclusion certaine — et son désaccord ne détruit rien : il ramène
+    simplement la certitude à « probable », donc à une question.
+    """
+    premiere = enqueter(indices, chercher=chercher, lire=lire, api_key=api_key, **kwargs)
+    if premiere.confiance != "certaine" or not premiere.dossier:
+        return premiere
+
+    seconde = enqueter(indices, chercher=chercher, lire=lire, api_key=api_key, **kwargs)
+    premiere.usage.add(seconde.usage)
+    memes = bool(
+        seconde.dossier
+        and seconde.dossier.get("model") == premiere.dossier.get("model")
+        and seconde.dossier.get("id") == premiere.dossier.get("id")
+    )
+    if memes:
+        premiere.journal.append("seconde enquête : même dossier, certitude confirmée")
+        return premiere
+
+    autre = seconde.dossier or {}
+    premiere.confiance = "probable"
+    premiere.journal.append(
+        "seconde enquête : dossier différent "
+        f"({autre.get('model', '—')} {autre.get('id', '—')}) — certitude ramenée "
+        "à probable, on demande"
+    )
+    # Le désaccord vaut proposition : c'est le dossier le plus utile à
+    # montrer juste après celui qu'on retient.
+    if autre and not any(
+        a.get("id") == autre.get("id") and a.get("model") == autre.get("model")
+        for a in premiere.autres
+    ):
+        premiere.autres.insert(0, {**autre, "reason": "retenu par la seconde enquête"})
+    return premiere
+
+
 def _executer(
     nom: str,
     args: dict,

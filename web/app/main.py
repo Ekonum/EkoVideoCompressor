@@ -46,7 +46,7 @@ from .coffre import Coffre, CoffreIndisponible
 from .db import Database
 from .odoo import OdooGateway, OdooUnavailable
 from .secrets import GeminiKey, SecretError
-from .enqueteur import MODELE_ENQUETE, Conclusion, enqueter
+from .enqueteur import MODELE_ENQUETE, Conclusion, enqueter_confirme
 from .sonde import FENETRE_SECONDES, fournisseur, identifier
 from .settings import Settings
 from .terms import replace_term
@@ -929,7 +929,7 @@ def create_app(
         if not passerelle.configured:
             return Conclusion(raison="Aucune clé API Odoo personnelle.")
         try:
-            return enqueter(
+            return enqueter_confirme(
                 indices.to_dict(),
                 chercher=lambda terme, modeles: passerelle.search_records(
                     terme, modeles=modeles

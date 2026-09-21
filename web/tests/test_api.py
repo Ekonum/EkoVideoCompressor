@@ -987,6 +987,76 @@ class EnqueteurTestCase(unittest.TestCase):
         self.assertGreater(conclusion.usage.cost_usd, 0)
 
 
+class ConfirmationTestCase(unittest.TestCase):
+    """Une certitude qui ne se répète pas n'en est pas une."""
+
+    INDICES = {"organisations": ["Acritec"], "personnes": [], "sujets": [],
+               "resume": "Facturation."}
+
+    def _confirmer(self, tours, fiches):
+        from unittest import mock
+
+        from app import enqueteur
+
+        faux = FauxGemini(tours)
+        with mock.patch.object(enqueteur, "GeminiClient", faux):
+            return enqueteur.enqueter_confirme(
+                self.INDICES,
+                chercher=lambda terme, modeles: [],
+                lire=lambda modele, record_id: fiches[(modele, record_id)],
+                api_key="k",
+            )
+
+    FICHES = {
+        ("crm.lead", 364): {"model": "crm.lead", "id": 364, "name": "Acritec",
+                            "partner": "ACRITEC", "updated": "2026-09-17",
+                            "chatter": []},
+        ("project.task", 1376): {"model": "project.task", "id": 1376,
+                                 "name": "Refonte API Visiotec", "partner": "ACRITEC",
+                                 "updated": "2026-09-10", "chatter": []},
+    }
+
+    def test_deux_enquetes_d_accord_gardent_la_certitude(self):
+        conclusion = self._confirmer(
+            [
+                _appel("conclure", modele="crm.lead", record_id=364,
+                       confiance="certaine", raison="L'équipe suit Acritec ici."),
+                _appel("conclure", modele="crm.lead", record_id=364,
+                       confiance="certaine", raison="Idem."),
+            ],
+            self.FICHES,
+        )
+        self.assertEqual(conclusion.confiance, "certaine")
+        self.assertEqual(conclusion.dossier["id"], 364)
+        self.assertIn("seconde enquête : même dossier, certitude confirmée",
+                      conclusion.journal)
+
+    def test_un_desaccord_ramene_la_certitude_a_une_question(self):
+        conclusion = self._confirmer(
+            [
+                _appel("conclure", modele="project.task", record_id=1376,
+                       confiance="certaine", raison="La tâche traite du flux."),
+                _appel("conclure", modele="crm.lead", record_id=364,
+                       confiance="certaine", raison="L'opportunité suit le client."),
+            ],
+            self.FICHES,
+        )
+        self.assertEqual(conclusion.confiance, "probable")
+        self.assertEqual(conclusion.dossier["id"], 1376)
+        # Le dossier de la seconde enquête se propose juste en dessous.
+        self.assertEqual(conclusion.autres[0]["id"], 364)
+        self.assertIn("certitude ramenée", " ".join(conclusion.journal))
+
+    def test_une_conclusion_moins_que_certaine_ne_coute_pas_un_second_tour(self):
+        conclusion = self._confirmer(
+            [_appel("conclure", modele="crm.lead", record_id=364,
+                    confiance="probable", raison="Probablement.")],
+            self.FICHES,
+        )
+        self.assertEqual(conclusion.confiance, "probable")
+        self.assertEqual(conclusion.usage.input_tokens, 100)
+
+
 class LiaisonAutomatiqueTestCase(_Fixture):
     """Lier seul quand c'est sûr, demander sinon, ne jamais casser."""
 
