@@ -50,9 +50,12 @@ qui ressemble — vérifie que le contenu du dossier correspond à ce qui a
 été dit.
 
 Méthode : cherche chaque société entendue ; si plusieurs dossiers
-sortent, lis-les avant de choisir ; si rien ne sort, cherche les
-personnes, puis les mots du sujet. Un dossier récemment actif est plus
+sortent, lis-les avant de choisir ; si rien ne sort, essaie les autres
+orthographes, puis les personnes. Un dossier récemment actif est plus
 probable qu'un dossier dormant, mais ce n'est qu'un indice.
+
+Ne cherche pas de mots génériques — « facture », « commande », « projet »
+sortent dans tous les dossiers et n'en désignent aucun.
 
 Tes tours sont comptés : on te dit combien il t'en reste. Conclus avec
 `conclure` avant la fin — sans certitude, conclus sans dossier, la
@@ -211,6 +214,7 @@ def enqueter(
     client = GeminiClient(api_key, opener=opener)
     usage = CloudUsage()
     journal: list[str] = []
+    memoire: dict[str, Any] = {}
     contents: list[dict] = [
         {
             "role": "user",
@@ -264,7 +268,7 @@ def enqueter(
             args = appel.get("args") or {}
             if nom == "conclure":
                 return _conclure(args, lire, journal, usage)
-            resultat, ligne = _executer(nom, args, chercher, lire)
+            resultat, ligne = _executer(nom, args, chercher, lire, memoire)
             journal.append(ligne)
             reponses.append(
                 {"functionResponse": {"name": nom, "response": {"resultat": resultat}}}
@@ -290,13 +294,24 @@ def _executer(
     args: dict,
     chercher: Callable[[str, list[str] | None], list[dict]],
     lire: Callable[[str, int], dict],
+    memoire: dict[str, Any] | None = None,
 ) -> tuple[Any, str]:
     """Exécute un outil. Une panne Odoo se raconte au modèle au lieu de
     remonter : il peut alors changer de piste plutôt que tout perdre."""
+    cache = memoire if memoire is not None else {}
     try:
         if nom == "chercher":
             terme = str(args.get("terme") or "").strip()
+            cle = f"chercher:{terme.lower()}:{','.join(args.get('modeles') or [])}"
+            if cle in cache:
+                # Répéter une recherche coûte un tour et n'apprend rien :
+                # on rend le résultat connu en le disant.
+                return (
+                    {"deja_cherche": True, "resultat": cache[cle]},
+                    f"« {terme} » déjà cherché",
+                )
             lignes = chercher(terme, args.get("modeles"))
+            cache[cle] = lignes
             return lignes, f"cherché « {terme} » → {len(lignes)} dossier(s)"
         if nom == "lire":
             modele = str(args.get("modele") or "")

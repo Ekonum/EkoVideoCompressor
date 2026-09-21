@@ -880,6 +880,25 @@ class EnqueteurTestCase(unittest.TestCase):
         self.assertIn("chercher en échec : Serveur Odoo injoignable.",
                       conclusion.journal)
 
+    def test_ne_refait_pas_deux_fois_la_meme_recherche(self):
+        """Répéter une recherche coûte un tour et n'apprend rien."""
+        appels: list[str] = []
+
+        def compter(terme, modeles):
+            appels.append(terme)
+            return []
+
+        conclusion, _ = self._mener(
+            [
+                _appel("chercher", terme="Acritec"),
+                _appel("chercher", terme="acritec"),
+                _appel("conclure", confiance="aucune", raison="Rien trouvé."),
+            ],
+            chercher=compter,
+        )
+        self.assertEqual(appels, ["Acritec"])
+        self.assertIn("« acritec » déjà cherché", conclusion.journal)
+
     def test_renoncer_est_une_reponse(self):
         conclusion, _ = self._mener([
             _appel("conclure", confiance="aucune", raison="Deux clients possibles."),
