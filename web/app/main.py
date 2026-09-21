@@ -45,6 +45,7 @@ from .coffre import Coffre, CoffreIndisponible
 from .db import Database
 from .odoo import OdooGateway, OdooUnavailable
 from .secrets import GeminiKey, SecretError
+from .enqueteur import MODELE_ENQUETE, Conclusion, enqueter
 from .sonde import FENETRE_SECONDES, fournisseur, identifier
 from .settings import Settings
 from .terms import replace_term
@@ -787,13 +788,57 @@ def create_app(
             cost_usd=indices.usage.cost_usd,
         )
 
+        # L'enquête coûte du jugement, pas de l'audio : on la mène dans
+        # un fil pour ne pas bloquer la boucle d'événements pendant ses
+        # allers-retours avec Odoo.
+        enquete = await asyncio.to_thread(_enqueter, owner_id, indices)
+        db.add_api_usage(
+            job_id=None,
+            provider=fournisseur(MODELE_ENQUETE),
+            model=enquete.usage.model or MODELE_ENQUETE,
+            step="sonde_enquete",
+            input_tokens=enquete.usage.input_tokens,
+            output_tokens=enquete.usage.output_tokens,
+            cost_usd=enquete.usage.cost_usd,
+        )
+
         return {
             "clues": indices.to_dict(),
-            "cost_usd": indices.usage.cost_usd,
-            "candidates": _candidats(
-                owner_id, indices.groupes_de_recherche(config.sonde_ignore)
+            "cost_usd": round(indices.usage.cost_usd + enquete.usage.cost_usd, 6),
+            "investigation": enquete.to_dict(),
+            # Le repli : la recherche directe reste là quand l'enquête
+            # renonce, pour que la personne ait quand même une liste.
+            "candidates": (
+                [enquete.dossier] if enquete.dossier else _candidats(
+                    owner_id, indices.groupes_de_recherche(config.sonde_ignore)
+                )
             ),
         }
+
+    def _enqueter(owner_id: int, indices) -> Conclusion:
+        """Mène l'enquête avec la clé Odoo de la personne, ou renonce.
+
+        Odoo enrichit, il ne conditionne pas : sans clé, pas d'enquête,
+        et la transcription reste possible.
+        """
+        try:
+            passerelle = odoo_pour(owner_id)
+        except CoffreIndisponible:
+            return Conclusion(raison="Coffre indisponible.")
+        if not passerelle.configured:
+            return Conclusion(raison="Aucune clé API Odoo personnelle.")
+        try:
+            return enqueter(
+                indices.to_dict(),
+                chercher=lambda terme, modeles: passerelle.search_records(
+                    terme, modeles=modeles
+                ),
+                lire=passerelle.resume_dossier,
+                api_key=keys.get(),
+            )
+        except (CloudTranscriptionError, SecretError) as exc:
+            log.warning("enquête impossible : %s", exc)
+            return Conclusion(raison=f"Enquête impossible : {exc}")
 
     def _candidats(
         owner_id: int, groupes: list[list[str]], limite: int = 5

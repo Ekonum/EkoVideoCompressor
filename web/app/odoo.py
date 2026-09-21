@@ -101,45 +101,130 @@ class OdooGateway:
             for event in events
         ]
 
-    def search_records(self, terme: str, limit: int = 8) -> list[dict[str, Any]]:
+    # Ce qu'on sait lire, et sous quel nom. L'ordre compte : c'est
+    # l'ordre dans lequel une recherche sans modèle explicite regarde.
+    MODELES = {
+        "crm.lead": ("opportunité", "name"),
+        "sale.order": ("devis / commande", "name"),
+        "project.project": ("projet", "name"),
+        "project.task": ("tâche", "name"),
+    }
+
+    def search_records(
+        self, terme: str, limit: int = 8, modeles: list[str] | None = None
+    ) -> list[dict[str, Any]]:
         """Cherche un dossier où déposer la transcription.
 
-        Limité aux opportunités pour l'instant : c'est de loin le cas le
-        plus fréquent, et ouvrir d'emblée à tous les modèles rendrait la
-        liste illisible avant qu'on sache la classer (jalon M8.3).
+        Par défaut sur les quatre modèles où une réunion atterrit : une
+        opportunité le plus souvent, mais un chantier en cours vit dans
+        un projet ou une tâche, et un devis signé dans une commande.
         """
         requete = (terme or "").strip()
         if len(requete) < 2:
             return []
+        cibles = [m for m in (modeles or list(self.MODELES)) if m in self.MODELES]
+        trouves: list[dict[str, Any]] = []
+        for modele in cibles:
+            trouves.extend(self._chercher_un(modele, requete, limit))
+        # Le plus récemment touché d'abord, tous modèles confondus :
+        # une réunion parle presque toujours d'un dossier vivant.
+        trouves.sort(key=lambda l: l["updated"], reverse=True)
+        return trouves[:limit]
+
+    def _chercher_un(self, modele: str, requete: str, limit: int) -> list[dict[str, Any]]:
         from odoo_client import _json2_call  # client JSON-2 déjà éprouvé
 
+        libelle, champ = self.MODELES[modele]
+        champs = [champ, "write_date"]
+        if modele != "project.project":
+            champs.append("partner_id")
         try:
             lignes = _json2_call(
                 self._config(),
-                "crm.lead",
+                modele,
                 "search_read",
                 {
-                    "domain": ["|", ["name", "ilike", requete],
+                    "domain": ["|", [champ, "ilike", requete],
                                ["partner_id.name", "ilike", requete]],
-                    "fields": ["name", "partner_id", "write_date"],
+                    "fields": champs,
                     "limit": limit,
                     "order": "write_date desc",
                 },
             )
         except OdooError as exc:
-            raise OdooUnavailable(_lisible(exc, self._database)) from exc
+            # Un modèle refusé (droits, module absent) ne doit pas
+            # emporter la recherche entière : les autres répondent.
+            log.info("recherche %s indisponible : %s", modele, exc)
+            return []
 
         return [
             {
-                "model": "crm.lead",
+                "model": modele,
+                "kind": libelle,
                 "id": l.get("id"),
-                "name": l.get("name") or "",
+                "name": l.get(champ) or "",
                 "partner": (l.get("partner_id") or [None, ""])[1]
                 if isinstance(l.get("partner_id"), list) else "",
                 "updated": (l.get("write_date") or "")[:10],
             }
             for l in (lignes or [])
         ]
+
+    def resume_dossier(self, modele: str, record_id: int) -> dict[str, Any]:
+        """De quoi vérifier qu'un dossier est bien celui dont on parle.
+
+        Court exprès : la sonde doit pouvoir en lire plusieurs sans que
+        le coût de la vérification dépasse celui de l'erreur qu'elle
+        évite. Le pack complet viendra après, pour le seul dossier
+        retenu.
+        """
+        if modele not in self.MODELES:
+            raise OdooUnavailable(f"Modèle inconnu : {modele}.")
+        from odoo_client import _json2_call
+
+        _, champ = self.MODELES[modele]
+        champs = [champ, "write_date"]
+        if modele != "project.project":
+            champs.append("partner_id")
+        try:
+            lignes = _json2_call(
+                self._config(), modele, "read",
+                {"ids": [int(record_id)], "fields": champs},
+            )
+            messages = _json2_call(
+                self._config(), "mail.message", "search_read",
+                {
+                    "domain": [["model", "=", modele], ["res_id", "=", int(record_id)]],
+                    "fields": ["date", "author_id", "body"],
+                    "limit": 3,
+                    "order": "date desc",
+                },
+            )
+        except OdooError as exc:
+            raise OdooUnavailable(_lisible(exc, self._database)) from exc
+        if not lignes:
+            raise OdooUnavailable(f"Dossier {modele} {record_id} introuvable.")
+
+        from odoo_client import _html_to_text
+
+        ligne = lignes[0]
+        return {
+            "model": modele,
+            "id": ligne.get("id"),
+            "name": ligne.get(champ) or "",
+            "partner": (ligne.get("partner_id") or [None, ""])[1]
+            if isinstance(ligne.get("partner_id"), list) else "",
+            "updated": (ligne.get("write_date") or "")[:10],
+            "chatter": [
+                {
+                    "date": (m.get("date") or "")[:10],
+                    "author": (m.get("author_id") or [None, ""])[1]
+                    if isinstance(m.get("author_id"), list) else "",
+                    "extrait": _html_to_text(m.get("body") or "")[:300],
+                }
+                for m in (messages or [])
+            ],
+        }
 
     def chatter(self):
         """Client d'écriture dans le chatter, sous la même identité."""

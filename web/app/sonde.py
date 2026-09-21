@@ -24,10 +24,11 @@ from cloud_transcription import (
     provider_for_model,
 )
 
-# Modèle par défaut : le moins cher du catalogue. La sonde tourne sur
-# chaque enregistrement déposé, donc son coût doit rester une poussière
-# devant celui de la transcription.
-MODELE_SONDE = "gemini-3.1-flash-lite"
+# Pas le moins cher du catalogue : un nom de société mal entendu se
+# cherche mal dans Odoo, et la mauvaise liaison qui s'ensuit coûte plus
+# que les deux centimes économisés. Cinq minutes ici valent 5 % d'une
+# transcription complète.
+MODELE_SONDE = "gemini-3.8-flash"
 
 # 5 minutes : assez pour les présentations du début, assez court pour
 # que la sonde reste négligeable.
@@ -39,6 +40,7 @@ SCHEMA = {
         "organisations": {"type": "array", "items": {"type": "string"}},
         "personnes": {"type": "array", "items": {"type": "string"}},
         "sujets": {"type": "array", "items": {"type": "string"}},
+        "variantes": {"type": "array", "items": {"type": "string"}},
         "resume": {"type": "string"},
     },
     "required": ["organisations", "personnes", "sujets", "resume"],
@@ -53,6 +55,10 @@ Ne transcris rien. Réponds uniquement à ceci :
   un dossier : écris « Acritec », pas « une entreprise du bâtiment ».
 - personnes : les prénoms et noms des interlocuteurs entendus.
 - sujets : au plus cinq mots-clés du sujet traité.
+- variantes : les autres orthographes plausibles des noms entendus —
+  « Acritec », « Acritech », « Akritec ». Un nom mal orthographié ne se
+  retrouve pas dans une base ; plusieurs essais coûtent moins cher
+  qu'un dossier manqué.
 - resume : une phrase, vingt mots au plus.
 
 Une liste vide vaut mieux qu'une invention : si personne ne se nomme,
@@ -66,6 +72,7 @@ class Indices:
     organisations: list[str] = field(default_factory=list)
     personnes: list[str] = field(default_factory=list)
     sujets: list[str] = field(default_factory=list)
+    variantes: list[str] = field(default_factory=list)
     resume: str = ""
     usage: CloudUsage = field(default_factory=CloudUsage)
 
@@ -74,6 +81,7 @@ class Indices:
             "organisations": self.organisations,
             "personnes": self.personnes,
             "sujets": self.sujets,
+            "variantes": self.variantes,
             "resume": self.resume,
         }
 
@@ -166,6 +174,7 @@ def _lire(payload: dict, *, model_id: str) -> Indices:
         organisations=_liste(donnees.get("organisations")),
         personnes=_liste(donnees.get("personnes")),
         sujets=_liste(donnees.get("sujets"), maximum=5),
+        variantes=_liste(donnees.get("variantes")),
         resume=str(donnees.get("resume") or "").strip(),
         usage=CloudUsage(
             model=canonical_cloud_model_id(model_id),

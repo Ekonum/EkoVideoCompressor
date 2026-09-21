@@ -733,6 +733,48 @@ class SondeTestCase(_Fixture):
             client.post("/api/probe", content=b"audio")
         self.assertEqual(passerelle.termes, ["Acritec"])
 
+    def test_l_enquete_mene_la_proposition_et_les_deux_etapes_sont_facturees(self):
+        """Écoute puis enquête : deux appels, deux lignes de dépense."""
+        from unittest import mock
+
+        from app import enqueteur
+        from app.odoo import OdooGateway
+
+        class Passerelle(OdooGateway):
+            def __init__(self):
+                super().__init__(url="u", database="d", login="l", api_key="k")
+
+            def search_records(self, terme, limit=8, modeles=None):
+                return [{"model": "crm.lead", "id": 364, "name": "Acritec",
+                         "partner": "ACRITEC", "updated": "2026-09-17"}]
+
+            def resume_dossier(self, modele, record_id):
+                return {"model": modele, "id": record_id, "name": "Acritec",
+                        "partner": "ACRITEC", "updated": "2026-09-17", "chatter": []}
+
+        faux = FauxGemini([
+            _appel("chercher", terme="Acritec"),
+            _appel("conclure", modele="crm.lead", record_id=364,
+                   confiance="probable", raison="Le chatter parle de Chorus."),
+        ])
+        with mock.patch.object(enqueteur, "GeminiClient", faux):
+            with TestClient(self._app_avec_odoo(Passerelle())) as client:
+                vue = client.post("/api/probe", content=b"audio").json()
+
+        self.assertEqual(vue["investigation"]["confidence"], "probable")
+        self.assertEqual(vue["investigation"]["record"]["id"], 364)
+        self.assertIn("Chorus", vue["investigation"]["reason"])
+        # La trace se montre : une proposition qu'on ne peut pas
+        # contredire est une proposition qu'on ne peut pas refuser.
+        self.assertTrue(vue["investigation"]["trace"])
+        self.assertEqual([c["id"] for c in vue["candidates"]], [364])
+        self.assertGreater(self.db.month_spend_usd(), 0.0004)
+
+    def test_sans_cle_odoo_l_enquete_renonce_sans_bruit(self):
+        vue = self.client.post("/api/probe", content=b"audio").json()
+        self.assertIsNone(vue["investigation"]["record"])
+        self.assertIn("clé API Odoo", vue["investigation"]["reason"])
+
     def test_une_panne_odoo_laisse_les_indices_intacts(self):
         from app.odoo import OdooGateway, OdooUnavailable
 
@@ -745,6 +787,135 @@ class SondeTestCase(_Fixture):
             vue = client.post("/api/probe", content=b"audio").json()
         self.assertEqual(vue["candidates"], [])
         self.assertIn("Acritec", vue["clues"]["organisations"])
+
+
+class FauxGemini:
+    """Rejoue une suite de réponses Gemini, tour par tour."""
+
+    def __init__(self, tours):
+        self.tours = list(tours)
+        self.recus = []
+
+    def __call__(self, api_key, **_):
+        return self
+
+    def generate_with_tools(self, *, model_id, contents, tools, system=""):
+        self.recus.append(contents)
+        return self.tours.pop(0)
+
+
+def _appel(nom, **args):
+    return {
+        "candidates": [{"content": {"parts": [{"functionCall": {"name": nom, "args": args}}]}}],
+        "usageMetadata": {"promptTokenCount": 100, "candidatesTokenCount": 20},
+    }
+
+
+def _prose(texte):
+    return {
+        "candidates": [{"content": {"parts": [{"text": texte}]}}],
+        "usageMetadata": {"promptTokenCount": 50, "candidatesTokenCount": 10},
+    }
+
+
+class EnqueteurTestCase(unittest.TestCase):
+    """Chercher, lire, se raviser — puis conclure ou renoncer."""
+
+    INDICES = {"organisations": ["Acritec"], "personnes": [], "sujets": [],
+               "resume": "Facturation électronique."}
+
+    def _mener(self, tours, *, chercher=None, lire=None, **kwargs):
+        from unittest import mock
+
+        from app import enqueteur
+
+        faux = FauxGemini(tours)
+        dossier = {"model": "crm.lead", "id": 364, "name": "Acritec",
+                   "partner": "ACRITEC, David JAUCH", "updated": "2026-09-17",
+                   "chatter": []}
+        with mock.patch.object(enqueteur, "GeminiClient", faux):
+            conclusion = enqueteur.enqueter(
+                self.INDICES,
+                chercher=chercher or (lambda terme, modeles: [dossier]),
+                lire=lire or (lambda modele, record_id: dossier),
+                api_key="k",
+                **kwargs,
+            )
+        return conclusion, faux
+
+    def test_cherche_puis_conclut(self):
+        conclusion, faux = self._mener([
+            _appel("chercher", terme="Acritec"),
+            _appel("conclure", modele="crm.lead", record_id=364,
+                   confiance="probable", raison="Le chatter parle de Chorus."),
+        ])
+        self.assertEqual(conclusion.dossier["id"], 364)
+        self.assertEqual(conclusion.confiance, "probable")
+        self.assertIn("cherché « Acritec » → 1 dossier(s)", conclusion.journal)
+        # Le résultat de l'outil est bien renvoyé au modèle au tour suivant.
+        self.assertIn("functionResponse", json.dumps(faux.recus[-1]))
+
+    def test_une_panne_odoo_est_racontee_au_modele_pas_levee(self):
+        """Un outil en échec doit permettre de changer de piste, pas
+        faire tomber l'enquête."""
+        def chercher_casse(terme, modeles):
+            raise RuntimeError("Serveur Odoo injoignable.")
+
+        conclusion, faux = self._mener(
+            [
+                _appel("chercher", terme="Acritec"),
+                _appel("conclure", confiance="aucune", raison="Odoo muet."),
+            ],
+            chercher=chercher_casse,
+        )
+        self.assertIsNone(conclusion.dossier)
+        self.assertIn("injoignable", json.dumps(faux.recus[-1]))
+        self.assertIn("chercher en échec : Serveur Odoo injoignable.",
+                      conclusion.journal)
+
+    def test_renoncer_est_une_reponse(self):
+        conclusion, _ = self._mener([
+            _appel("conclure", confiance="aucune", raison="Deux clients possibles."),
+        ])
+        self.assertIsNone(conclusion.dossier)
+        self.assertEqual(conclusion.confiance, "aucune")
+        self.assertIn("Deux clients", conclusion.raison)
+
+    def test_ne_conclut_pas_sur_un_dossier_illisible(self):
+        """Conclure sur un dossier qu'on ne sait pas relire n'a pas de
+        sens : on rend la main."""
+        def lire_casse(modele, record_id):
+            raise RuntimeError("Droits insuffisants.")
+
+        conclusion, _ = self._mener(
+            [_appel("conclure", modele="crm.lead", record_id=364,
+                    confiance="certaine", raison="C'est Acritec.")],
+            lire=lire_casse,
+        )
+        self.assertIsNone(conclusion.dossier)
+        self.assertEqual(conclusion.confiance, "aucune")
+
+    def test_s_arrete_au_bout_du_compte(self):
+        conclusion, _ = self._mener(
+            [_appel("chercher", terme="Acritec") for _ in range(3)],
+            tours_max=3,
+        )
+        self.assertIsNone(conclusion.dossier)
+        self.assertIn("Arrêt après 3 tours sans conclusion.", conclusion.journal)
+
+    def test_une_reponse_en_prose_vaut_renoncement(self):
+        conclusion, _ = self._mener([_prose("Je ne trouve rien de probant.")])
+        self.assertIsNone(conclusion.dossier)
+        self.assertIn("probant", conclusion.raison)
+
+    def test_chaque_tour_est_facture(self):
+        conclusion, _ = self._mener([
+            _appel("chercher", terme="Acritec"),
+            _appel("conclure", modele="crm.lead", record_id=364,
+                   confiance="certaine", raison="Vérifié."),
+        ])
+        self.assertEqual(conclusion.usage.input_tokens, 200)
+        self.assertGreater(conclusion.usage.cost_usd, 0)
 
 
 class ApiTokenTestCase(_Fixture):

@@ -427,8 +427,15 @@ function Sonde({ etat, surChoix }) {
   }
 
   const indices = etat.clues || {};
+  const enquete = etat.investigation || {};
   const entendu = [...(indices.organisations || []), ...(indices.personnes || [])];
   if (!entendu.length && !(etat.candidates || []).length) return null;
+
+  const CERTITUDE = {
+    certaine: 'Liaison certaine',
+    probable: 'Liaison probable',
+    incertaine: 'Liaison incertaine',
+  };
 
   return (
     <div className="verre mt-4 rounded-xl p-4">
@@ -447,10 +454,18 @@ function Sonde({ etat, surChoix }) {
         </ul>
       ) : null}
 
+      {enquete.reason && !enquete.record ? (
+        <p className="mt-3 text-[0.8125rem] text-fonce/55">
+          Aucun dossier proposé : {enquete.reason}
+        </p>
+      ) : null}
+
       {(etat.candidates || []).length ? (
         <>
           <p className="mt-3 text-[0.8125rem] text-fonce/55">
-            Dossiers Odoo correspondants — en choisir un charge son contexte.
+            {enquete.record
+              ? `${CERTITUDE[enquete.confidence] || 'Dossier proposé'} — ${enquete.reason}`
+              : 'Dossiers Odoo correspondants — en choisir un charge son contexte.'}
           </p>
           <ul className="mt-2 space-y-1">
             {etat.candidates.map((dossier) => (
@@ -467,13 +482,28 @@ function Sonde({ etat, surChoix }) {
                     <span className="text-fonce/55"> · {dossier.partner}</span>
                   ) : null}
                   <span className="block text-[0.75rem] text-fonce/45">
-                    proposé sur « {dossier.matched} » · modifié le {dossier.updated}
+                    {dossier.kind ? `${dossier.kind} · ` : ''}
+                    {dossier.matched ? `trouvé sur « ${dossier.matched} » · ` : ''}
+                    modifié le {dossier.updated}
                   </span>
                 </button>
               </li>
             ))}
           </ul>
         </>
+      ) : null}
+
+      {(enquete.trace || []).length ? (
+        <details className="mt-3">
+          <summary className="cursor-pointer text-[0.75rem] text-fonce/45">
+            Comment on est arrivé là
+          </summary>
+          <ol className="mt-1 space-y-0.5 text-[0.75rem] text-fonce/55">
+            {enquete.trace.map((ligne, i) => (
+              <li key={i}>· {ligne}</li>
+            ))}
+          </ol>
+        </details>
       ) : null}
     </div>
   );

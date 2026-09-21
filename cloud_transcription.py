@@ -1477,6 +1477,35 @@ class GeminiClient:
             body, _ = self._json_request("POST", url, payload=payload)
         return body
 
+    def generate_with_tools(
+        self,
+        *,
+        model_id: str,
+        contents: list[dict],
+        tools: list[dict],
+        system: str = "",
+    ) -> dict:
+        """Un tour de boucle agentique : le modèle répond, ou appelle un
+        outil.
+
+        L'appelant tient la boucle — il exécute l'outil demandé, ajoute
+        la réponse aux ``contents`` et rappelle. C'est lui qui décide
+        quand s'arrêter, parce que c'est lui qui paie.
+        """
+        payload: dict[str, Any] = {
+            "contents": contents,
+            "tools": [{"functionDeclarations": tools}],
+            "generationConfig": {"temperature": 0.1},
+        }
+        if system:
+            payload["systemInstruction"] = {"parts": [{"text": system}]}
+        url = (
+            f"{GEMINI_API_BASE}/v1beta/models/"
+            f"{canonical_cloud_model_id(model_id)}:generateContent"
+        )
+        body, _ = self._json_request("POST", url, payload=payload)
+        return body
+
     def generate_text_json(
         self, *, model_id: str, prompt: str, schema: dict
     ) -> dict:
