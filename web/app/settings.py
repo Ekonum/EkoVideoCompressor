@@ -65,6 +65,11 @@ class Settings:
     # Garde-fou budget : plafond d'équipe, la clé Gemini étant partagée.
     monthly_budget_usd: float
 
+    # Termes que la sonde ne doit pas chercher dans Odoo : notre propre
+    # nom et celui du produit qu'on vend reviennent dans presque tous
+    # les dossiers, donc ne désignent personne.
+    sonde_ignore: frozenset[str]
+
     # Bac à sable local : court-circuite Access et le broker. Refusé dès
     # qu'une configuration Access est présente, pour qu'un déploiement ne
     # puisse pas démarrer ouvert par accident.
@@ -108,6 +113,13 @@ class Settings:
             odoo_broker_field=os.environ.get("EKOVIDEO_ODOO_BROKER_FIELD", "Clé API"),
             secret_key=os.environ.get("EKOVIDEO_SECRET_KEY", "").strip(),
             monthly_budget_usd=float(os.environ.get("EKOVIDEO_MONTHLY_BUDGET_USD", "50")),
+            sonde_ignore=frozenset(
+                terme.strip().lower()
+                for terme in os.environ.get(
+                    "EKOVIDEO_SONDE_IGNORE", "Odoo,Ekonum"
+                ).split(",")
+                if terme.strip()
+            ),
             dev_mode=dev,
             dev_user_email=os.environ.get("EKOVIDEO_DEV_USER", "dev@ekonum.fr").strip(),
             dev_api_key=os.environ.get("GEMINI_API_KEY", "").strip(),

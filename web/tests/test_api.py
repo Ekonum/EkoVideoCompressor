@@ -50,6 +50,7 @@ def _settings(root: Path, **overrides) -> Settings:
         odoo_broker_field="Clé API",
         secret_key=_CLE_DE_TEST,
         monthly_budget_usd=50.0,
+        sonde_ignore=frozenset({"odoo", "ekonum"}),
         dev_mode=True,
         dev_user_email="robin@ekonum.fr",
         dev_api_key="cle-de-test",
@@ -687,6 +688,50 @@ class SondeTestCase(_Fixture):
         self.assertEqual(vue["candidates"][0]["matched"], "Acritec")
         # Les sociétés d'abord : un dossier se retrouve par son client.
         self.assertEqual(passerelle.termes[0], "Acritec")
+
+    def test_s_arrete_au_premier_groupe_qui_trouve(self):
+        """Une fois la société reconnue, chercher aussi les personnes et
+        les sujets ne fait que noyer le bon dossier."""
+        from app.odoo import OdooGateway
+
+        class Passerelle(OdooGateway):
+            def __init__(self):
+                super().__init__(url="u", database="d", login="l", api_key="k")
+                self.termes: list[str] = []
+
+            def search_records(self, terme, limit=8):
+                self.termes.append(terme)
+                return [{"model": "crm.lead", "id": 364, "name": "Acritec",
+                         "partner": "", "updated": "2026-09-17"}]
+
+        passerelle = Passerelle()
+        with TestClient(self._app_avec_odoo(passerelle)) as client:
+            vue = client.post("/api/probe", content=b"audio").json()
+        self.assertEqual([c["id"] for c in vue["candidates"]], [364])
+        self.assertNotIn("David JAUCH", passerelle.termes)
+        self.assertNotIn("facturation électronique", passerelle.termes)
+
+    def test_ignore_notre_propre_nom_et_notre_produit(self):
+        """« Odoo » et « Ekonum » sont dans presque tous nos dossiers :
+        les chercher ne désigne personne."""
+        from app.odoo import OdooGateway
+        from app.sonde import Indices
+
+        self.indices = Indices(organisations=["Odoo", "Ekonum", "Acritec"])
+
+        class Passerelle(OdooGateway):
+            def __init__(self):
+                super().__init__(url="u", database="d", login="l", api_key="k")
+                self.termes: list[str] = []
+
+            def search_records(self, terme, limit=8):
+                self.termes.append(terme)
+                return []
+
+        passerelle = Passerelle()
+        with TestClient(self._app_avec_odoo(passerelle)) as client:
+            client.post("/api/probe", content=b"audio")
+        self.assertEqual(passerelle.termes, ["Acritec"])
 
     def test_une_panne_odoo_laisse_les_indices_intacts(self):
         from app.odoo import OdooGateway, OdooUnavailable

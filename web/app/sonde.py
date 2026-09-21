@@ -77,22 +77,31 @@ class Indices:
             "resume": self.resume,
         }
 
-    @property
-    def termes_de_recherche(self) -> list[str]:
-        """Ce qu'on donnera à la recherche Odoo, du plus sûr au moins sûr.
+    def groupes_de_recherche(
+        self, ignorer: frozenset[str] = frozenset()
+    ) -> list[list[str]]:
+        """Les termes à chercher dans Odoo, par ordre de fiabilité.
 
-        Les sociétés d'abord : un dossier se retrouve par son client
-        bien plus souvent que par son sujet.
+        Trois groupes, du plus sûr au moins sûr : les sociétés, les
+        personnes, les sujets. L'appelant s'arrête au premier groupe qui
+        trouve — chercher « Robin » ou « Odoo » après avoir reconnu
+        « Acritec » n'ajoute que du bruit, puisque ces mots-là sont dans
+        presque tous nos dossiers.
         """
         vus: set[str] = set()
-        ordonne: list[str] = []
-        for terme in [*self.organisations, *self.personnes, *self.sujets]:
-            nettoye = terme.strip()
-            if len(nettoye) < 2 or nettoye.lower() in vus:
-                continue
-            vus.add(nettoye.lower())
-            ordonne.append(nettoye)
-        return ordonne
+        groupes: list[list[str]] = []
+        for source in (self.organisations, self.personnes, self.sujets):
+            groupe: list[str] = []
+            for terme in source:
+                nettoye = terme.strip()
+                cle = nettoye.lower()
+                if len(nettoye) < 2 or cle in vus or cle in ignorer:
+                    continue
+                vus.add(cle)
+                groupe.append(nettoye)
+            if groupe:
+                groupes.append(groupe)
+        return groupes
 
 
 def _liste(valeur: Any, *, maximum: int = 10) -> list[str]:

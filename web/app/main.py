@@ -790,11 +790,19 @@ def create_app(
         return {
             "clues": indices.to_dict(),
             "cost_usd": indices.usage.cost_usd,
-            "candidates": _candidats(owner_id, indices.termes_de_recherche),
+            "candidates": _candidats(
+                owner_id, indices.groupes_de_recherche(config.sonde_ignore)
+            ),
         }
 
-    def _candidats(owner_id: int, termes: list[str], limite: int = 5) -> list[dict]:
+    def _candidats(
+        owner_id: int, groupes: list[list[str]], limite: int = 5
+    ) -> list[dict]:
         """Les dossiers qui collent aux indices, sans jamais bloquer.
+
+        On s'arrête au premier groupe qui trouve : une fois la société
+        reconnue, chercher aussi les personnes et les sujets ne fait que
+        noyer le bon dossier.
 
         Odoo enrichit, il ne conditionne pas : pas de clé, pas de
         réseau, pas de candidats — et la transcription reste possible.
@@ -807,22 +815,25 @@ def create_app(
             return []
         trouves: list[dict] = []
         vus: set[tuple[str, int]] = set()
-        for terme in termes[:4]:
-            try:
-                lignes = passerelle.search_records(terme, limit=limite)
-            except OdooUnavailable as exc:
-                log.warning("recherche Odoo indisponible : %s", exc)
-                return trouves
-            for ligne in lignes:
-                cle = (ligne["model"], int(ligne["id"]))
-                if cle in vus:
-                    continue
-                vus.add(cle)
-                # Le terme qui a trouvé le dossier vaut explication :
-                # « proposé parce qu'on a entendu Acritec ».
-                trouves.append({**ligne, "matched": terme})
-                if len(trouves) >= limite:
+        for groupe in groupes:
+            for terme in groupe[:4]:
+                try:
+                    lignes = passerelle.search_records(terme, limit=limite)
+                except OdooUnavailable as exc:
+                    log.warning("recherche Odoo indisponible : %s", exc)
                     return trouves
+                for ligne in lignes:
+                    cle = (ligne["model"], int(ligne["id"]))
+                    if cle in vus:
+                        continue
+                    vus.add(cle)
+                    # Le terme qui a trouvé le dossier vaut explication :
+                    # « proposé parce qu'on a entendu Acritec ».
+                    trouves.append({**ligne, "matched": terme})
+                    if len(trouves) >= limite:
+                        return trouves
+            if trouves:
+                return trouves
         return trouves
 
     @app.get("/api/odoo/meetings")
