@@ -808,8 +808,10 @@ def create_app(
             "investigation": enquete.to_dict(),
             # Le repli : la recherche directe reste là quand l'enquête
             # renonce, pour que la personne ait quand même une liste.
+            # Le retenu d'abord, ses alternatives ensuite : se corriger
+            # doit coûter un clic, pas une nouvelle enquête.
             "candidates": (
-                [enquete.dossier] if enquete.dossier else _candidats(
+                [enquete.dossier, *enquete.autres] if enquete.dossier else _candidats(
                     owner_id, indices.groupes_de_recherche(config.sonde_ignore)
                 )
             ),

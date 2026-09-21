@@ -467,6 +467,12 @@ function Sonde({ etat, surChoix }) {
               ? `${CERTITUDE[enquete.confidence] || 'Dossier proposé'} — ${enquete.reason}`
               : 'Dossiers Odoo correspondants — en choisir un charge son contexte.'}
           </p>
+          {enquete.record && (etat.candidates || []).length > 1 ? (
+            <p className="mt-1 text-[0.75rem] text-fonce/45">
+              Le premier est celui retenu ; les suivants ont aussi été
+              envisagés. Si la proposition est fausse, choisis le bon.
+            </p>
+          ) : null}
           <ul className="mt-2 space-y-1">
             {etat.candidates.map((dossier) => (
               <li key={`${dossier.model}-${dossier.id}`}>
@@ -482,6 +488,7 @@ function Sonde({ etat, surChoix }) {
                     <span className="text-fonce/55"> · {dossier.partner}</span>
                   ) : null}
                   <span className="block text-[0.75rem] text-fonce/45">
+                    {dossier.reason ? `${dossier.reason} · ` : ''}
                     {dossier.kind ? `${dossier.kind} · ` : ''}
                     {dossier.matched ? `trouvé sur « ${dossier.matched} » · ` : ''}
                     modifié le {dossier.updated}

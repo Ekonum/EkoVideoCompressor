@@ -57,6 +57,11 @@ probable qu'un dossier dormant, mais ce n'est qu'un indice.
 Ne cherche pas de mots génériques — « facture », « commande », « projet »
 sortent dans tous les dossiers et n'en désignent aucun.
 
+À pertinence égale, préfère l'opportunité : c'est là que l'équipe suit
+un client. Et cite toujours dans `autres` les dossiers que tu as
+sérieusement envisagés — c'est ce qui permet de te corriger d'un clic
+sans relancer une enquête.
+
 Tes tours sont comptés : on te dit combien il t'en reste. Conclus avec
 `conclure` avant la fin — sans certitude, conclus sans dossier, la
 personne choisira. Une erreur de liaison dépose la transcription chez
@@ -97,7 +102,8 @@ OUTILS = [
     {
         "name": "conclure",
         "description": (
-            "Rend le dossier retenu, ou aucun si le doute subsiste."
+            "Rend le dossier retenu, ou aucun si le doute subsiste. "
+            "`autres` porte les dossiers sérieusement envisagés."
         ),
         "parameters": {
             "type": "object",
@@ -329,6 +335,7 @@ def _conclure(
     lire: Callable[[str, int], dict],
     journal: list[str],
     usage: CloudUsage,
+    limite_autres: int = 3,
 ) -> Conclusion:
     confiance = str(args.get("confiance") or "aucune")
     modele = str(args.get("modele") or "")
@@ -342,12 +349,29 @@ def _conclure(
             # vaut rendre la main.
             journal.append(f"dossier retenu illisible : {exc}")
             confiance = "aucune"
+    # Les alternatives sont relues pour être affichables : une
+    # proposition qu'on ne peut corriger qu'en relançant une enquête
+    # n'est pas vraiment corrigeable.
+    autres: list[dict[str, Any]] = []
+    for autre in (args.get("autres") or [])[:limite_autres]:
+        if not isinstance(autre, dict):
+            continue
+        try:
+            fiche = lire(str(autre.get("modele") or ""), int(autre.get("record_id") or 0))
+        except Exception as exc:  # noqa: BLE001
+            journal.append(f"alternative illisible : {exc}")
+            continue
+        if dossier and fiche.get("id") == dossier.get("id") \
+                and fiche.get("model") == dossier.get("model"):
+            continue
+        autres.append({**fiche, "reason": str(autre.get("raison") or "")})
+
     journal.append(f"conclusion {confiance} — {args.get('raison') or ''}")
     return Conclusion(
         dossier=dossier,
         confiance=confiance if dossier else "aucune",
         raison=str(args.get("raison") or ""),
-        autres=[a for a in (args.get("autres") or []) if isinstance(a, dict)],
+        autres=autres,
         journal=journal,
         usage=usage,
     )

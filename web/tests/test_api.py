@@ -899,6 +899,31 @@ class EnqueteurTestCase(unittest.TestCase):
         self.assertEqual(appels, ["Acritec"])
         self.assertIn("« acritec » déjà cherché", conclusion.journal)
 
+    def test_les_alternatives_sont_relues_pour_etre_affichables(self):
+        """Se corriger doit coûter un clic, pas une nouvelle enquête."""
+        fiches = {
+            ("crm.lead", 364): {"model": "crm.lead", "id": 364, "name": "Acritec",
+                                "partner": "ACRITEC", "updated": "2026-09-17",
+                                "chatter": []},
+            ("project.task", 1376): {"model": "project.task", "id": 1376,
+                                     "name": "Refonte API Visiotec",
+                                     "partner": "ACRITEC", "updated": "2026-09-10",
+                                     "chatter": []},
+        }
+        conclusion, _ = self._mener(
+            [_appel("conclure", modele="crm.lead", record_id=364, confiance="probable",
+                    raison="L'équipe suit Acritec ici.",
+                    autres=[{"modele": "project.task", "record_id": 1376,
+                             "raison": "Traite du flux de vente."},
+                            {"modele": "crm.lead", "record_id": 364,
+                             "raison": "Doublon du retenu."}])],
+            lire=lambda modele, record_id: fiches[(modele, record_id)],
+        )
+        self.assertEqual(conclusion.dossier["id"], 364)
+        # Le doublon du dossier retenu ne se répète pas dans la liste.
+        self.assertEqual([a["id"] for a in conclusion.autres], [1376])
+        self.assertEqual(conclusion.autres[0]["name"], "Refonte API Visiotec")
+
     def test_renoncer_est_une_reponse(self):
         conclusion, _ = self._mener([
             _appel("conclure", confiance="aucune", raison="Deux clients possibles."),
