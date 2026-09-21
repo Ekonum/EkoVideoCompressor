@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Bouton, Champ, Erreur } from './Communs.jsx';
-import { sonderDuree } from '../sonde.js';
+import { sonderDuree, identifier } from '../sonde.js';
 import { api } from '../api.js';
 import { useCompression } from '../useCompression.js';
 import { Apercu } from './Apercu.jsx';
@@ -26,6 +26,7 @@ export function Nouveau({ surTermine }) {
   const [glossaire, setGlossaire] = useState('');
   const [contexteOdoo, setContexteOdoo] = useState('');
   const [mode, setMode] = useState('transcrire');
+  const [sonde, setSonde] = useState(null);
   const [debut, setDebut] = useState(0);
   const [fin, setFin] = useState(0);
   const pipeline = usePipeline();
@@ -57,10 +58,33 @@ export function Nouveau({ surTermine }) {
     })().catch((e) => setLecture(`Rodage impossible : ${e.message}`));
   }, []);
 
+  /** Écoute le début du fichier pour proposer un dossier Odoo.
+   *
+   *  Lancée d'office : elle coûte une fraction de centime, et sans elle
+   *  il faut savoir soi-même quel dossier chercher. Son échec ne se
+   *  remonte pas comme une erreur — on retombe simplement sur la
+   *  saisie à la main.
+   */
+  async function ecouter(choisi, total) {
+    setSonde({ enCours: true });
+    try {
+      const reglages = await api.settings();
+      const vue = await identifier(choisi, {
+        audio: reglages.audio,
+        fenetre: reglages.probe?.window_seconds || 300,
+        duree: total,
+      });
+      setSonde({ ...vue, enCours: false });
+    } catch {
+      setSonde(null);
+    }
+  }
+
   async function choisir(event) {
     const choisi = event.target.files[0] || null;
     setFichier(null);
     setSecondes(0);
+    setSonde(null);
     if (!choisi) return setLecture('');
     setLecture('Lecture des métadonnées…');
     try {
@@ -70,6 +94,7 @@ export function Nouveau({ surTermine }) {
       setDebut(0);
       setFin(total);
       setLecture(`${mo(choisi.size)} · ${duree(total)}`);
+      if (mode !== 'compresser') ecouter(choisi, total);
     } catch (e) {
       setFichier(null);
       setLecture(`Fichier illisible : ${e.message}`);
@@ -89,6 +114,27 @@ export function Nouveau({ surTermine }) {
   }
 
   const enCours = pipeline.etat === 'traitement' || pipeline.etat === 'creation';
+
+  /** Verse dans le formulaire ce qu'Odoo vient d'apprendre.
+   *
+   *  Même geste pour une réunion d'agenda et pour un dossier proposé
+   *  par la sonde : ce qui est déjà saisi n'est jamais écrasé, seulement
+   *  complété.
+   */
+  function appliquerContexte({ client: societe, termes, resume, invites }) {
+    if (societe) setClient((actuel) => actuel || societe);
+    if (invites?.length) {
+      setParticipants((actuel) =>
+        [...new Set([...liste(actuel), ...invites])].join(', '),
+      );
+    }
+    if (termes?.length) {
+      setGlossaire((actuel) =>
+        [...new Set([...liste(actuel), ...termes])].join(', '),
+      );
+    }
+    if (resume) setContexteOdoo(resume);
+  }
 
   return (
     <section className="mx-auto max-w-3xl px-6 py-10">
@@ -162,22 +208,23 @@ export function Nouveau({ surTermine }) {
             Facultatif, mais c'est ce qui fait la différence entre « Réunion du
             3 juillet » et un titre utile.
           </p>
-          <Reunions
-            surChoix={({ client: societe, termes, resume, invites }) => {
-              if (societe) setClient(societe);
-              if (invites?.length) {
-                setParticipants((actuel) =>
-                  [...new Set([...liste(actuel), ...invites])].join(', '),
-                );
+          <Sonde
+            etat={sonde}
+            surChoix={async (dossier) => {
+              try {
+                const pack = await api.odooContext(dossier.model, dossier.id);
+                appliquerContexte({
+                  client: pack.client_company,
+                  termes: pack.terms,
+                  resume: pack.summary,
+                });
+              } catch {
+                // Le contexte est un bonus : son échec ne doit pas
+                // empêcher de retenir le dossier proposé.
               }
-              if (termes?.length) {
-                setGlossaire((actuel) =>
-                  [...new Set([...liste(actuel), ...termes])].join(', '),
-                );
-              }
-              setContexteOdoo(resume || '');
             }}
           />
+          <Reunions surChoix={appliquerContexte} />
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <Champ
               label="Partie prenante"
@@ -356,6 +403,78 @@ function Suggestions({ choisis, surAjout }) {
           {t.term}
         </button>
       ))}
+    </div>
+  );
+}
+
+/** Ce que la sonde a entendu, et les dossiers que ça désigne.
+ *
+ *  Un seul point d'arrêt dans le flux, et il est ici : lier une
+ *  transcription au mauvais dossier la dépose chez un autre client,
+ *  visible par toute l'équipe. Le reste peut tourner seul ; ce choix-là
+ *  se valide d'un clic.
+ */
+function Sonde({ etat, surChoix }) {
+  const [retenu, setRetenu] = useState(null);
+
+  if (!etat) return null;
+  if (etat.enCours) {
+    return (
+      <p className="mt-4 text-[0.875rem] text-fonce/55">
+        Écoute des premières minutes pour reconnaître le sujet…
+      </p>
+    );
+  }
+
+  const indices = etat.clues || {};
+  const entendu = [...(indices.organisations || []), ...(indices.personnes || [])];
+  if (!entendu.length && !(etat.candidates || []).length) return null;
+
+  return (
+    <div className="verre mt-4 rounded-xl p-4">
+      <p className="titre text-[0.9375rem] font-medium">Ce qu'on a entendu</p>
+      {indices.resume ? (
+        <p className="mt-1 text-[0.8125rem] text-fonce/70">{indices.resume}</p>
+      ) : null}
+      {entendu.length ? (
+        <ul className="mt-2 flex flex-wrap gap-1.5">
+          {entendu.map((terme) => (
+            <li key={terme}
+                className="rounded-full bg-papier px-2 py-0.5 text-[0.75rem] text-fonce/70">
+              {terme}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      {(etat.candidates || []).length ? (
+        <>
+          <p className="mt-3 text-[0.8125rem] text-fonce/55">
+            Dossiers Odoo correspondants — en choisir un charge son contexte.
+          </p>
+          <ul className="mt-2 space-y-1">
+            {etat.candidates.map((dossier) => (
+              <li key={`${dossier.model}-${dossier.id}`}>
+                <button
+                  type="button"
+                  onClick={() => { setRetenu(dossier.id); surChoix(dossier); }}
+                  className={`w-full rounded-md px-2 py-1.5 text-left text-[0.875rem] hover:bg-papier ${
+                    retenu === dossier.id ? 'ring-1 ring-turquoise-sombre' : ''
+                  }`}
+                >
+                  <span className="titre font-medium">{dossier.name}</span>
+                  {dossier.partner ? (
+                    <span className="text-fonce/55"> · {dossier.partner}</span>
+                  ) : null}
+                  <span className="block text-[0.75rem] text-fonce/45">
+                    proposé sur « {dossier.matched} » · modifié le {dossier.updated}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
     </div>
   );
 }

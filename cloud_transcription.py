@@ -1416,10 +1416,33 @@ class GeminiClient:
         prompt: str,
     ) -> dict:
         """One ``generateContent`` call; returns the raw response."""
+        return self.generate_audio_json(
+            model_id=model_id,
+            file_uri=file_uri,
+            mime_type=mime_type,
+            prompt=prompt,
+            schema=RESPONSE_SCHEMA,
+        )
+
+    def generate_audio_json(
+        self,
+        *,
+        model_id: str,
+        file_uri: str,
+        mime_type: str,
+        prompt: str,
+        schema: dict,
+    ) -> dict:
+        """Audio in, JSON out, against an arbitrary schema.
+
+        Transcription is one use; the identification probe — a short
+        window read only for *who and what* — is another, and it wants
+        its own, much smaller schema.
+        """
         entry = cloud_model_entry(model_id)
         generation_config: dict[str, Any] = {
             "responseMimeType": "application/json",
-            "responseSchema": RESPONSE_SCHEMA,
+            "responseSchema": schema,
             "temperature": 0.2,
         }
         thinking = entry.get("thinking")

@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,7 @@ from .coffre import Coffre, CoffreIndisponible
 from .db import Database
 from .odoo import OdooGateway, OdooUnavailable
 from .secrets import GeminiKey, SecretError
+from .sonde import FENETRE_SECONDES, fournisseur, identifier
 from .settings import Settings
 from .terms import replace_term
 from .transcription import context_for_chunk, transcribe_chunk, transcript_text
@@ -84,6 +86,9 @@ MAX_CONCURRENT_CHUNKS = 2
 # marge couvre un réglage plus généreux sans jamais approcher les 100 Mo
 # du tunnel.
 MAX_CHUNK_BYTES = 60 * 1024 * 1024
+# Cinq minutes en MP3 64 kbit/s pèsent 2,4 Mo : la marge permet une
+# fenêtre un peu plus large, pas le dépôt d'une réunion entière.
+MAX_SONDE_BYTES = 8 * 1024 * 1024
 
 
 class JobRequest(BaseModel):
@@ -742,6 +747,84 @@ def create_app(
         return {"message_id": message_id, "model": payload.model,
                 "record_id": payload.record_id}
 
+    @app.post("/api/probe")
+    async def sonder(request: Request, owner_id: int = Depends(current_user)) -> dict:
+        """Écoute le début d'un enregistrement et propose un dossier.
+
+        Une fenêtre courte suffit pour savoir de qui et de quoi on
+        parle ; le dossier retenu fournira ensuite le contexte de la
+        vraie transcription. La sonde n'écrit rien dans Odoo : elle
+        propose, c'est tout.
+        """
+        corps = await request.body()
+        if not corps:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Fenêtre audio vide.")
+        if len(corps) > MAX_SONDE_BYTES:
+            raise HTTPException(
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                "Fenêtre trop lourde pour une sonde : cinq minutes suffisent.",
+            )
+
+        chemin = config.chunk_dir / f"sonde{owner_id}_{int(time.time()*1000)}{CHUNK_SUFFIX}"
+        chemin.write_bytes(corps)
+        try:
+            indices = await asyncio.to_thread(
+                identifier, str(chemin), api_key=keys.get()
+            )
+        except (CloudTranscriptionError, SecretError) as exc:
+            log.warning("sonde en échec : %s", exc)
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+        finally:
+            _discard(chemin)
+
+        db.add_api_usage(
+            job_id=None,
+            provider=fournisseur(),
+            model=indices.usage.model,
+            step="sonde_identification",
+            input_tokens=indices.usage.input_tokens,
+            output_tokens=indices.usage.output_tokens,
+            cost_usd=indices.usage.cost_usd,
+        )
+
+        return {
+            "clues": indices.to_dict(),
+            "cost_usd": indices.usage.cost_usd,
+            "candidates": _candidats(owner_id, indices.termes_de_recherche),
+        }
+
+    def _candidats(owner_id: int, termes: list[str], limite: int = 5) -> list[dict]:
+        """Les dossiers qui collent aux indices, sans jamais bloquer.
+
+        Odoo enrichit, il ne conditionne pas : pas de clé, pas de
+        réseau, pas de candidats — et la transcription reste possible.
+        """
+        try:
+            passerelle = odoo_pour(owner_id)
+        except CoffreIndisponible:
+            return []
+        if not passerelle.configured:
+            return []
+        trouves: list[dict] = []
+        vus: set[tuple[str, int]] = set()
+        for terme in termes[:4]:
+            try:
+                lignes = passerelle.search_records(terme, limit=limite)
+            except OdooUnavailable as exc:
+                log.warning("recherche Odoo indisponible : %s", exc)
+                return trouves
+            for ligne in lignes:
+                cle = (ligne["model"], int(ligne["id"]))
+                if cle in vus:
+                    continue
+                vus.add(cle)
+                # Le terme qui a trouvé le dossier vaut explication :
+                # « proposé parce qu'on a entendu Acritec ».
+                trouves.append({**ligne, "matched": terme})
+                if len(trouves) >= limite:
+                    return trouves
+        return trouves
+
     @app.get("/api/odoo/meetings")
     def odoo_meetings(owner_id: int = Depends(current_user)) -> dict:
         """Réunions du moment, pour proposer « c'est celle-là ».
@@ -800,6 +883,10 @@ def create_app(
                 "cap_usd": config.monthly_budget_usd,
             },
             "odoo": {"configured": odoo_pour(owner_id).configured},
+            # Le navigateur encode la fenêtre de la sonde avant d'avoir
+            # créé un traitement : il lui faut le profil ici aussi.
+            "audio": AUDIO_PROFILE,
+            "probe": {"window_seconds": FENETRE_SECONDES},
         }
 
     @app.get("/api/search")

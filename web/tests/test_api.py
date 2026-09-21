@@ -597,6 +597,111 @@ class OdooTestCase(_Fixture):
         self.assertIn("injoignable", vue["reason"])
 
 
+class SondeTestCase(_Fixture):
+    """La sonde propose un dossier ; elle n'écrit jamais dans Odoo."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        from app.sonde import Indices
+        from cloud_transcription import CloudUsage
+        import app.main as main_module
+
+        self._vrai_identifier = main_module.identifier
+        self.indices = Indices(
+            organisations=["Acritec", "T'Knoweb"],
+            personnes=["David JAUCH"],
+            sujets=["facturation électronique"],
+            resume="Point sur la facturation électronique chez Acritec.",
+            usage=CloudUsage(model="gemini-3.1-flash-lite", input_tokens=1200,
+                             output_tokens=80, cost_usd=0.0004),
+        )
+        self.sondes: list[str] = []
+
+        def fausse_sonde(chemin, **_):
+            self.sondes.append(chemin)
+            return self.indices
+
+        main_module.identifier = fausse_sonde
+
+    def tearDown(self) -> None:
+        import app.main as main_module
+
+        main_module.identifier = self._vrai_identifier
+        super().tearDown()
+
+    def _app_avec_odoo(self, passerelle):
+        return create_app(
+            self.settings,
+            database=self.db,
+            gemini_key=GeminiKey(url="", token="", item="", field="", static_key="k"),
+            odoo_factory=lambda _: passerelle,
+        )
+
+    def test_refuse_une_fenetre_vide(self):
+        self.assertEqual(self.client.post("/api/probe", content=b"").status_code, 400)
+
+    def test_refuse_une_reunion_entiere(self):
+        from app.main import MAX_SONDE_BYTES
+
+        reponse = self.client.post("/api/probe", content=b"x" * (MAX_SONDE_BYTES + 1))
+        self.assertEqual(reponse.status_code, 413)
+
+    def test_rend_les_indices_et_facture_la_sonde(self):
+        vue = self.client.post("/api/probe", content=b"des octets audio").json()
+        self.assertEqual(vue["clues"]["organisations"], ["Acritec", "T'Knoweb"])
+        self.assertAlmostEqual(vue["cost_usd"], 0.0004)
+        # Facturée sur le budget d'équipe, comme une transcription.
+        self.assertAlmostEqual(self.db.month_spend_usd(), 0.0004)
+
+    def test_la_fenetre_ne_survit_pas_a_la_sonde(self):
+        self.client.post("/api/probe", content=b"des octets audio")
+        self.assertEqual(self.sondes and Path(self.sondes[0]).exists(), False)
+
+    def test_sans_cle_odoo_la_sonde_repond_quand_meme(self):
+        """Odoo enrichit, il ne conditionne pas : pas de clé, pas de
+        candidats, mais les indices restent."""
+        vue = self.client.post("/api/probe", content=b"audio").json()
+        self.assertEqual(vue["candidates"], [])
+        self.assertTrue(vue["clues"]["personnes"])
+
+    def test_propose_les_dossiers_trouves_et_dit_pourquoi(self):
+        from app.odoo import OdooGateway
+
+        class Passerelle(OdooGateway):
+            def __init__(self):
+                super().__init__(url="u", database="d", login="l", api_key="k")
+                self.termes: list[str] = []
+
+            def search_records(self, terme, limit=8):
+                self.termes.append(terme)
+                if terme == "Acritec":
+                    return [{"model": "crm.lead", "id": 364, "name": "Acritec",
+                             "partner": "ACRITEC, David JAUCH", "updated": "2026-09-17"}]
+                return []
+
+        passerelle = Passerelle()
+        with TestClient(self._app_avec_odoo(passerelle)) as client:
+            vue = client.post("/api/probe", content=b"audio").json()
+        self.assertEqual(len(vue["candidates"]), 1)
+        self.assertEqual(vue["candidates"][0]["id"], 364)
+        self.assertEqual(vue["candidates"][0]["matched"], "Acritec")
+        # Les sociétés d'abord : un dossier se retrouve par son client.
+        self.assertEqual(passerelle.termes[0], "Acritec")
+
+    def test_une_panne_odoo_laisse_les_indices_intacts(self):
+        from app.odoo import OdooGateway, OdooUnavailable
+
+        class Panne(OdooGateway):
+            def search_records(self, terme, limit=8):
+                raise OdooUnavailable("Serveur Odoo injoignable.")
+
+        passerelle = Panne(url="u", database="d", login="l", api_key="k")
+        with TestClient(self._app_avec_odoo(passerelle)) as client:
+            vue = client.post("/api/probe", content=b"audio").json()
+        self.assertEqual(vue["candidates"], [])
+        self.assertIn("Acritec", vue["clues"]["organisations"])
+
+
 class ApiTokenTestCase(_Fixture):
     """Jetons d'API : ce qui ouvre la porte aux appels machine."""
 

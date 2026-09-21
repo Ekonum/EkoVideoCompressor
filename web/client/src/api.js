@@ -34,6 +34,13 @@ export const api = {
   vocabulary: (selected) =>
     call('GET', `/api/vocabulary?selected=${encodeURIComponent(selected.join(','))}`),
   settings: () => call('GET', '/api/settings'),
+  probe: async (octets, type) => {
+    const response = await fetch('/api/probe', {
+      method: 'POST', headers: { 'Content-Type': type }, body: octets,
+    });
+    if (!response.ok) throw new Error(await detail(response));
+    return response.json();
+  },
   me: () => call('GET', '/api/me'),
   odooStatus: () => call('GET', '/api/me/odoo'),
   odooSave: (login, apiKey) => call('PUT', '/api/me/odoo', { login, api_key: apiKey }),
