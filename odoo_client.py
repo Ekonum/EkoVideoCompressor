@@ -1262,13 +1262,47 @@ def _format_message(msg: dict) -> str:
 _GLOSSARY_STOPWORDS = {
     "Bonjour", "Merci", "Cordialement", "Salutations", "Madame",
     "Monsieur", "Mme", "Mr", "Anonyme", "Odoo", "Réunion",
+    # Entêtes de compte-rendu : capitalisés, jamais des noms propres.
+    "Synthèse", "Compte-rendu", "Transcription", "Participants",
+    "Date", "Objectif", "Contexte", "Conclusion", "Prochaines étapes",
 }
+
+# Mots français courants qu'une majuscule de début de phrase déguise en
+# nom propre. La liste reste courte : le filtre « déjà vu en
+# minuscules » ci-dessous attrape le reste dès que le texte est long.
+_MOTS_COURANTS = {
+    "je", "tu", "il", "elle", "on", "nous", "vous", "ils", "elles",
+    "le", "la", "les", "un", "une", "des", "du", "de", "ce", "cet",
+    "cette", "ces", "mon", "ma", "mes", "son", "sa", "ses", "notre",
+    "votre", "leur", "leurs", "et", "ou", "mais", "donc", "or", "ni",
+    "car", "si", "que", "qui", "quoi", "dont", "où", "quand", "comme",
+    "dans", "sur", "sous", "pour", "par", "avec", "sans", "vers",
+    "chez", "entre", "après", "avant", "depuis", "pendant", "selon",
+    "oui", "non", "ok", "voici", "voilà", "bien", "bon", "bonne",
+    "top", "merci", "aussi", "alors", "ainsi", "enfin", "ensuite",
+    "puis", "très", "plus", "moins", "tout", "tous", "toute", "toutes",
+    "autre", "autres", "même", "plusieurs", "chaque", "certains",
+    "objectif", "note", "notes", "point", "points", "suite", "retour",
+    "organisé", "organisée", "prévu", "prévue", "fait", "faite",
+    "opportunité", "devis", "projet", "tâche", "réunion",
+}
+
+# Un mot qui apparaît aussi en minuscules dans le même texte n'est pas
+# un nom propre : c'est un début de phrase. « Voici », « Non », « Ok »
+# se voient ailleurs en « voici », « non », « ok » ; « Acritec » ou
+# « Peppol », jamais.
+_MOT_MINUSCULE_RE = re.compile(
+    r"\b[a-zàâçéèêëîïôûùüÿœ][\wàâçéèêëîïôûùüÿœ'\-]*\b"
+)
 
 # Match capitalised tokens (incl. é à ç etc.) + multi-token proper
 # nouns ("Sophie Martin"). Restricted to 2-4 token sequences so
 # arbitrary capitalised sentence openers don't sneak in.
+# Une seule espace entre les mots, jamais un saut de ligne : sinon la
+# fin d'un titre et le début du paragraphe suivant forment un faux
+# terme (« Acritec\nCompte-rendu »).
 _ENTITY_RE = re.compile(
-    r"\b([A-ZÉÈÊÀÂÎÔÛÇ][\wÉÈÊÀÂÎÔÛÇéèêàâîôûç'\-]+(?:\s+[A-ZÉÈÊÀÂÎÔÛÇ][\wÉÈÊÀÂÎÔÛÇéèêàâîôûç'\-]+){0,3})\b"
+    r"\b([A-ZÉÈÊÀÂÎÔÛÇ][\wÉÈÊÀÂÎÔÛÇéèêàâîôûç'\-]+(?:[ ][A-ZÉÈÊÀÂÎÔÛÇ][\wÉÈÊÀÂÎÔÛÇéèêàâîôûç'\-]+){0,3})\b"
 )
 
 
@@ -1323,6 +1357,12 @@ def extract_odoo_glossary_candidates(
         if candidate and candidate not in candidates:
             candidates.append(candidate)
 
+    # Les noms structurels (client, projet, tâche) échappent au filtre :
+    # on sait qu'ils comptent, même si le texte les écrit parfois en
+    # minuscules.
+    structurels = {n.strip().lower() for n in explicit_names}
+    minuscules = {m.group(0).lower() for m in _MOT_MINUSCULE_RE.finditer(combined)}
+
     seen: set[str] = set()
     unique: list[str] = []
     for raw in candidates:
@@ -1331,6 +1371,14 @@ def extract_odoo_glossary_candidates(
             continue
         if cleaned in _GLOSSARY_STOPWORDS:
             continue
+        if " " not in cleaned and cleaned.lower() not in structurels:
+            mot = cleaned.lower().strip("'")
+            if mot in _MOTS_COURANTS or mot in minuscules:
+                continue
+            # « L'objectif », « C'est » : l'apostrophe colle un article
+            # à un mot courant.
+            if "'" in mot and mot.split("'", 1)[1] in _MOTS_COURANTS:
+                continue
         key = cleaned.lower()
         if key in seen:
             continue
