@@ -1285,12 +1285,25 @@ _MOTS_COURANTS = {
     "objectif", "note", "notes", "point", "points", "suite", "retour",
     "organisé", "organisée", "prévu", "prévue", "fait", "faite",
     "opportunité", "devis", "projet", "tâche", "réunion",
+    # Interjections : fréquentes dans un chatter recopié d'une
+    # transcription, jamais un terme métier.
+    "ah", "oh", "eh", "bah", "hein", "ouais", "était", "est", "côté",
 }
 
 # Un mot qui apparaît aussi en minuscules dans le même texte n'est pas
 # un nom propre : c'est un début de phrase. « Voici », « Non », « Ok »
 # se voient ailleurs en « voici », « non », « ok » ; « Acritec » ou
 # « Peppol », jamais.
+def _sans_elision(mot: str) -> str:
+    """« L'objectif » → « objectif », « C'était » → « était ».
+
+    Une lettre ou deux suivies d'une apostrophe, en français, c'est un
+    article ou un pronom élidé : il n'appartient pas au nom.
+    """
+    marque = re.match(r"^[A-Za-zÀ-ÿ]{1,2}'(.+)$", mot)
+    return marque.group(1) if marque else mot
+
+
 _MOT_MINUSCULE_RE = re.compile(
     r"\b[a-zàâçéèêëîïôûùüÿœ][\wàâçéèêëîïôûùüÿœ'\-]*\b"
 )
@@ -1363,6 +1376,13 @@ def extract_odoo_glossary_candidates(
     structurels = {n.strip().lower() for n in explicit_names}
     minuscules = {m.group(0).lower() for m in _MOT_MINUSCULE_RE.finditer(combined)}
 
+    def courant(mot: str) -> bool:
+        """Ce mot-là est-il un mot de la langue, pas un nom propre ?"""
+        forme = _sans_elision(mot.strip(" ,;:.!?'\"")).lower()
+        if not forme or forme.lower() in structurels:
+            return False
+        return forme in _MOTS_COURANTS or forme in minuscules
+
     seen: set[str] = set()
     unique: list[str] = []
     for raw in candidates:
@@ -1371,14 +1391,18 @@ def extract_odoo_glossary_candidates(
             continue
         if cleaned in _GLOSSARY_STOPWORDS:
             continue
-        if " " not in cleaned and cleaned.lower() not in structurels:
-            mot = cleaned.lower().strip("'")
-            if mot in _MOTS_COURANTS or mot in minuscules:
-                continue
-            # « L'objectif », « C'est » : l'apostrophe colle un article
-            # à un mot courant.
-            if "'" in mot and mot.split("'", 1)[1] in _MOTS_COURANTS:
-                continue
+        # « C'était HeyGen », « Après HeyGen », « Côté Acritec » : la
+        # majuscule de tête appartient à la phrase, pas au nom. On la
+        # retire au lieu de jeter le nom propre avec elle.
+        if cleaned.lower() not in structurels:
+            mots = cleaned.split(" ")
+            while len(mots) > 1 and courant(mots[0]):
+                mots = mots[1:]
+            cleaned = " ".join(mots)
+        if len(cleaned) < 2 or cleaned in _GLOSSARY_STOPWORDS:
+            continue
+        if " " not in cleaned and courant(cleaned):
+            continue
         key = cleaned.lower()
         if key in seen:
             continue

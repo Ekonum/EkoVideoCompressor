@@ -769,6 +769,28 @@ class ExtractOdooGlossaryCandidatesTest(unittest.TestCase):
         }
         self.assertIn("Ivérif", extract_odoo_glossary_candidates(primary, []))
 
+    def test_strips_a_leading_common_word_instead_of_dropping_the_name(self):
+        primary = {
+            "model": "crm.lead", "id": 1, "display_name": "", "raw": {},
+            "body": "C'était HeyGen. Après HeyGen, on a vu Côté Acritec.",
+            "chatter": [],
+        }
+        terms = extract_odoo_glossary_candidates(primary, [])
+        self.assertIn("HeyGen", terms)
+        self.assertIn("Acritec", terms)
+        self.assertFalse([t for t in terms if t.startswith(("C'", "Après", "Côté"))])
+
+    def test_keeps_an_elided_article_that_belongs_to_the_name(self):
+        """« L'objectif » est une élision, « L'Oréal » un nom."""
+        primary = {
+            "model": "crm.lead", "id": 1, "display_name": "", "raw": {},
+            "body": "L'Oréal nous répond. L'objectif reste le même.",
+            "chatter": [],
+        }
+        terms = extract_odoo_glossary_candidates(primary, [])
+        self.assertIn("L'Oréal", terms)
+        self.assertNotIn("L'objectif", terms)
+
     def test_caps_at_max_terms(self):
         body = " ".join(f"Personne{i}" for i in range(200))
         primary = {
