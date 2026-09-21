@@ -805,8 +805,13 @@ class FauxGemini:
 
 
 def _appel(nom, **args):
+    """Un appel d'outil, signature de raisonnement comprise : Gemini 3
+    refuse le tour suivant si elle ne lui revient pas."""
     return {
-        "candidates": [{"content": {"parts": [{"functionCall": {"name": nom, "args": args}}]}}],
+        "candidates": [{"content": {"role": "model", "parts": [{
+            "functionCall": {"name": nom, "args": args},
+            "thoughtSignature": f"sig-{nom}",
+        }]}}],
         "usageMetadata": {"promptTokenCount": 100, "candidatesTokenCount": 20},
     }
 
@@ -852,6 +857,8 @@ class EnqueteurTestCase(unittest.TestCase):
         self.assertEqual(conclusion.dossier["id"], 364)
         self.assertEqual(conclusion.confiance, "probable")
         self.assertIn("cherché « Acritec » → 1 dossier(s)", conclusion.journal)
+        # La signature du raisonnement est renvoyée telle quelle.
+        self.assertIn("sig-chercher", json.dumps(faux.recus[-1]))
         # Le résultat de l'outil est bien renvoyé au modèle au tour suivant.
         self.assertIn("functionResponse", json.dumps(faux.recus[-1]))
 

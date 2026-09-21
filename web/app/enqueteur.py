@@ -145,11 +145,24 @@ class Conclusion:
         }
 
 
-def _appels(payload: dict) -> list[dict]:
+def _tour_du_modele(payload: dict) -> dict:
+    """Le tour du modèle, **tel quel**.
+
+    Gemini 3 signe ses raisonnements (`thoughtSignature`) et refuse le
+    tour suivant si la signature ne lui revient pas. Reconstruire les
+    parties à partir des seuls appels de fonction, c'est perdre la
+    signature — et se faire refuser en HTTP 400.
+    """
     candidats = payload.get("candidates") or []
     if not candidats:
-        return []
-    parts = (candidats[0].get("content") or {}).get("parts") or []
+        return {"role": "model", "parts": []}
+    contenu = dict(candidats[0].get("content") or {})
+    contenu.setdefault("role", "model")
+    return contenu
+
+
+def _appels(payload: dict) -> list[dict]:
+    parts = _tour_du_modele(payload).get("parts") or []
     return [p["functionCall"] for p in parts if isinstance(p.get("functionCall"), dict)]
 
 
@@ -231,7 +244,7 @@ def enqueter(
                 usage=usage,
             )
 
-        contents.append({"role": "model", "parts": [{"functionCall": a} for a in appels]})
+        contents.append(_tour_du_modele(reponse))
         reponses: list[dict] = []
         for appel in appels:
             nom = appel.get("name") or ""
@@ -243,6 +256,8 @@ def enqueter(
             reponses.append(
                 {"functionResponse": {"name": nom, "response": {"resultat": resultat}}}
             )
+        # Rôle « user » : côté Gemini, une réponse d'outil vient de
+        # l'appelant, pas du modèle.
         contents.append({"role": "user", "parts": reponses})
 
     journal.append(f"Arrêt après {tours_max} tours sans conclusion.")
