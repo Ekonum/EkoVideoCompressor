@@ -38,9 +38,10 @@ log = logging.getLogger("ekovideo.web")
 # coûte bien plus cher que quelques milliers de jetons.
 MODELE_ENQUETE = "gemini-3.8-flash"
 
-# Assez de tours pour chercher deux ou trois pistes et en vérifier une ;
-# assez peu pour qu'une boucle folle reste sans conséquence.
-TOURS_MAX = 8
+# Assez de tours pour chercher plusieurs pistes et en vérifier une ;
+# assez peu pour qu'une boucle folle reste sans conséquence. Le dernier
+# tour est réservé à la conclusion, quoi qu'il arrive.
+TOURS_MAX = 10
 
 SYSTEME = """Tu retrouves, dans Odoo, le dossier dont une réunion parle.
 
@@ -53,7 +54,8 @@ sortent, lis-les avant de choisir ; si rien ne sort, cherche les
 personnes, puis les mots du sujet. Un dossier récemment actif est plus
 probable qu'un dossier dormant, mais ce n'est qu'un indice.
 
-Conclus avec `conclure`. Sans certitude, conclus sans dossier : la
+Tes tours sont comptés : on te dit combien il t'en reste. Conclus avec
+`conclure` avant la fin — sans certitude, conclus sans dossier, la
 personne choisira. Une erreur de liaison dépose la transcription chez
 un autre client, c'est le pire résultat possible."""
 
@@ -230,8 +232,19 @@ def enqueter(
     ]
 
     for tour in range(tours_max):
+        # Le dernier tour ne propose plus que `conclure` : un modèle qui
+        # enquête encore à la fin rendrait la main sans rien dire, alors
+        # qu'il a déjà tout lu.
+        dernier = tour == tours_max - 1
+        outils = [o for o in OUTILS if o["name"] == "conclure"] if dernier else OUTILS
+        if dernier:
+            contents.append({
+                "role": "user",
+                "parts": [{"text": "Dernier tour : conclus maintenant, avec ce "
+                                   "que tu as. Sans certitude, conclus sans dossier."}],
+            })
         reponse = client.generate_with_tools(
-            model_id=model_id, contents=contents, tools=OUTILS, system=SYSTEME
+            model_id=model_id, contents=contents, tools=outils, system=SYSTEME
         )
         _cumuler(usage, reponse, model_id)
         appels = _appels(reponse)
@@ -256,6 +269,10 @@ def enqueter(
             reponses.append(
                 {"functionResponse": {"name": nom, "response": {"resultat": resultat}}}
             )
+        # Rôle « user » : côté Gemini, une réponse d'outil vient de
+        # l'appelant, pas du modèle.
+        restants = tours_max - tour - 1
+        reponses.append({"text": f"Il te reste {restants} tour(s) avant de devoir conclure."})
         # Rôle « user » : côté Gemini, une réponse d'outil vient de
         # l'appelant, pas du modèle.
         contents.append({"role": "user", "parts": reponses})

@@ -902,7 +902,24 @@ class EnqueteurTestCase(unittest.TestCase):
         self.assertIsNone(conclusion.dossier)
         self.assertEqual(conclusion.confiance, "aucune")
 
-    def test_s_arrete_au_bout_du_compte(self):
+    def test_le_dernier_tour_force_la_conclusion(self):
+        """Un modèle qui enquête encore à la fin rendrait la main sans
+        rien dire, alors qu'il a déjà tout lu."""
+        conclusion, faux = self._mener(
+            [
+                _appel("chercher", terme="Acritec"),
+                _appel("chercher", terme="Acritech"),
+                _appel("conclure", modele="crm.lead", record_id=364,
+                       confiance="probable", raison="Le seul dossier actif."),
+            ],
+            tours_max=3,
+        )
+        self.assertEqual(conclusion.dossier["id"], 364)
+        dernier = json.dumps(faux.recus[-1])
+        self.assertIn("Dernier tour", dernier)
+        self.assertIn("Il te reste 1 tour(s)", dernier)
+
+    def test_s_arrete_quand_meme_si_le_dernier_tour_n_aboutit_pas(self):
         conclusion, _ = self._mener(
             [_appel("chercher", terme="Acritec") for _ in range(3)],
             tours_max=3,
