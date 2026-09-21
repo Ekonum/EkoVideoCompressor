@@ -96,6 +96,28 @@ class OdooChatter:
         transcription de réunion ne doit pas déclencher un e-mail aux
         abonnés du dossier.
         """
+        return self._poster_en_html(
+            modele, record_id, corps_html, subtype="mail.mt_note"
+        )
+
+    def _poster_en_html(
+        self,
+        modele: str,
+        record_id: int,
+        corps_html: str,
+        *,
+        subtype: str,
+        extra: dict[str, Any] | None = None,
+    ) -> int:
+        """Poste, retrouve, puis réécrit — le seul chemin qui laisse du
+        HTML s'afficher.
+
+        ``message_post`` échappe le corps quoi qu'on fasse. On sème donc
+        un marqueur, on retrouve le message par ce marqueur, et on
+        réécrit le corps tel qu'il doit s'afficher. Vaut pour une note
+        de chatter comme pour un ping : c'est la même API, donc le même
+        piège.
+        """
         marqueur = f"<!-- transcript:{record_id}:{abs(hash(corps_html)) % 10**12} -->"
         self._appel(
             modele,
@@ -104,12 +126,10 @@ class OdooChatter:
                 "ids": [record_id],
                 "body": corps_html + marqueur,
                 "message_type": "comment",
-                "subtype_xmlid": "mail.mt_note",
+                "subtype_xmlid": subtype,
+                **(extra or {}),
             },
         )
-
-        # message_post échappe le HTML : on retrouve le message par son
-        # marqueur, puis on réécrit le corps tel qu'il doit s'afficher.
         trouves = self._appel(
             "mail.message",
             "search_read",
@@ -126,7 +146,7 @@ class OdooChatter:
         )
         if not trouves:
             raise ChatterError(
-                "La note a été postée mais reste introuvable : son corps n'a "
+                "Le message a été posté mais reste introuvable : son corps n'a "
                 "pas pu être remis en forme."
             )
         message_id = int(trouves[0]["id"])
@@ -174,22 +194,18 @@ class OdooChatter:
         canal = self.canal_prive(partner_id)
         if canal is None:
             return None
-        charge = {
-            "ids": [canal],
-            "body": texte_html,
-            "message_type": "comment",
-            "subtype_xmlid": "mail.mt_comment",
-            "author_id": self.BOT,
-        }
         try:
-            reponse = self._appel("discuss.channel", "message_post", charge)
+            return self._poster_en_html(
+                "discuss.channel", canal, texte_html,
+                subtype="mail.mt_comment", extra={"author_id": self.BOT},
+            )
         except ChatterError:
             # Une base qui refuse d'écrire au nom d'OdooBot vaut mieux
             # qu'un silence : on signe de la personne et on prévient
             # quand même.
-            charge.pop("author_id")
-            reponse = self._appel("discuss.channel", "message_post", charge)
-        return _identifiant(reponse)
+            return self._poster_en_html(
+                "discuss.channel", canal, texte_html, subtype="mail.mt_comment"
+            )
 
     def activite(
         self, modele: str, record_id: int, user_id: int, resume: str, note: str = ""
