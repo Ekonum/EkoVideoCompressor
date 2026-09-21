@@ -163,8 +163,13 @@ export function Nouveau({ surTermine }) {
             3 juillet » et un titre utile.
           </p>
           <Reunions
-            surChoix={({ client: societe, termes, resume }) => {
+            surChoix={({ client: societe, termes, resume, invites }) => {
               if (societe) setClient(societe);
+              if (invites?.length) {
+                setParticipants((actuel) =>
+                  [...new Set([...liste(actuel), ...invites])].join(', '),
+                );
+              }
               if (termes?.length) {
                 setGlossaire((actuel) =>
                   [...new Set([...liste(actuel), ...termes])].join(', '),
@@ -375,7 +380,8 @@ function Reunions({ surChoix }) {
     <div className="verre mt-4 rounded-xl p-4">
       <p className="titre text-[0.9375rem] font-medium">Réunions Odoo du moment</p>
       <p className="mt-0.5 text-[0.8125rem] text-fonce/55">
-        En choisir une remplit la partie prenante et le vocabulaire depuis la fiche.
+        En choisir une remplit les participants, la partie prenante et le
+        vocabulaire depuis Odoo.
       </p>
       <ul className="mt-3 space-y-1">
         {etat.meetings.map((r) => (
@@ -394,6 +400,10 @@ function Reunions({ surChoix }) {
                     client: pack.client_company,
                     termes: pack.terms,
                     resume: pack.summary,
+                    // Les invités valent même sans fiche liée : c'est le
+                    // cas le plus fréquent, et savoir qui parle change
+                    // l'attribution des répliques.
+                    invites: r.attendees,
                   });
                 } catch {
                   // Le contexte est un bonus : son échec ne doit pas
