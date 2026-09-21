@@ -27,6 +27,7 @@ export function Nouveau({ surTermine }) {
   const [contexteOdoo, setContexteOdoo] = useState('');
   const [mode, setMode] = useState('transcrire');
   const [sonde, setSonde] = useState(null);
+  const [dossier, setDossier] = useState(null);
   const [debut, setDebut] = useState(0);
   const [fin, setFin] = useState(0);
   const pipeline = usePipeline();
@@ -75,6 +76,11 @@ export function Nouveau({ surTermine }) {
         duree: total,
       });
       setSonde({ ...vue, enCours: false });
+      const retenu = vue.investigation?.record;
+      if (retenu) {
+        setDossier({ ...retenu, auto: Boolean(vue.investigation.auto) });
+        appliquerDossier(retenu);
+      }
     } catch {
       setSonde(null);
     }
@@ -85,6 +91,7 @@ export function Nouveau({ surTermine }) {
     setFichier(null);
     setSecondes(0);
     setSonde(null);
+    setDossier(null);
     if (!choisi) return setLecture('');
     setLecture('Lecture des métadonnées…');
     try {
@@ -121,6 +128,21 @@ export function Nouveau({ surTermine }) {
    *  par la sonde : ce qui est déjà saisi n'est jamais écrasé, seulement
    *  complété.
    */
+  /** Charge le contexte Odoo d'un dossier retenu. */
+  async function appliquerDossier(choisi) {
+    try {
+      const pack = await api.odooContext(choisi.model, choisi.id);
+      appliquerContexte({
+        client: pack.client_company,
+        termes: pack.terms,
+        resume: pack.summary,
+      });
+    } catch {
+      // Le contexte est un bonus : son échec ne doit pas empêcher de
+      // retenir le dossier.
+    }
+  }
+
   function appliquerContexte({ client: societe, termes, resume, invites }) {
     if (societe) setClient((actuel) => actuel || societe);
     if (invites?.length) {
@@ -210,18 +232,12 @@ export function Nouveau({ surTermine }) {
           </p>
           <Sonde
             etat={sonde}
-            surChoix={async (dossier) => {
-              try {
-                const pack = await api.odooContext(dossier.model, dossier.id);
-                appliquerContexte({
-                  client: pack.client_company,
-                  termes: pack.terms,
-                  resume: pack.summary,
-                });
-              } catch {
-                // Le contexte est un bonus : son échec ne doit pas
-                // empêcher de retenir le dossier proposé.
-              }
+            retenu={dossier}
+            surChoix={(choisi) => {
+              // Choisi à la main : on lie, mais on ne dépose pas sans
+              // demander — la personne vient justement de corriger.
+              setDossier({ ...choisi, auto: false });
+              appliquerDossier(choisi);
             }}
           />
           <Reunions surChoix={appliquerContexte} />
@@ -282,6 +298,14 @@ export function Nouveau({ surTermine }) {
                   expected_speaker_names: liste(participants),
                   glossary_terms: liste(glossaire),
                   odoo_context: contexteOdoo,
+                  // Décidé avant de partir : à la fin, le dépôt n'aura
+                  // plus rien à demander.
+                  ...(dossier
+                    ? {
+                        odoo_record: { model: dossier.model, record_id: dossier.id },
+                        odoo_auto: dossier.auto,
+                      }
+                    : {}),
                 },
               });
             }}
@@ -414,9 +438,7 @@ function Suggestions({ choisis, surAjout }) {
  *  visible par toute l'équipe. Le reste peut tourner seul ; ce choix-là
  *  se valide d'un clic.
  */
-function Sonde({ etat, surChoix }) {
-  const [retenu, setRetenu] = useState(null);
-
+function Sonde({ etat, retenu, surChoix }) {
   if (!etat) return null;
   if (etat.enCours) {
     return (
@@ -467,6 +489,15 @@ function Sonde({ etat, surChoix }) {
               ? `${CERTITUDE[enquete.confidence] || 'Dossier proposé'} — ${enquete.reason}`
               : 'Dossiers Odoo correspondants — en choisir un charge son contexte.'}
           </p>
+          {retenu ? (
+            <p className="mt-1 text-[0.8125rem] text-turquoise-sombre">
+              {retenu.auto
+                ? 'La transcription sera déposée ici automatiquement, sans te '
+                  + 'redemander.'
+                : 'Dossier retenu : la transcription attendra ton clic pour être '
+                  + 'déposée.'}
+            </p>
+          ) : null}
           {enquete.record && (etat.candidates || []).length > 1 ? (
             <p className="mt-1 text-[0.75rem] text-fonce/45">
               Le premier est celui retenu ; les suivants ont aussi été
@@ -478,9 +509,11 @@ function Sonde({ etat, surChoix }) {
               <li key={`${dossier.model}-${dossier.id}`}>
                 <button
                   type="button"
-                  onClick={() => { setRetenu(dossier.id); surChoix(dossier); }}
+                  onClick={() => surChoix(dossier)}
                   className={`w-full rounded-md px-2 py-1.5 text-left text-[0.875rem] hover:bg-papier ${
-                    retenu === dossier.id ? 'ring-1 ring-turquoise-sombre' : ''
+                    retenu && retenu.id === dossier.id && retenu.model === dossier.model
+                      ? 'ring-1 ring-turquoise-sombre'
+                      : ''
                   }`}
                 >
                   <span className="titre font-medium">{dossier.name}</span>

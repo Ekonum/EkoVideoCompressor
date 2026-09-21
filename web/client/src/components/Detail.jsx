@@ -251,8 +251,35 @@ function Odoo({ fiche, jobId, surMaj, surNote, surErreur }) {
   return (
     <div>
       <h2 className="titre text-[1.0625rem] font-medium">Odoo</h2>
-      <p className="mt-1 text-[0.8125rem] text-fonce/55">
-        Déposer la transcription dans le chatter, repliée en accordéon.
+      {lien.record_id ? (
+        <div className="mt-2 rounded-lg bg-papier p-3">
+          <p className="text-[0.875rem]">
+            Dossier retenu avant la transcription :{' '}
+            <span className="titre font-medium">{lien.model} #{lien.record_id}</span>
+          </p>
+          <Bouton
+            className="mt-2"
+            disabled={envoi}
+            onClick={async () => {
+              setEnvoi(true);
+              try {
+                await api.odooPublish(jobId, {
+                  model: lien.model, record_id: lien.record_id,
+                });
+                surNote('Déposée dans le dossier retenu.');
+                surMaj();
+              } catch (e) { surErreur(e.message); }
+              finally { setEnvoi(false); }
+            }}
+          >
+            Déposer ici
+          </Bouton>
+        </div>
+      ) : null}
+      <p className="mt-3 text-[0.8125rem] text-fonce/55">
+        {lien.record_id
+          ? 'Ou chercher un autre dossier.'
+          : 'Déposer la transcription dans le chatter, repliée en accordéon.'}
       </p>
       <div className="mt-2">
         <Champ

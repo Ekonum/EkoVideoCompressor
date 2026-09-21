@@ -50,6 +50,7 @@ def _settings(root: Path, **overrides) -> Settings:
         odoo_broker_field="Clé API",
         secret_key=_CLE_DE_TEST,
         monthly_budget_usd=50.0,
+        liaison_auto="certaine",
         sonde_ignore=frozenset({"odoo", "ekonum"}),
         dev_mode=True,
         dev_user_email="robin@ekonum.fr",
@@ -984,6 +985,140 @@ class EnqueteurTestCase(unittest.TestCase):
         ])
         self.assertEqual(conclusion.usage.input_tokens, 200)
         self.assertGreater(conclusion.usage.cost_usd, 0)
+
+
+class LiaisonAutomatiqueTestCase(_Fixture):
+    """Lier seul quand c'est sûr, demander sinon, ne jamais casser."""
+
+    class Chatter:
+        def __init__(self, *, casse=False, canal=True):
+            self.casse = casse
+            self.canal = canal
+            self.publies: list[tuple] = []
+            self.pings: list[str] = []
+            self.activites: list[tuple] = []
+
+        def publier(self, modele, record_id, corps):
+            from app.chatter import ChatterError
+
+            if self.casse:
+                raise ChatterError("Odoo a refusé la note (HTTP 500).")
+            self.publies.append((modele, record_id, corps))
+            return 4242
+
+        def prevenir(self, partner_id, texte):
+            if not self.canal:
+                return None
+            self.pings.append(texte)
+            return 77
+
+        def activite(self, modele, record_id, user_id, resume, note=""):
+            self.activites.append((modele, record_id, user_id, resume))
+            return 88
+
+    def _passerelle(self, chatter):
+        from app.odoo import OdooGateway
+
+        class Passerelle(OdooGateway):
+            def __init__(self):
+                super().__init__(url="https://www.ekonum.fr", database="d",
+                                 login="robin@ekonum.fr", api_key="k")
+
+            def chatter(self_inner):
+                return chatter
+
+            def identite(self_inner):
+                return {"user_id": 6, "partner_id": 10}
+
+        return Passerelle()
+
+    def _transcrire(self, chatter, **contexte):
+        app = create_app(
+            self.settings,
+            database=self.db,
+            gemini_key=GeminiKey(url="", token="", item="", field="", static_key="k"),
+            odoo_factory=lambda _: self._passerelle(chatter),
+        )
+        with TestClient(app) as client:
+            job = client.post("/api/jobs", json={
+                "filename": "reunion.mov", "duration_seconds": 600.0,
+                "model": "gemini-3.8-flash", "language": "fr",
+                "context": {"client_company": "Acritec", **contexte},
+            }).json()
+            for fenetre in job["chunks"]:
+                client.put(f"/api/jobs/{job['job_id']}/chunks/{fenetre['index']}",
+                           content=b"audio")
+            return client.post(f"/api/jobs/{job['job_id']}/finalize").json(), job
+
+    def test_depose_et_previent_sans_rien_demander(self):
+        chatter = self.Chatter()
+        vue, job = self._transcrire(
+            chatter,
+            odoo_record={"model": "crm.lead", "record_id": 364},
+            odoo_auto=True,
+        )
+        self.assertTrue(vue["odoo"]["published"])
+        self.assertEqual(vue["odoo"]["message_id"], 4242)
+        self.assertEqual(vue["odoo"]["notified"], "odoobot")
+        self.assertEqual(chatter.publies[0][:2], ("crm.lead", 364))
+        # Le lien est enregistré : reposter empilerait deux copies.
+        self.assertEqual(self.db.get_job(job["job_id"])["odoo_message_id"], 4242)
+
+    def test_sans_certitude_le_dossier_attend_un_clic(self):
+        chatter = self.Chatter()
+        vue, _ = self._transcrire(
+            chatter, odoo_record={"model": "crm.lead", "record_id": 364}
+        )
+        self.assertTrue(vue["odoo"]["pending"])
+        self.assertEqual(chatter.publies, [])
+
+    def test_un_depot_rate_ne_perd_pas_la_transcription(self):
+        chatter = self.Chatter(casse=True)
+        vue, job = self._transcrire(
+            chatter,
+            odoo_record={"model": "crm.lead", "record_id": 364},
+            odoo_auto=True,
+        )
+        self.assertFalse(vue["odoo"]["published"])
+        self.assertIn("refusé", vue["odoo"]["error"])
+        self.assertTrue(vue["transcript"])
+        # Rien n'est marqué comme publié : le bouton reste disponible.
+        self.assertIsNone(self.db.get_job(job["job_id"])["odoo_message_id"])
+
+    def test_sans_conversation_odoobot_on_pose_une_activite(self):
+        chatter = self.Chatter(canal=False)
+        vue, _ = self._transcrire(
+            chatter,
+            odoo_record={"model": "crm.lead", "record_id": 364},
+            odoo_auto=True,
+        )
+        self.assertEqual(vue["odoo"]["notified"], "activite")
+        self.assertEqual(chatter.activites[0][:3], ("crm.lead", 364, 6))
+
+    def test_sans_dossier_choisi_rien_ne_se_passe(self):
+        chatter = self.Chatter()
+        vue, _ = self._transcrire(chatter)
+        self.assertEqual(vue["odoo"], {})
+
+
+class SeuilDeLiaisonTestCase(unittest.TestCase):
+    """Le seuil décide seul de ce qui se lie sans demander."""
+
+    def test_l_echelle_est_respectee(self):
+        from app.main import liaison_sans_demander
+
+        self.assertTrue(liaison_sans_demander("certaine", "certaine"))
+        self.assertFalse(liaison_sans_demander("probable", "certaine"))
+        self.assertTrue(liaison_sans_demander("probable", "probable"))
+        self.assertTrue(liaison_sans_demander("certaine", "probable"))
+        self.assertFalse(liaison_sans_demander("incertaine", "probable"))
+
+    def test_jamais_et_valeurs_inconnues_ne_lient_rien(self):
+        from app.main import liaison_sans_demander
+
+        self.assertFalse(liaison_sans_demander("certaine", "jamais"))
+        self.assertFalse(liaison_sans_demander("certaine", ""))
+        self.assertFalse(liaison_sans_demander("aucune", "certaine"))
 
 
 class ApiTokenTestCase(_Fixture):

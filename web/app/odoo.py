@@ -226,6 +226,32 @@ class OdooGateway:
             ],
         }
 
+    def identite(self) -> dict[str, int]:
+        """Qui est cette personne dans Odoo — utilisateur et partenaire.
+
+        Le ping et l'activité s'adressent à quelqu'un : sans cette
+        correspondance, on ne saurait pas à qui.
+        """
+        from odoo_client import _json2_call
+
+        try:
+            lignes = _json2_call(
+                self._config(), "res.users", "search_read",
+                {"domain": [["login", "=", self._login]],
+                 "fields": ["partner_id"], "limit": 1},
+            )
+        except OdooError as exc:
+            raise OdooUnavailable(_lisible(exc, self._database)) from exc
+        if not lignes:
+            raise OdooUnavailable(
+                f"Aucun utilisateur Odoo pour {self._login} sur cette base."
+            )
+        partenaire = lignes[0].get("partner_id") or [0, ""]
+        return {
+            "user_id": int(lignes[0].get("id") or 0),
+            "partner_id": int(partenaire[0] if isinstance(partenaire, list) else 0),
+        }
+
     def chatter(self):
         """Client d'écriture dans le chatter, sous la même identité."""
         from .chatter import OdooChatter

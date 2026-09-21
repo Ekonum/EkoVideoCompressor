@@ -65,6 +65,12 @@ class Settings:
     # Garde-fou budget : plafond d'équipe, la clé Gemini étant partagée.
     monthly_budget_usd: float
 
+    # À partir de quelle certitude la liaison se fait sans demander :
+    # « certaine », « probable », ou « jamais » pour tout valider à la
+    # main. Une mauvaise liaison dépose la transcription chez un autre
+    # client : le défaut est donc le plus prudent qui reste utile.
+    liaison_auto: str
+
     # Termes que la sonde ne doit pas chercher dans Odoo : notre propre
     # nom et celui du produit qu'on vend reviennent dans presque tous
     # les dossiers, donc ne désignent personne.
@@ -113,6 +119,9 @@ class Settings:
             odoo_broker_field=os.environ.get("EKOVIDEO_ODOO_BROKER_FIELD", "Clé API"),
             secret_key=os.environ.get("EKOVIDEO_SECRET_KEY", "").strip(),
             monthly_budget_usd=float(os.environ.get("EKOVIDEO_MONTHLY_BUDGET_USD", "50")),
+            liaison_auto=os.environ.get("EKOVIDEO_LIAISON_AUTO", "certaine")
+            .strip()
+            .lower(),
             sonde_ignore=frozenset(
                 terme.strip().lower()
                 for terme in os.environ.get(

@@ -136,6 +136,112 @@ class OdooChatter:
         return message_id
 
 
+    # ------------------------------------------------------------------
+    # Prévenir : le travail est fait, ou il demande un regard.
+    # ------------------------------------------------------------------
+
+    # Partenaire d'OdooBot : `base.partner_root`, id 2 dans toute base
+    # Odoo. Il est archivé (`active = False`), ce qui le rend invisible
+    # aux recherches — d'où l'identifiant en dur plutôt qu'un
+    # `search_read` qui renverrait toujours vide.
+    BOT = 2
+
+    def canal_prive(self, partner_id: int) -> int | None:
+        """La conversation OdooBot de cette personne, si elle existe."""
+        canaux = self._appel(
+            "discuss.channel",
+            "search_read",
+            {
+                "domain": [
+                    ["channel_type", "=", "chat"],
+                    ["channel_member_ids.partner_id", "=", int(partner_id)],
+                    ["channel_member_ids.partner_id", "=", self.BOT],
+                ],
+                "fields": ["id"],
+                "limit": 1,
+            },
+        )
+        return int(canaux[0]["id"]) if canaux else None
+
+    def prevenir(self, partner_id: int, texte_html: str) -> int | None:
+        """Ping dans la conversation OdooBot. Rend l'identifiant du
+        message, ou ``None`` si la personne n'a pas cette conversation.
+
+        Le message est signé **OdooBot**, pas la personne : un message
+        qu'on s'écrit à soi-même ne déclenche aucune notification, donc
+        ne prévient personne.
+        """
+        canal = self.canal_prive(partner_id)
+        if canal is None:
+            return None
+        charge = {
+            "ids": [canal],
+            "body": texte_html,
+            "message_type": "comment",
+            "subtype_xmlid": "mail.mt_comment",
+            "author_id": self.BOT,
+        }
+        try:
+            reponse = self._appel("discuss.channel", "message_post", charge)
+        except ChatterError:
+            # Une base qui refuse d'écrire au nom d'OdooBot vaut mieux
+            # qu'un silence : on signe de la personne et on prévient
+            # quand même.
+            charge.pop("author_id")
+            reponse = self._appel("discuss.channel", "message_post", charge)
+        return _identifiant(reponse)
+
+    def activite(
+        self, modele: str, record_id: int, user_id: int, resume: str, note: str = ""
+    ) -> int | None:
+        """Repli : une activité sur le dossier, à défaut de conversation.
+
+        Moins direct qu'un ping, mais ça atterrit dans la liste des
+        choses à faire — donc ça ne se perd pas.
+        """
+        modeles = self._appel(
+            "ir.model", "search_read",
+            {"domain": [["model", "=", modele]], "fields": ["id"], "limit": 1},
+        )
+        if not modeles:
+            return None
+        types = self._appel(
+            "mail.activity.type", "search_read",
+            {"domain": [["category", "=", "default"]], "fields": ["id"], "limit": 1},
+        )
+        return _identifiant(
+            self._appel(
+                "mail.activity",
+                "create",
+                {
+                    "vals_list": [
+                        {
+                            "res_model_id": int(modeles[0]["id"]),
+                            "res_id": int(record_id),
+                            "user_id": int(user_id),
+                            "summary": resume[:200],
+                            "note": note,
+                            **({"activity_type_id": int(types[0]["id"])} if types else {}),
+                        }
+                    ]
+                },
+            )
+        )
+
+
+def _identifiant(reponse: Any) -> int | None:
+    """Odoo rend tantôt un entier, tantôt une liste, tantôt un dict."""
+    if isinstance(reponse, int):
+        return reponse
+    if isinstance(reponse, list) and reponse:
+        return _identifiant(reponse[0])
+    if isinstance(reponse, dict):
+        for cle in ("id", "message_id"):
+            if isinstance(reponse.get(cle), int):
+                return int(reponse[cle])
+    return None
+
+
 def deja_publie(corps: str) -> bool:
     """Un accordéon est-il déjà présent ? Sert à ne pas empiler."""
     return bool(re.search(r"<details", corps or "", re.IGNORECASE))

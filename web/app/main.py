@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import html
 import logging
 import os
 import time
@@ -90,6 +91,16 @@ MAX_CHUNK_BYTES = 60 * 1024 * 1024
 # Cinq minutes en MP3 64 kbit/s pèsent 2,4 Mo : la marge permet une
 # fenêtre un peu plus large, pas le dépôt d'une réunion entière.
 MAX_SONDE_BYTES = 8 * 1024 * 1024
+
+# Du plus sûr au moins sûr. Lier sans demander à partir de « probable »
+# est un réglage possible ; ce n'est pas le défaut.
+ECHELLE = ["certaine", "probable", "incertaine"]
+
+
+def liaison_sans_demander(confiance: str, seuil: str) -> bool:
+    if seuil not in ECHELLE or confiance not in ECHELLE:
+        return False
+    return ECHELLE.index(confiance) <= ECHELLE.index(seuil)
 
 
 class JobRequest(BaseModel):
@@ -170,6 +181,8 @@ class FinalizeResponse(BaseModel):
     speakers: dict[str, str]
     technical_terms: list[str]
     cost_usd: float
+    # Ce qu'il est advenu du dépôt automatique, quand il y en avait un.
+    odoo: dict[str, Any] = Field(default_factory=dict)
 
 
 def create_app(
@@ -342,6 +355,16 @@ def create_app(
             context=payload.context,
             chunks=windows,
         )
+        # Le dossier choisi avant la transcription est retenu maintenant :
+        # à la fin, le dépôt n'aura plus rien à demander.
+        dossier = payload.context.get("odoo_record") or {}
+        if dossier.get("model") and dossier.get("record_id"):
+            db.set_odoo_link(
+                job_id,
+                model=str(dossier["model"]),
+                record_id=int(dossier["record_id"]),
+                message_id=None,
+            )
         # Enregistré maintenant, pas à la fin : ajouter « Acritec » doit
         # faire remonter les termes qui l'accompagnent dès la réunion
         # suivante, même si celle-ci échoue.
@@ -455,6 +478,7 @@ def create_app(
         for c in chunks:
             _discard(config.chunk_dir / f"job{job_id}_chunk{c['idx']}{CHUNK_SUFFIX}")
         return FinalizeResponse(
+            odoo=_deposer_seul(db.get_job(job_id) or job, merged.title, text),
             job_id=job_id,
             title=merged.title,
             transcript=text,
@@ -464,6 +488,73 @@ def create_app(
         )
 
     # -- bibliothèque --------------------------------------------------
+
+    def _deposer_seul(job: dict, titre: str, transcript: str) -> dict:
+        """Dépose la transcription et prévient, si tout était décidé.
+
+        La transcription est déjà enregistrée quand on arrive ici : un
+        dépôt raté ne doit donc rien casser, seulement se raconter. Le
+        bouton « Déposer dans Odoo » reste la porte de secours.
+        """
+        modele = str(job["odoo_model"] or "")
+        record_id = int(job["odoo_record_id"] or 0)
+        contexte = json.loads(job["context_json"] or "{}")
+        if not (modele and record_id) or job["odoo_message_id"]:
+            return {}
+        if not contexte.get("odoo_auto"):
+            return {"pending": True, "model": modele, "record_id": record_id}
+
+        owner_id = int(job["owner_id"])
+        try:
+            passerelle = odoo_pour(owner_id)
+            chatter = passerelle.chatter()
+            message_id = chatter.publier(
+                modele,
+                record_id,
+                composer(titre or "Transcription complète", transcript,
+                         entete="Déposé automatiquement par transcript.ekonum.fr."),
+            )
+        except (ChatterError, OdooUnavailable, CoffreIndisponible) as exc:
+            log.warning("dépôt automatique impossible (job %s) : %s", job["id"], exc)
+            return {"published": False, "error": str(exc),
+                    "model": modele, "record_id": record_id}
+
+        db.set_odoo_link(int(job["id"]), model=modele, record_id=record_id,
+                         message_id=message_id)
+        return {
+            "published": True,
+            "message_id": message_id,
+            "model": modele,
+            "record_id": record_id,
+            **_prevenir(passerelle, chatter, modele, record_id, titre),
+        }
+
+    def _prevenir(passerelle, chatter, modele: str, record_id: int, titre: str) -> dict:
+        """Dit que c'est fait, là où la personne le verra.
+
+        La conversation OdooBot d'abord, une activité sur le dossier à
+        défaut. Ne pas prévenir n'annule pas le dépôt : c'est signalé,
+        pas fatal.
+        """
+        lien = f"{config.odoo_url.rstrip('/')}/odoo/{modele.split('.')[0]}/{record_id}"
+        texte = (
+            f'Transcription déposée : <b>{html.escape(titre or "réunion")}</b> — '
+            f'<a href="{html.escape(lien)}">ouvrir le dossier</a>.'
+        )
+        try:
+            identite = passerelle.identite()
+            message = chatter.prevenir(identite["partner_id"], texte)
+            if message:
+                return {"notified": "odoobot"}
+            activite = chatter.activite(
+                modele, record_id, identite["user_id"],
+                f"Transcription déposée : {titre or 'réunion'}",
+                "Déposée automatiquement, à relire.",
+            )
+            return {"notified": "activite" if activite else "aucun"}
+        except (ChatterError, OdooUnavailable) as exc:
+            log.warning("ping impossible : %s", exc)
+            return {"notified": "aucun", "notify_error": str(exc)}
 
     @app.get("/api/jobs")
     def list_jobs(owner_id: int = Depends(current_user)) -> list[dict]:
@@ -805,7 +896,15 @@ def create_app(
         return {
             "clues": indices.to_dict(),
             "cost_usd": round(indices.usage.cost_usd + enquete.usage.cost_usd, 6),
-            "investigation": enquete.to_dict(),
+            "investigation": {
+                **enquete.to_dict(),
+                # L'interface n'a pas à connaître le seuil : elle a
+                # besoin de savoir si elle doit demander.
+                "auto": bool(
+                    enquete.dossier
+                    and liaison_sans_demander(enquete.confiance, config.liaison_auto)
+                ),
+            },
             # Le repli : la recherche directe reste là quand l'enquête
             # renonce, pour que la personne ait quand même une liste.
             # Le retenu d'abord, ses alternatives ensuite : se corriger
