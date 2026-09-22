@@ -96,6 +96,21 @@ CREATE INDEX IF NOT EXISTS idx_usage_created ON api_usage(created_at);
 -- Odoo, un serveur MCP. Seule l'empreinte est stockée — un vol de base
 -- ne doit pas rendre les jetons utilisables, et personne (pas même
 -- l'interface) ne peut réafficher un jeton après sa création.
+-- Enrôlement d'un appareil : l'app macOS obtient un jeton sans qu'on
+-- ait à recopier quoi que ce soit à la main. Le code appareil est
+-- stocké haché, comme un jeton ; le code humain, court et lisible, ne
+-- vaut que le temps de la validation.
+CREATE TABLE IF NOT EXISTS enrolements (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    appareil          TEXT NOT NULL DEFAULT '',
+    code_appareil_sha TEXT NOT NULL UNIQUE,
+    code_humain       TEXT NOT NULL UNIQUE,
+    owner_id          INTEGER REFERENCES users(id),
+    statut            TEXT NOT NULL DEFAULT 'en_attente',
+    created_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at        TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS api_tokens (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     owner_id     INTEGER NOT NULL REFERENCES users(id),
@@ -670,6 +685,107 @@ class Database:
                 (owner_id, (name or "").strip() or "sans nom", _digest(secret)),
             )
             return int(cursor.lastrowid), secret
+
+    # -- enrôlement d'appareil --------------------------------------------
+
+    # Alphabet sans O/0/I/1 : le code se lit à voix haute et se recopie
+    # depuis une fenêtre d'application.
+    ALPHABET_CODE = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+    def ouvrir_enrolement(
+        self, appareil: str, *, minutes: int = 15
+    ) -> tuple[str, str, str]:
+        """Ouvre une demande et rend (code appareil, code humain, échéance).
+
+        Le code appareil est un secret que seule l'app connaît ; le code
+        humain s'affiche pour être reconnu dans le navigateur. Les deux
+        expirent vite : une demande oubliée ne doit pas rester ouverte.
+        """
+        code_appareil = "ekd_" + secrets.token_urlsafe(32)
+        with self.connect() as conn:
+            for _ in range(10):
+                code_humain = "-".join(
+                    "".join(secrets.choice(self.ALPHABET_CODE) for _ in range(4))
+                    for _ in range(2)
+                )
+                if not conn.execute(
+                    "SELECT 1 FROM enrolements WHERE code_humain = ?", (code_humain,)
+                ).fetchone():
+                    break
+            else:  # pragma: no cover - 32^8 collisions d'affilée
+                raise RuntimeError("Impossible de tirer un code d'enrôlement libre.")
+            echeance = (datetime.now() + timedelta(minutes=minutes)).isoformat(
+                timespec="seconds"
+            )
+            conn.execute(
+                "INSERT INTO enrolements (appareil, code_appareil_sha, code_humain, "
+                "expires_at) VALUES (?, ?, ?, ?)",
+                ((appareil or "").strip()[:120] or "appareil inconnu",
+                 _digest(code_appareil), code_humain, echeance),
+            )
+        return code_appareil, code_humain, echeance
+
+    def enrolement_par_code_humain(self, code: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            ligne = conn.execute(
+                "SELECT * FROM enrolements WHERE code_humain = ?",
+                ((code or "").strip().upper(),),
+            ).fetchone()
+        return dict(ligne) if ligne else None
+
+    def approuver_enrolement(self, code: str, owner_id: int) -> bool:
+        """Valide une demande. Faux si elle est inconnue, expirée ou déjà
+        traitée — dans les trois cas, l'appareil doit recommencer."""
+        demande = self.enrolement_par_code_humain(code)
+        if not demande or demande["statut"] != "en_attente":
+            return False
+        if demande["expires_at"] < datetime.now().isoformat(timespec="seconds"):
+            return False
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE enrolements SET statut = 'approuve', owner_id = ? WHERE id = ?",
+                (owner_id, demande["id"]),
+            )
+        return True
+
+    def reclamer_enrolement(self, code_appareil: str) -> dict[str, Any]:
+        """L'appareil vient chercher son jeton.
+
+        Rend ``{"statut": ...}`` et, une seule fois, le jeton. La demande
+        est close dans la foulée : un code appareil rejoué ne redonne
+        jamais un second jeton.
+        """
+        with self.connect() as conn:
+            ligne = conn.execute(
+                "SELECT * FROM enrolements WHERE code_appareil_sha = ?",
+                (_digest(code_appareil),),
+            ).fetchone()
+        if ligne is None:
+            return {"statut": "inconnu"}
+        demande = dict(ligne)
+        if demande["statut"] != "approuve":
+            if demande["expires_at"] < datetime.now().isoformat(timespec="seconds"):
+                return {"statut": "expire"}
+            return {"statut": demande["statut"]}
+        token_id, secret = self.create_api_token(
+            int(demande["owner_id"]), f"appareil — {demande['appareil']}"
+        )
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE enrolements SET statut = 'consomme' WHERE id = ?",
+                (demande["id"],),
+            )
+        return {"statut": "approuve", "token": secret, "token_id": token_id,
+                "email": self.email_for_user(int(demande["owner_id"]))}
+
+    def purger_enrolements(self) -> int:
+        """Les demandes mortes ne servent plus qu'à encombrer."""
+        with self.connect() as conn:
+            curseur = conn.execute(
+                "DELETE FROM enrolements WHERE statut = 'consomme' OR expires_at < ?",
+                (datetime.now().isoformat(timespec="seconds"),),
+            )
+            return curseur.rowcount or 0
 
     def owner_for_api_token(self, secret: str) -> int | None:
         """Propriétaire d'un jeton valide, ou None.

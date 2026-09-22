@@ -37,6 +37,9 @@ export const api = {
   vocabulary: (selected) =>
     call('GET', `/api/vocabulary?selected=${encodeURIComponent(selected.join(','))}`),
   settings: () => call('GET', '/api/settings'),
+  enrolement: (code) => call('GET', `/api/enroll/${encodeURIComponent(code)}`),
+  approuverEnrolement: (code) =>
+    call('POST', `/api/enroll/${encodeURIComponent(code)}/approve`, {}),
   probe: async (octets, type, moment = '') => {
     const response = await fetch(`/api/probe?moment=${encodeURIComponent(moment)}`, {
       method: 'POST', headers: { 'Content-Type': type }, body: octets,

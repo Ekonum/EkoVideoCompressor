@@ -65,6 +65,17 @@ class Settings:
     # Garde-fou budget : plafond d'équipe, la clé Gemini étant partagée.
     monthly_budget_usd: float
 
+    # L'adresse publique du service, pour les liens qu'on affiche
+    # ailleurs que dans le navigateur — l'app macOS ne peut pas la
+    # deviner.
+    public_url: str
+
+    # Enrôlement d'appareil : éteint tant que l'équipe n'a pas fini ses
+    # essais. L'allumer suppose aussi d'ouvrir un chemin dans Cloudflare
+    # Access — aujourd'hui l'API est protégée deux fois, et une app
+    # macOS ne peut pas franchir Access.
+    enrolement: bool
+
     # Combien de jours une réunion reste récupérable dans la corbeille.
     # 0 supprime immédiatement — à n'utiliser que si on sait pourquoi.
     corbeille_jours: int
@@ -123,6 +134,11 @@ class Settings:
             odoo_broker_field=os.environ.get("EKOVIDEO_ODOO_BROKER_FIELD", "Clé API"),
             secret_key=os.environ.get("EKOVIDEO_SECRET_KEY", "").strip(),
             monthly_budget_usd=float(os.environ.get("EKOVIDEO_MONTHLY_BUDGET_USD", "50")),
+            public_url=os.environ.get(
+                "EKOVIDEO_PUBLIC_URL", "https://transcript.ekonum.fr"
+            ).strip(),
+            enrolement=os.environ.get("EKOVIDEO_ENROLEMENT", "").strip().lower()
+            in {"1", "true", "oui"},
             corbeille_jours=int(os.environ.get("EKOVIDEO_CORBEILLE_JOURS", "30")),
             liaison_auto=os.environ.get("EKOVIDEO_LIAISON_AUTO", "certaine")
             .strip()

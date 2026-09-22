@@ -175,6 +175,16 @@ class VocabularyRecord(BaseModel):
     terms: list[str] = Field(default_factory=list)
 
 
+class DemandeAppareil(BaseModel):
+    """Ce qu'un appareil dit de lui en demandant à être enrôlé."""
+
+    appareil: str = Field(default="", max_length=120)
+
+
+class CodeAppareil(BaseModel):
+    code_appareil: str = Field(min_length=8, max_length=128)
+
+
 class FinalizeResponse(BaseModel):
     job_id: int
     title: str
@@ -710,6 +720,81 @@ def create_app(
         # vers cette seule fenêtre, sans repayer les autres.
         db.set_job_status(job_id, "en_attente")
         return {"reset": index}
+
+    # -- enrôlement d'un appareil ----------------------------------------
+    #
+    # Le motif est celui des téléviseurs : l'appareil affiche un code
+    # court, la personne l'ouvre dans son navigateur — déjà authentifiée
+    # par Access — et valide. L'appareil repart avec son propre jeton.
+    # Rien à recopier, aucun mot de passe nulle part.
+
+    def _enrolement_ouvert() -> None:
+        if not config.enrolement:
+            # 404 plutôt que 403 : tant que la fonction dort, elle
+            # n'existe pas.
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Chemin inconnu.")
+
+    @app.post("/api/enroll/device", status_code=status.HTTP_201_CREATED)
+    def enroler_appareil(payload: DemandeAppareil) -> dict:
+        """Ouvre une demande. Seule route sans authentification.
+
+        Elle ne donne rien : un code appareil inutile tant qu'un humain
+        n'a pas validé dans son navigateur, et qui expire en quinze
+        minutes.
+        """
+        _enrolement_ouvert()
+        db.purger_enrolements()
+        code_appareil, code_humain, echeance = db.ouvrir_enrolement(payload.appareil)
+        return {
+            "code_appareil": code_appareil,
+            "code_humain": code_humain,
+            # La racine, pas un chemin dédié : l'interface est une page
+            # unique, et seul ce paramètre la fait bifurquer.
+            "url": f"{config.public_url.rstrip('/')}/?code={code_humain}",
+            "expire_le": echeance,
+        }
+
+    @app.get("/api/enroll/{code_humain}")
+    def voir_enrolement(code_humain: str, owner_id: int = Depends(human_user)) -> dict:
+        """Ce que la personne doit voir avant de valider : quel appareil,
+        demandé quand."""
+        _enrolement_ouvert()
+        demande = db.enrolement_par_code_humain(code_humain)
+        if not demande:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Code inconnu ou expiré.")
+        return {
+            "appareil": demande["appareil"],
+            "statut": demande["statut"],
+            "demande_le": demande["created_at"],
+            "expire_le": demande["expires_at"],
+        }
+
+    @app.post("/api/enroll/{code_humain}/approve")
+    def approuver_enrolement(
+        code_humain: str, owner_id: int = Depends(human_user)
+    ) -> dict:
+        """Valide l'appareil, sous **son** identité.
+
+        `human_user` : un jeton d'API ne peut pas enrôler un appareil de
+        plus. Sinon un jeton volé se multiplierait tout seul.
+        """
+        _enrolement_ouvert()
+        if not db.approuver_enrolement(code_humain, owner_id):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Demande inconnue, expirée ou déjà traitée. Relance "
+                "l'enrôlement depuis l'application.",
+            )
+        return {"statut": "approuve"}
+
+    @app.post("/api/enroll/token")
+    def reclamer_jeton(payload: CodeAppareil) -> dict:
+        """L'appareil vient chercher son jeton, une seule fois."""
+        _enrolement_ouvert()
+        vue = db.reclamer_enrolement(payload.code_appareil)
+        if vue["statut"] == "inconnu":
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Demande inconnue.")
+        return vue
 
     @app.get("/api/me")
     def me(request: Request, owner_id: int = Depends(current_user)) -> dict:

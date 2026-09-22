@@ -51,6 +51,8 @@ def _settings(root: Path, **overrides) -> Settings:
         secret_key=_CLE_DE_TEST,
         monthly_budget_usd=50.0,
         corbeille_jours=30,
+        public_url="https://transcript.test",
+        enrolement=True,
         liaison_auto="certaine",
         sonde_ignore=frozenset({"odoo", "ekonum"}),
         dev_mode=True,
@@ -1473,6 +1475,97 @@ class ImportTestCase(_Fixture):
         jeton = self.client.post("/api/tokens", json={"name": "reprise"}).json()["token"]
         client = TestClient(self.app, headers={"Authorization": f"Bearer {jeton}"})
         self.assertTrue(client.post("/api/jobs/import", json=self.REUNION).json()["imported"])
+
+
+class EnrolementTestCase(_Fixture):
+    """Un appareil obtient un jeton sans qu'on recopie quoi que ce soit."""
+
+    def _ouvrir(self, appareil="MacBook de Robin"):
+        vue = self.client.post("/api/enroll/device", json={"appareil": appareil})
+        self.assertEqual(vue.status_code, 201, vue.text)
+        return vue.json()
+
+    def test_le_parcours_complet_rend_un_jeton_utilisable(self):
+        demande = self._ouvrir()
+        self.assertEqual(demande["url"],
+                         f"https://transcript.test/?code={demande['code_humain']}")
+
+        # Tant que personne n'a validé, l'appareil n'a rien.
+        attente = self.client.post("/api/enroll/token",
+                                   json={"code_appareil": demande["code_appareil"]})
+        self.assertEqual(attente.json()["statut"], "en_attente")
+        self.assertNotIn("token", attente.json())
+
+        vue = self.client.get(f"/api/enroll/{demande['code_humain']}").json()
+        self.assertEqual(vue["appareil"], "MacBook de Robin")
+        self.assertEqual(self.client.post(
+            f"/api/enroll/{demande['code_humain']}/approve").status_code, 200)
+
+        recu = self.client.post("/api/enroll/token",
+                                json={"code_appareil": demande["code_appareil"]}).json()
+        self.assertTrue(recu["token"].startswith("ekt_"))
+        self.assertEqual(recu["email"], "robin@ekonum.fr")
+
+        # Le jeton vaut pour l'API : c'est tout l'objet de l'enrôlement.
+        identite = self.client.get(
+            "/api/me", headers={"Authorization": f"Bearer {recu['token']}"}).json()
+        self.assertEqual(identite["email"], "robin@ekonum.fr")
+
+    def test_un_code_appareil_ne_donne_jamais_deux_jetons(self):
+        demande = self._ouvrir()
+        self.client.post(f"/api/enroll/{demande['code_humain']}/approve")
+        self.client.post("/api/enroll/token",
+                         json={"code_appareil": demande["code_appareil"]})
+        second = self.client.post("/api/enroll/token",
+                                  json={"code_appareil": demande["code_appareil"]})
+        self.assertEqual(second.json()["statut"], "consomme")
+        self.assertNotIn("token", second.json())
+
+    def test_un_jeton_d_api_ne_peut_pas_enroler_un_appareil_de_plus(self):
+        """Sinon un jeton volé se multiplierait tout seul."""
+        jeton = self.client.post("/api/tokens", json={"name": "script"}).json()["token"]
+        demande = self._ouvrir()
+        refus = self.client.post(
+            f"/api/enroll/{demande['code_humain']}/approve",
+            headers={"Authorization": f"Bearer {jeton}"},
+        )
+        self.assertEqual(refus.status_code, 403)
+
+    def test_une_demande_expiree_est_refusee(self):
+        from datetime import datetime, timedelta
+
+        demande = self._ouvrir()
+        with self.db.connect() as conn:
+            conn.execute(
+                "UPDATE enrolements SET expires_at = ? WHERE code_humain = ?",
+                ((datetime.now() - timedelta(minutes=1)).isoformat(timespec="seconds"),
+                 demande["code_humain"]),
+            )
+        self.assertEqual(self.client.post(
+            f"/api/enroll/{demande['code_humain']}/approve").status_code, 409)
+        self.assertEqual(
+            self.client.post("/api/enroll/token",
+                             json={"code_appareil": demande["code_appareil"]}
+                             ).json()["statut"], "expire")
+
+    def test_un_code_invente_ne_donne_rien(self):
+        self.assertEqual(self.client.get("/api/enroll/ZZZZ-ZZZZ").status_code, 404)
+        self.assertEqual(self.client.post(
+            "/api/enroll/token", json={"code_appareil": "ekd_inconnu_aaaaaaaa"}
+        ).status_code, 404)
+
+    def test_eteint_la_fonction_n_existe_pas(self):
+        """Tant que l'équipe n'a pas fini ses essais, rien ne répond."""
+        app = create_app(
+            _settings(self.root, enrolement=False),
+            database=self.db,
+            gemini_key=GeminiKey(url="", token="", item="", field="", static_key="k"),
+        )
+        with TestClient(app) as client:
+            self.assertEqual(client.post("/api/enroll/device", json={}).status_code, 404)
+            self.assertEqual(client.post(
+                "/api/enroll/token", json={"code_appareil": "ekd_x" * 3}
+            ).status_code, 404)
 
 
 class CorbeilleTestCase(_Fixture):
