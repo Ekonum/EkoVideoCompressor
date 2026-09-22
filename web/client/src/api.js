@@ -34,8 +34,8 @@ export const api = {
   vocabulary: (selected) =>
     call('GET', `/api/vocabulary?selected=${encodeURIComponent(selected.join(','))}`),
   settings: () => call('GET', '/api/settings'),
-  probe: async (octets, type) => {
-    const response = await fetch('/api/probe', {
+  probe: async (octets, type, moment = '') => {
+    const response = await fetch(`/api/probe?moment=${encodeURIComponent(moment)}`, {
       method: 'POST', headers: { 'Content-Type': type }, body: octets,
     });
     if (!response.ok) throw new Error(await detail(response));

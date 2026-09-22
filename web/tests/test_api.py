@@ -849,6 +849,49 @@ class EnqueteurTestCase(unittest.TestCase):
             )
         return conclusion, faux
 
+    def test_l_agenda_se_consulte_en_premier_et_une_seule_fois(self):
+        """Une réunion inscrite à l'heure de l'enregistrement pointe
+        souvent déjà le dossier : c'est le signal le plus fiable."""
+        from unittest import mock
+
+        from app import enqueteur
+
+        appels = {"n": 0}
+
+        def agenda():
+            appels["n"] += 1
+            return [{"name": "Quentin Seyve", "start": "2026-09-21 16:00:00",
+                     "attendees": ["Robin"], "resource_model": "crm.lead",
+                     "resource_id": 898}]
+
+        faux = FauxGemini([
+            _appel("agenda"),
+            _appel("agenda"),
+            _appel("conclure", modele="crm.lead", record_id=898,
+                   confiance="probable", raison="La réunion pointe ce dossier."),
+        ])
+        fiche = {"model": "crm.lead", "id": 898, "name": "Seyve", "partner": "",
+                 "updated": "2026-09-21", "chatter": []}
+        with mock.patch.object(enqueteur, "GeminiClient", faux):
+            conclusion = enqueteur.enqueter(
+                self.INDICES,
+                chercher=lambda terme, modeles: [],
+                lire=lambda modele, record_id: fiche,
+                agenda=agenda,
+                api_key="k",
+            )
+        self.assertEqual(conclusion.dossier["id"], 898)
+        self.assertEqual(appels["n"], 1, "l'agenda ne se relit pas à chaque tour")
+        self.assertIn("agenda consulté → 1 réunion(s)", conclusion.journal)
+
+    def test_sans_agenda_l_enquete_continue(self):
+        conclusion, _ = self._mener([
+            _appel("agenda"),
+            _appel("conclure", confiance="aucune", raison="Rien dans l'agenda."),
+        ])
+        self.assertIsNone(conclusion.dossier)
+        self.assertIn("agenda indisponible", conclusion.journal)
+
     def test_cherche_puis_conclut(self):
         conclusion, faux = self._mener([
             _appel("chercher", terme="Acritec"),
@@ -1223,6 +1266,23 @@ class LiaisonAutomatiqueTestCase(_Fixture):
         chatter = self.Chatter()
         vue, _ = self._transcrire(chatter)
         self.assertEqual(vue["odoo"], {})
+
+
+class InstantTestCase(unittest.TestCase):
+    """L'heure de l'enregistrement, telle que le navigateur l'envoie."""
+
+    def test_lit_un_horodatage_du_navigateur(self):
+        from app.main import _instant
+
+        lu = _instant("2026-09-21T16:34:00.000Z")
+        self.assertEqual(lu.hour, 16)
+        self.assertIsNotNone(lu.tzinfo)
+
+    def test_un_horodatage_illisible_vaut_maintenant(self):
+        from app.main import _instant
+
+        self.assertIsNone(_instant("hier soir"))
+        self.assertIsNone(_instant(""))
 
 
 class SeuilDeLiaisonTestCase(unittest.TestCase):

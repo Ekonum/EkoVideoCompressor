@@ -19,6 +19,7 @@ import html
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -840,7 +841,9 @@ def create_app(
                 "record_id": payload.record_id}
 
     @app.post("/api/probe")
-    async def sonder(request: Request, owner_id: int = Depends(current_user)) -> dict:
+    async def sonder(
+        request: Request, moment: str = "", owner_id: int = Depends(current_user)
+    ) -> dict:
         """Écoute le début d'un enregistrement et propose un dossier.
 
         Une fenêtre courte suffit pour savoir de qui et de quoi on
@@ -882,7 +885,7 @@ def create_app(
         # L'enquête coûte du jugement, pas de l'audio : on la mène dans
         # un fil pour ne pas bloquer la boucle d'événements pendant ses
         # allers-retours avec Odoo.
-        enquete = await asyncio.to_thread(_enqueter, owner_id, indices)
+        enquete = await asyncio.to_thread(_enqueter, owner_id, indices, moment)
         db.add_api_usage(
             job_id=None,
             provider=fournisseur(MODELE_ENQUETE),
@@ -916,7 +919,7 @@ def create_app(
             ),
         }
 
-    def _enqueter(owner_id: int, indices) -> Conclusion:
+    def _enqueter(owner_id: int, indices, moment: str = "") -> Conclusion:
         """Mène l'enquête avec la clé Odoo de la personne, ou renonce.
 
         Odoo enrichit, il ne conditionne pas : sans clé, pas d'enquête,
@@ -935,6 +938,12 @@ def create_app(
                     terme, modeles=modeles
                 ),
                 lire=passerelle.resume_dossier,
+                # L'agenda du moment de l'enregistrement : une réunion
+                # inscrite à cette heure-là pointe souvent déjà le
+                # dossier, et c'est le signal le plus fiable.
+                agenda=lambda: passerelle.meetings(
+                    near=_instant(moment), window_hours=3.0
+                ),
                 api_key=keys.get(),
             )
         except (CloudTranscriptionError, SecretError) as exc:
@@ -1109,6 +1118,24 @@ def create_app(
     if static_dir.is_dir():
         app.mount("/", StaticFiles(directory=static_dir), name="static")
     return app
+
+
+def _instant(moment: str) -> datetime | None:
+    """L'heure de l'enregistrement, telle que le navigateur la connaît.
+
+    Le fichier porte sa date de dernière modification ; à défaut,
+    « maintenant » reste une approximation utile pour un dépôt fait dans
+    la foulée.
+    """
+    texte = (moment or "").strip()
+    if not texte:
+        return None
+    try:
+        lu = datetime.fromisoformat(texte.replace("Z", "+00:00"))
+    except ValueError:
+        log.info("moment illisible : %r", moment)
+        return None
+    return lu if lu.tzinfo else lu.replace(tzinfo=timezone.utc)
 
 
 def _discard(path: Path) -> None:

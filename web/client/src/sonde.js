@@ -26,6 +26,11 @@ export function sonderDuree(fichier) {
  *  quitte jamais la machine — seule cette fenêtre part.
  */
 export function identifier(fichier, { audio, fenetre = 300, duree = 0 }) {
+  // L'heure de l'enregistrement : c'est elle qui permet de retrouver la
+  // réunion dans l'agenda, signal bien plus sûr qu'un nom entendu.
+  const moment = fichier.lastModified
+    ? new Date(fichier.lastModified).toISOString()
+    : '';
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL('./media-worker.js', import.meta.url), {
       type: 'module',
@@ -34,7 +39,7 @@ export function identifier(fichier, { audio, fenetre = 300, duree = 0 }) {
       if (data.kind === 'window-done') {
         worker.terminate();
         try {
-          resolve(await api.probe(data.bytes, data.type));
+          resolve(await api.probe(data.bytes, data.type, moment));
         } catch (error) {
           reject(error);
         }

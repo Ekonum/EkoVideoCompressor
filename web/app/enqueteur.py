@@ -49,7 +49,10 @@ Tu disposes d'outils : cherche, lis, recoupe. Ne conclus pas sur un nom
 qui ressemble — vérifie que le contenu du dossier correspond à ce qui a
 été dit.
 
-Méthode : cherche chaque société entendue ; si plusieurs dossiers
+Méthode : **commence par l'agenda**. Une réunion inscrite à l'heure de
+l'enregistrement est le signal le plus sûr dont tu disposes, et elle
+pointe souvent déjà le dossier. Ensuite seulement, cherche chaque
+société entendue ; si plusieurs dossiers
 sortent, lis-les avant de choisir ; si rien ne sort, essaie les autres
 orthographes, puis les personnes. Un dossier récemment actif est plus
 probable qu'un dossier dormant, mais ce n'est qu'un indice.
@@ -68,6 +71,16 @@ personne choisira. Une erreur de liaison dépose la transcription chez
 un autre client, c'est le pire résultat possible."""
 
 OUTILS = [
+    {
+        "name": "agenda",
+        "description": (
+            "Les réunions inscrites autour de l'heure de l'enregistrement, "
+            "avec leurs participants et, quand il existe, le dossier auquel "
+            "elles sont rattachées. Le signal le plus fiable : à consulter "
+            "en premier."
+        ),
+        "parameters": {"type": "object", "properties": {}},
+    },
     {
         "name": "chercher",
         "description": (
@@ -206,6 +219,7 @@ def enqueter(
     *,
     chercher: Callable[[str, list[str] | None], list[dict]],
     lire: Callable[[str, int], dict],
+    agenda: Callable[[], list[dict]] | None = None,
     api_key: str,
     model_id: str = MODELE_ENQUETE,
     tours_max: int = TOURS_MAX,
@@ -274,7 +288,7 @@ def enqueter(
             args = appel.get("args") or {}
             if nom == "conclure":
                 return _conclure(args, lire, journal, usage)
-            resultat, ligne = _executer(nom, args, chercher, lire, memoire)
+            resultat, ligne = _executer(nom, args, chercher, lire, agenda, memoire)
             journal.append(ligne)
             reponses.append(
                 {"functionResponse": {"name": nom, "response": {"resultat": resultat}}}
@@ -302,7 +316,7 @@ def enqueter_confirme(
     lire: Callable[[str, int], dict],
     api_key: str,
     **kwargs: Any,
-) -> Conclusion:
+) -> Conclusion:  # noqa: D401
     """Enquête, puis **fait confirmer** avant d'autoriser l'automatique.
 
     Deux enquêtes sur la même réunion ont rendu deux dossiers
@@ -351,12 +365,20 @@ def _executer(
     args: dict,
     chercher: Callable[[str, list[str] | None], list[dict]],
     lire: Callable[[str, int], dict],
+    agenda: Callable[[], list[dict]] | None = None,
     memoire: dict[str, Any] | None = None,
 ) -> tuple[Any, str]:
     """Exécute un outil. Une panne Odoo se raconte au modèle au lieu de
     remonter : il peut alors changer de piste plutôt que tout perdre."""
     cache = memoire if memoire is not None else {}
     try:
+        if nom == "agenda":
+            if agenda is None:
+                return {"erreur": "agenda indisponible"}, "agenda indisponible"
+            if "agenda" not in cache:
+                cache["agenda"] = agenda()
+            reunions = cache["agenda"]
+            return reunions, f"agenda consulté → {len(reunions)} réunion(s)"
         if nom == "chercher":
             terme = str(args.get("terme") or "").strip()
             cle = f"chercher:{terme.lower()}:{','.join(args.get('modeles') or [])}"
