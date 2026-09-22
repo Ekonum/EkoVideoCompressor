@@ -1568,6 +1568,109 @@ class EnrolementTestCase(_Fixture):
             ).status_code, 404)
 
 
+class ReenrichissementTestCase(_Fixture):
+    """Corriger une liaison doit coûter un enrichissement, pas une
+    transcription."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        import app.main as main_module
+
+        self._vrai = main_module.enrich_transcript_via_gemini
+        self.demandes: list[dict] = []
+
+        def faux_enrichissement(api_key, model_id, transcript, **kwargs):
+            from cloud_transcription import CloudUsage
+
+            self.demandes.append({"model_id": model_id, "transcript": transcript, **kwargs})
+            return (
+                {
+                    "title": "ACRITEC - Facturation électronique",
+                    "speakers": {"Intervenant 1": "David JAUCH"},
+                    "technical_terms": ["Chorus", "Peppol"],
+                    "corrections": [{"original": "Acritek", "replacement": "Acritec"}],
+                    "uncertain_passages": [
+                        {"timestamp": "00:12:30", "text": "le code SDIS ?",
+                         "reason": "chiffres inaudibles"}
+                    ],
+                },
+                CloudUsage(model="gemini-3.1-flash-lite", input_tokens=9000,
+                           output_tokens=400, cost_usd=0.0031),
+            )
+
+        main_module.enrich_transcript_via_gemini = faux_enrichissement
+
+    def tearDown(self) -> None:
+        import app.main as main_module
+
+        main_module.enrich_transcript_via_gemini = self._vrai
+        super().tearDown()
+
+    def _job(self) -> int:
+        return self.client.post("/api/jobs/import", json={
+            "filename": "reunion.mov", "created_at": "2026-09-04 11:54:50",
+            "title": "Réunion du 4 septembre",
+            "transcript": "Intervenant 1 : on parle de facturation.",
+            "segments": [{"start": 0, "end": 4, "speaker": "Intervenant 1",
+                          "text": "on parle de facturation"}],
+        }).json()["job_id"]
+
+    def test_refait_titre_noms_et_passages_douteux(self):
+        job_id = self._job()
+        vue = self.client.post(f"/api/jobs/{job_id}/enrich", json={}).json()
+        self.assertEqual(vue["title"], "ACRITEC - Facturation électronique")
+        self.assertEqual(vue["uncertain"][0]["timestamp"], "00:12:30")
+
+        fiche = self.client.get(f"/api/jobs/{job_id}/detail").json()
+        self.assertEqual(fiche["title"], "ACRITEC - Facturation électronique")
+        self.assertEqual(fiche["speakers"], {"Intervenant 1": "David JAUCH"})
+        self.assertEqual(fiche["uncertain"][0]["text"], "le code SDIS ?")
+        # La version d'avant reste récupérable.
+        self.assertEqual(fiche["previous_versions"][0]["title"],
+                         "Réunion du 4 septembre")
+
+    def test_le_texte_n_est_pas_retranscrit_et_coute_des_centimes(self):
+        job_id = self._job()
+        vue = self.client.post(f"/api/jobs/{job_id}/enrich", json={}).json()
+        self.assertEqual(self.demandes[0]["model_id"], "gemini-3.1-flash-lite")
+        self.assertIn("facturation", self.demandes[0]["transcript"])
+        self.assertLess(vue["cost_usd"], 0.01)
+        self.assertAlmostEqual(self.db.month_spend_usd(), 0.0031)
+
+    def test_un_autre_dossier_odoo_recharge_le_contexte(self):
+        """C'est le geste qui répare une mauvaise liaison."""
+        from app.odoo import OdooGateway
+
+        class Passerelle(OdooGateway):
+            def __init__(self):
+                super().__init__(url="u", database="d", login="l", api_key="k")
+
+            def context_pack(self, modele, record_id):
+                return {"client_company": "ACRITEC", "terms": ["Chorus", "Peppol"],
+                        "summary": "Opportunité Acritec : facturation électronique."}
+
+        job_id = self._job()
+        app = create_app(
+            self.settings, database=self.db,
+            gemini_key=GeminiKey(url="", token="", item="", field="", static_key="k"),
+            odoo_factory=lambda _: Passerelle(),
+        )
+        with TestClient(app) as client:
+            client.post(f"/api/jobs/{job_id}/enrich",
+                        json={"model": "crm.lead", "record_id": 364})
+            fiche = client.get(f"/api/jobs/{job_id}/detail").json()
+        self.assertEqual(self.demandes[0]["odoo_context"],
+                         "Opportunité Acritec : facturation électronique.")
+        self.assertEqual(self.demandes[0]["glossary_terms"], ["Chorus", "Peppol"])
+        # Le dossier est retenu : le dépôt visera le bon.
+        self.assertEqual(fiche["odoo"]["record_id"], 364)
+
+    def test_une_reunion_sans_transcription_est_refusee(self):
+        body = self._create(duration=600.0)
+        vue = self.client.post(f"/api/jobs/{body['job_id']}/enrich", json={})
+        self.assertEqual(vue.status_code, 409)
+
+
 class CorbeilleTestCase(_Fixture):
     """Jeter, archiver, restaurer, purger."""
 

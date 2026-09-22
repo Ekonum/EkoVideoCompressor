@@ -63,12 +63,82 @@ export function Detail({ jobId, surRetour }) {
         <aside className="space-y-8">
           <Interlocuteurs fiche={fiche} jobId={jobId} surMaj={recharger} surNote={setNote} surErreur={setErreur} />
           <Termes fiche={fiche} jobId={jobId} surMaj={recharger} surNote={setNote} surErreur={setErreur} />
+          <AVerifier fiche={fiche} />
+          <Relecture fiche={fiche} jobId={jobId} surMaj={recharger} surNote={setNote} surErreur={setErreur} />
           <Fenetres jobId={jobId} surNote={setNote} surErreur={setErreur} />
           <Odoo fiche={fiche} jobId={jobId} surMaj={recharger} surNote={setNote} surErreur={setErreur} />
           <Versions versions={fiche.previous_versions} />
         </aside>
       </div>
     </section>
+  );
+}
+
+/** Ce dont le modèle n'était pas sûr.
+ *
+ *  L'app macOS écrivait ça dans un fichier « à vérifier » ; c'est la
+ *  liste de ce qu'il faut réécouter, et elle ne vaut que si on la voit.
+ */
+function AVerifier({ fiche }) {
+  const passages = fiche.uncertain || [];
+  if (!passages.length) return null;
+  return (
+    <div>
+      <h2 className="titre text-[1.0625rem] font-medium">À vérifier</h2>
+      <p className="mt-1 text-[0.8125rem] text-fonce/55">
+        {passages.length} passage{passages.length > 1 ? 's' : ''} dont le modèle
+        doute.
+      </p>
+      <ul className="mt-2 space-y-2">
+        {passages.map((p, i) => (
+          <li key={i} className="rounded-lg bg-papier p-2.5">
+            <span className="block text-[0.75rem] tabular-nums text-fonce/45">
+              {p.timestamp || '—'}
+            </span>
+            <span className="block text-[0.875rem]">{p.text}</span>
+            {p.reason ? (
+              <span className="block text-[0.8125rem] text-fonce/55">{p.reason}</span>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** Relire la transcription à la lumière du bon dossier.
+ *
+ *  Une liaison corrigée ne doit pas coûter une transcription : le texte
+ *  existe déjà, seule sa lecture change. Titre, noms d'interlocuteurs et
+ *  corrections métier sont refaits pour quelques centimes, et la version
+ *  d'avant reste dans l'historique.
+ */
+function Relecture({ fiche, jobId, surMaj, surNote, surErreur }) {
+  const [occupe, setOccupe] = useState(false);
+  if (!fiche.transcript?.trim()) return null;
+  return (
+    <div>
+      <h2 className="titre text-[1.0625rem] font-medium">Relecture</h2>
+      <p className="mt-1 text-[0.8125rem] text-fonce/55">
+        Refaire le titre, les noms et les corrections métier à partir du texte
+        déjà transcrit — sans repayer la transcription.
+      </p>
+      <Bouton
+        className="mt-2"
+        disabled={occupe}
+        onClick={async () => {
+          setOccupe(true);
+          try {
+            const vue = await api.reenrichir(jobId);
+            surNote(`Relu pour ${usd(vue.cost_usd)} — ${vue.title}`);
+            surMaj();
+          } catch (e) { surErreur(e.message); }
+          finally { setOccupe(false); }
+        }}
+      >
+        {occupe ? 'Relecture…' : 'Relire'}
+      </Bouton>
+    </div>
   );
 }
 
@@ -304,8 +374,16 @@ function Odoo({ fiche, jobId, surMaj, surNote, surErreur }) {
                 onClick={async () => {
                   setEnvoi(true);
                   try {
+                    // Relire d'abord : le dossier qu'on vient de choisir
+                    // change le titre et les noms, et la note déposée
+                    // doit porter la bonne version.
+                    const relu = await api
+                      .reenrichir(jobId, { model: c.model, record_id: c.id })
+                      .catch(() => null);
                     await api.odooPublish(jobId, { model: c.model, record_id: c.id });
-                    surNote(`Déposée dans « ${c.name} ».`);
+                    surNote(relu
+                      ? `Relue puis déposée dans « ${c.name} ».`
+                      : `Déposée dans « ${c.name} ».`);
                     surMaj();
                   } catch (e) { surErreur(e.message); }
                   finally { setEnvoi(false); }

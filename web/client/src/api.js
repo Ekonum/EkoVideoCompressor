@@ -48,6 +48,7 @@ export const api = {
     return response.json();
   },
   me: () => call('GET', '/api/me'),
+  reenrichir: (id, dossier = {}) => call('POST', `/api/jobs/${id}/enrich`, dossier),
   odooStatus: () => call('GET', '/api/me/odoo'),
   odooSave: (login, apiKey) => call('PUT', '/api/me/odoo', { login, api_key: apiKey }),
   odooForget: () => call('DELETE', '/api/me/odoo'),

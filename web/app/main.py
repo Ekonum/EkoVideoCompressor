@@ -30,6 +30,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from cloud_transcription import (
+    enrich_transcript_via_gemini,
     CLOUD_TRANSCRIPTION_MODELS,
     CloudChunkResult,
     CloudTranscriptionError,
@@ -92,6 +93,11 @@ MAX_CHUNK_BYTES = 60 * 1024 * 1024
 # Cinq minutes en MP3 64 kbit/s pèsent 2,4 Mo : la marge permet une
 # fenêtre un peu plus large, pas le dépôt d'une réunion entière.
 MAX_SONDE_BYTES = 8 * 1024 * 1024
+
+# Le ré-enrichissement ne relit que du texte : le modèle le moins cher
+# du catalogue suffit, et c'est ce qui rend la correction d'une liaison
+# indolore.
+MODELE_ENRICHISSEMENT = "gemini-3.1-flash-lite"
 
 # Du plus sûr au moins sûr. Lier sans demander à partir de « probable »
 # est un réglage possible ; ce n'est pas le défaut.
@@ -175,6 +181,13 @@ class VocabularyRecord(BaseModel):
     terms: list[str] = Field(default_factory=list)
 
 
+class Reenrichissement(BaseModel):
+    """Recoller un dossier Odoo au texte déjà transcrit."""
+
+    model: str = Field(default="", max_length=64)
+    record_id: int = Field(default=0, ge=0)
+
+
 class DemandeAppareil(BaseModel):
     """Ce qu'un appareil dit de lui en demandant à être enrôlé."""
 
@@ -191,6 +204,7 @@ class FinalizeResponse(BaseModel):
     transcript: str
     speakers: dict[str, str]
     technical_terms: list[str]
+    uncertain: list[dict[str, Any]] = Field(default_factory=list)
     cost_usd: float
     # Ce qu'il est advenu du dépôt automatique, quand il y en avait un.
     odoo: dict[str, Any] = Field(default_factory=dict)
@@ -484,12 +498,14 @@ def create_app(
             transcript=text,
             speakers=merged.speakers,
             technical_terms=merged.technical_terms,
+            uncertain=merged.uncertain,
             cost_usd=merged.usage.cost_usd,
         )
         for c in chunks:
             _discard(config.chunk_dir / f"job{job_id}_chunk{c['idx']}{CHUNK_SUFFIX}")
         return FinalizeResponse(
             odoo=_deposer_seul(db.get_job(job_id) or job, merged.title, text),
+            uncertain=merged.uncertain,
             job_id=job_id,
             title=merged.title,
             transcript=text,
@@ -654,6 +670,10 @@ def create_app(
             "transcript": job["transcript"] or "",
             "speakers": json.loads(job["speaker_map_json"] or "{}"),
             "technical_terms": json.loads(job["technical_terms_json"] or "[]"),
+            # Ce dont le modèle n'était pas sûr : c'est la liste de ce
+            # qu'il faut réécouter, et elle ne sert à rien si elle reste
+            # dans la base.
+            "uncertain": json.loads(job["uncertain_json"] or "[]"),
             "segments": db.segments_for_job(job_id),
             "previous_versions": json.loads(job["previous_versions_json"] or "[]"),
             "odoo": {
@@ -907,6 +927,94 @@ def create_app(
         except OdooUnavailable as exc:
             log.warning("recherche Odoo indisponible : %s", exc)
             return {"available": False, "reason": str(exc), "records": []}
+
+    @app.post("/api/jobs/{job_id}/enrich")
+    def reenrichir(
+        job_id: int,
+        payload: Reenrichissement,
+        owner_id: int = Depends(current_user),
+    ) -> dict:
+        """Refait titre, noms et corrections sans retranscrire.
+
+        C'est ce qui rend une mauvaise liaison peu coûteuse : quand le
+        dossier retenu était le mauvais, il suffit d'en désigner un
+        autre et de relire le texte à sa lumière. Une transcription
+        complète coûte cent fois plus.
+        """
+        job = owned_job(job_id, owner_id)
+        transcript = (job["transcript"] or "").strip()
+        if not transcript:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "Cette réunion n'a pas de transcription."
+            )
+
+        contexte = json.loads(job["context_json"] or "{}")
+        if payload.model and payload.record_id:
+            # Un dossier désigné remplace celui d'avant, contexte compris.
+            passerelle = odoo_pour(owner_id)
+            if not passerelle.configured:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    "Ajoute ta clé API Odoo dans ton compte pour charger ce dossier.",
+                )
+            try:
+                pack = passerelle.context_pack(payload.model, payload.record_id)
+            except OdooUnavailable as exc:
+                raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+            contexte = {
+                **contexte,
+                "client_company": pack.get("client_company") or "",
+                "glossary_terms": pack.get("terms") or [],
+                "odoo_context": pack.get("summary") or "",
+            }
+            db.set_odoo_link(
+                job_id, model=payload.model, record_id=payload.record_id,
+                message_id=job["odoo_message_id"],
+            )
+            db.update_job_context_json(job_id, contexte)
+
+        try:
+            enrichi, usage = enrich_transcript_via_gemini(
+                keys.get(),
+                MODELE_ENRICHISSEMENT,
+                transcript,
+                language=str(job["language"] or "fr"),
+                glossary_terms=list(contexte.get("glossary_terms") or []),
+                expected_speaker_names=list(contexte.get("expected_speaker_names") or []),
+                meeting_context=str(contexte.get("meeting_context") or ""),
+                odoo_context=str(contexte.get("odoo_context") or ""),
+            )
+        except (CloudTranscriptionError, SecretError) as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+        db.add_api_usage(
+            job_id=job_id,
+            provider=provider_for_model(MODELE_ENRICHISSEMENT),
+            model=usage.model or MODELE_ENRICHISSEMENT,
+            step="reenrichissement",
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cost_usd=usage.cost_usd,
+        )
+        # La version précédente est empilée : se raviser doit rester
+        # possible, y compris sur un enrichissement.
+        db.archive_current_version(job_id)
+        db.update_job_context(
+            job_id,
+            title=enrichi.get("title") or job["title"],
+            speakers=enrichi.get("speakers") or None,
+            technical_terms=enrichi.get("technical_terms") or None,
+        )
+        db.set_uncertain(job_id, enrichi.get("uncertain_passages") or [])
+        return {
+            "job_id": job_id,
+            "title": enrichi.get("title") or job["title"],
+            "speakers": enrichi.get("speakers") or {},
+            "technical_terms": enrichi.get("technical_terms") or [],
+            "corrections": enrichi.get("corrections") or [],
+            "uncertain": enrichi.get("uncertain_passages") or [],
+            "cost_usd": usage.cost_usd,
+        }
 
     @app.post("/api/jobs/{job_id}/odoo/publish")
     def publier_odoo(

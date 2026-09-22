@@ -190,6 +190,9 @@ class Database:
             ("odoo_published_at", "TEXT"),
             # Corbeille et archives : une réunion ne disparaît pas d'un
             # clic, et une réunion close n'encombre pas la bibliothèque.
+            # Ce dont le modèle n'était pas sûr : l'app macOS l'écrivait
+            # dans un fichier « à vérifier », le serveur le jetait.
+            ("uncertain_json", "TEXT"),
             ("archived_at", "TEXT"),
             ("deleted_at", "TEXT"),
         ):
@@ -459,18 +462,21 @@ class Database:
         transcript: str,
         speakers: dict[str, str],
         technical_terms: list[str],
+        uncertain: list[dict[str, Any]] | None = None,
         cost_usd: float,
     ) -> None:
         with self.connect() as conn:
             conn.execute(
                 "UPDATE jobs SET status = 'termine', title = ?, transcript = ?, "
-                "speaker_map_json = ?, technical_terms_json = ?, cloud_cost_usd = ?, "
+                "speaker_map_json = ?, technical_terms_json = ?, "
+                "uncertain_json = ?, cloud_cost_usd = ?, "
                 "error_message = NULL, updated_at = ? WHERE id = ?",
                 (
                     title,
                     transcript,
                     json.dumps(speakers, ensure_ascii=False),
                     json.dumps(technical_terms, ensure_ascii=False),
+                    json.dumps(uncertain or [], ensure_ascii=False),
                     float(cost_usd),
                     datetime.now().isoformat(timespec="seconds"),
                     job_id,
@@ -584,6 +590,26 @@ class Database:
                     datetime.now().isoformat(timespec="seconds"),
                     job_id,
                 ),
+            )
+
+    def update_job_context_json(self, job_id: int, contexte: dict[str, Any]) -> None:
+        """Le contexte retenu pour cette réunion, après coup.
+
+        Recoller un autre dossier Odoo change le contexte : le garder
+        permet de relancer un enrichissement sans redemander Odoo."""
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET context_json = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(contexte, ensure_ascii=False),
+                 datetime.now().isoformat(timespec="seconds"), job_id),
+            )
+
+    def set_uncertain(self, job_id: int, passages: list[dict[str, Any]]) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET uncertain_json = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(passages or [], ensure_ascii=False),
+                 datetime.now().isoformat(timespec="seconds"), job_id),
             )
 
     def update_job_context(
