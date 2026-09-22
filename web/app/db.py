@@ -20,7 +20,7 @@ import sqlite3
 import unicodedata
 import threading
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -173,6 +173,10 @@ class Database:
             ("odoo_record_id", "INTEGER"),
             ("odoo_message_id", "INTEGER"),
             ("odoo_published_at", "TEXT"),
+            # Corbeille et archives : une réunion ne disparaît pas d'un
+            # clic, et une réunion close n'encombre pas la bibliothèque.
+            ("archived_at", "TEXT"),
+            ("deleted_at", "TEXT"),
         ):
             self._ensure_column(conn, "jobs", colonne, ddl)
 
@@ -344,13 +348,83 @@ class Database:
             row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
             return dict(row) if row else None
 
-    def list_jobs(self, owner_id: int, limit: int = 100) -> list[dict[str, Any]]:
+    # États d'une réunion dans la bibliothèque. « actif » est le défaut :
+    # une archive ou une corbeille qu'on voit par accident n'aide
+    # personne.
+    ETATS = {
+        "actif": "deleted_at IS NULL AND archived_at IS NULL",
+        "archive": "deleted_at IS NULL AND archived_at IS NOT NULL",
+        "corbeille": "deleted_at IS NOT NULL",
+        "tout": "1 = 1",
+    }
+
+    def list_jobs(
+        self, owner_id: int, limit: int = 100, etat: str = "actif"
+    ) -> list[dict[str, Any]]:
+        filtre = self.ETATS.get(etat, self.ETATS["actif"])
         with self.connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM jobs WHERE owner_id = ? ORDER BY id DESC LIMIT ?",
+                f"SELECT * FROM jobs WHERE owner_id = ? AND {filtre} "
+                "ORDER BY id DESC LIMIT ?",
                 (owner_id, limit),
             ).fetchall()
             return [dict(r) for r in rows]
+
+    # -- corbeille et archives -------------------------------------------
+
+    def _marquer(self, job_id: int, champ: str, valeur: str | None) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                f"UPDATE jobs SET {champ} = ?, updated_at = ? WHERE id = ?",
+                (valeur, datetime.now().isoformat(timespec="seconds"), job_id),
+            )
+
+    def jeter_job(self, job_id: int) -> None:
+        """À la corbeille : réversible, et purgée après le délai."""
+        self._marquer(job_id, "deleted_at", datetime.now().isoformat(timespec="seconds"))
+
+    def archiver_job(self, job_id: int) -> None:
+        """Hors de la bibliothèque, mais intacte et cherchable."""
+        self._marquer(job_id, "archived_at", datetime.now().isoformat(timespec="seconds"))
+
+    def restaurer_job(self, job_id: int) -> None:
+        """Ressort d'archive comme de corbeille : un seul geste à retenir."""
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET deleted_at = NULL, archived_at = NULL, "
+                "updated_at = ? WHERE id = ?",
+                (datetime.now().isoformat(timespec="seconds"), job_id),
+            )
+
+    def supprimer_job(self, job_id: int) -> None:
+        """Suppression définitive, index de recherche compris.
+
+        `ON DELETE CASCADE` emporte les fenêtres et les segments, mais
+        pas la table FTS, qui est virtuelle et ignore les clés
+        étrangères : l'oublier laisserait la réunion trouvable après sa
+        suppression."""
+        with self.connect() as conn:
+            conn.execute("DELETE FROM segments_fts WHERE job_id = ?", (job_id,))
+            conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+
+    def purger_corbeille(self, jours: int) -> list[int]:
+        """Vide ce qui a dépassé le délai de rétention. Rend les
+        identifiants supprimés, pour que ça se journalise."""
+        if jours <= 0:
+            return []
+        limite = (datetime.now() - timedelta(days=jours)).isoformat(timespec="seconds")
+        with self.connect() as conn:
+            perimes = [
+                int(r["id"])
+                for r in conn.execute(
+                    "SELECT id FROM jobs WHERE deleted_at IS NOT NULL "
+                    "AND deleted_at < ?",
+                    (limite,),
+                )
+            ]
+        for job_id in perimes:
+            self.supprimer_job(job_id)
+        return perimes
 
     def set_job_status(
         self, job_id: int, status: str, *, error: str | None = None
@@ -552,7 +626,11 @@ class Database:
                 "SELECT f.job_id, f.start_second, f.speaker, f.text, "
                 "       j.title, j.filename "
                 "FROM segments_fts f JOIN jobs j ON j.id = f.job_id "
+                # Une réunion à la corbeille ne doit plus ressortir ;
+                # une archive, si — c'est tout l'intérêt d'archiver
+                # plutôt que de jeter.
                 "WHERE segments_fts MATCH ? AND j.owner_id = ? "
+                "  AND j.deleted_at IS NULL "
                 "ORDER BY rank LIMIT ?",
                 (match, owner_id, limit),
             ).fetchall()

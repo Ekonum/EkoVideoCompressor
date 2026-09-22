@@ -65,6 +65,10 @@ class Settings:
     # Garde-fou budget : plafond d'équipe, la clé Gemini étant partagée.
     monthly_budget_usd: float
 
+    # Combien de jours une réunion reste récupérable dans la corbeille.
+    # 0 supprime immédiatement — à n'utiliser que si on sait pourquoi.
+    corbeille_jours: int
+
     # À partir de quelle certitude la liaison se fait sans demander :
     # « certaine », « probable », ou « jamais » pour tout valider à la
     # main. Une mauvaise liaison dépose la transcription chez un autre
@@ -119,6 +123,7 @@ class Settings:
             odoo_broker_field=os.environ.get("EKOVIDEO_ODOO_BROKER_FIELD", "Clé API"),
             secret_key=os.environ.get("EKOVIDEO_SECRET_KEY", "").strip(),
             monthly_budget_usd=float(os.environ.get("EKOVIDEO_MONTHLY_BUDGET_USD", "50")),
+            corbeille_jours=int(os.environ.get("EKOVIDEO_CORBEILLE_JOURS", "30")),
             liaison_auto=os.environ.get("EKOVIDEO_LIAISON_AUTO", "certaine")
             .strip()
             .lower(),

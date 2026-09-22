@@ -557,8 +557,44 @@ def create_app(
             log.warning("ping impossible : %s", exc)
             return {"notified": "aucun", "notify_error": str(exc)}
 
+    @app.delete("/api/jobs/{job_id}", status_code=status.HTTP_204_NO_CONTENT,
+                response_class=Response)
+    def jeter(job_id: int, owner_id: int = Depends(current_user)) -> Response:
+        """À la corbeille, pas au néant.
+
+        Une transcription représente parfois une heure de réunion et
+        quelques dizaines de centimes : la perdre sur un clic de travers
+        serait une faute. Elle reste récupérable pendant le délai de
+        rétention, puis disparaît pour de bon.
+        """
+        owned_job(job_id, owner_id)
+        db.jeter_job(job_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.post("/api/jobs/{job_id}/archive")
+    def archiver(job_id: int, owner_id: int = Depends(current_user)) -> dict:
+        """Hors de la bibliothèque, mais intacte et toujours cherchable."""
+        owned_job(job_id, owner_id)
+        db.archiver_job(job_id)
+        return {"job_id": job_id, "etat": "archive"}
+
+    @app.post("/api/jobs/{job_id}/restore")
+    def restaurer(job_id: int, owner_id: int = Depends(current_user)) -> dict:
+        """Ressort d'archive comme de corbeille : un seul geste."""
+        owned_job(job_id, owner_id)
+        db.restaurer_job(job_id)
+        return {"job_id": job_id, "etat": "actif"}
+
     @app.get("/api/jobs")
-    def list_jobs(owner_id: int = Depends(current_user)) -> list[dict]:
+    def list_jobs(
+        etat: str = "actif", owner_id: int = Depends(current_user)
+    ) -> list[dict]:
+        # La purge se fait ici plutôt que par une tâche planifiée : le
+        # serveur tient dans 256 Mo et n'a pas d'ordonnanceur, et une
+        # corbeille qu'on consulte est une corbeille qu'on peut vider.
+        if etat == "corbeille":
+            for perime in db.purger_corbeille(config.corbeille_jours):
+                log.info("corbeille : réunion %s purgée", perime)
         return [
             {
                 "job_id": job["id"],
@@ -570,8 +606,10 @@ def create_app(
                 "cost_usd": job["cloud_cost_usd"],
                 "created_at": job["created_at"],
                 "has_versions": bool(job["previous_versions_json"]),
+                "archived_at": job["archived_at"],
+                "deleted_at": job["deleted_at"],
             }
-            for job in db.list_jobs(owner_id)
+            for job in db.list_jobs(owner_id, etat=etat)
         ]
 
     @app.post("/api/jobs/import", status_code=status.HTTP_200_OK)
@@ -1044,6 +1082,7 @@ def create_app(
                 for entry in CLOUD_TRANSCRIPTION_MODELS
                 if provider_for_model(entry["id"]) == "gemini"
             ],
+            "corbeille": {"retention_jours": config.corbeille_jours},
             "budget": {
                 "spent_usd": round(spent, 4),
                 "cap_usd": config.monthly_budget_usd,

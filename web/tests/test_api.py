@@ -50,6 +50,7 @@ def _settings(root: Path, **overrides) -> Settings:
         odoo_broker_field="Clé API",
         secret_key=_CLE_DE_TEST,
         monthly_budget_usd=50.0,
+        corbeille_jours=30,
         liaison_auto="certaine",
         sonde_ignore=frozenset({"odoo", "ekonum"}),
         dev_mode=True,
@@ -1472,6 +1473,88 @@ class ImportTestCase(_Fixture):
         jeton = self.client.post("/api/tokens", json={"name": "reprise"}).json()["token"]
         client = TestClient(self.app, headers={"Authorization": f"Bearer {jeton}"})
         self.assertTrue(client.post("/api/jobs/import", json=self.REUNION).json()["imported"])
+
+
+class CorbeilleTestCase(_Fixture):
+    """Jeter, archiver, restaurer, purger."""
+
+    def _importee(self, titre="Acritec - Revue") -> int:
+        return self.client.post("/api/jobs/import", json={
+            "filename": f"{titre}.mov", "created_at": "2026-07-06 18:01:04",
+            "title": titre, "transcript": "Robin : on migre vers Odoo 19.",
+            "segments": [{"start": 0, "end": 5, "speaker": "Robin",
+                          "text": "on migre vers Odoo"}],
+        }).json()["job_id"]
+
+    def _liste(self, etat="actif"):
+        return [j["job_id"] for j in
+                self.client.get(f"/api/jobs?etat={etat}").json()]
+
+    def test_jeter_sort_de_la_bibliotheque_sans_rien_perdre(self):
+        job_id = self._importee()
+        self.assertEqual(self.client.delete(f"/api/jobs/{job_id}").status_code, 204)
+        self.assertNotIn(job_id, self._liste())
+        self.assertIn(job_id, self._liste("corbeille"))
+        # La transcription est intacte : c'est une corbeille, pas une
+        # suppression.
+        self.assertIn("Odoo 19",
+                      self.client.get(f"/api/jobs/{job_id}/detail").json()["transcript"])
+
+    def test_restaurer_ramene_dans_la_bibliotheque(self):
+        job_id = self._importee()
+        self.client.delete(f"/api/jobs/{job_id}")
+        self.client.post(f"/api/jobs/{job_id}/restore")
+        self.assertIn(job_id, self._liste())
+        self.assertEqual(self._liste("corbeille"), [])
+
+    def test_archiver_conserve_la_recherche(self):
+        """Une archive sort de la bibliothèque mais reste trouvable —
+        c'est toute la différence avec la corbeille."""
+        job_id = self._importee()
+        self.client.post(f"/api/jobs/{job_id}/archive")
+        self.assertNotIn(job_id, self._liste())
+        self.assertIn(job_id, self._liste("archive"))
+        trouves = self.client.get("/api/search", params={"q": "migre"}).json()
+        self.assertEqual([t["job_id"] for t in trouves], [job_id])
+
+    def test_une_reunion_a_la_corbeille_ne_ressort_plus_des_recherches(self):
+        job_id = self._importee()
+        self.client.delete(f"/api/jobs/{job_id}")
+        self.assertEqual(self.client.get("/api/search", params={"q": "migre"}).json(), [])
+
+    def test_la_purge_efface_apres_le_delai_et_pas_avant(self):
+        from datetime import datetime, timedelta
+
+        recente = self._importee("Récente")
+        vieille = self._importee("Vieille")
+        self.client.delete(f"/api/jobs/{recente}")
+        self.client.delete(f"/api/jobs/{vieille}")
+        with self.db.connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET deleted_at = ? WHERE id = ?",
+                ((datetime.now() - timedelta(days=31)).isoformat(timespec="seconds"),
+                 vieille),
+            )
+        self.assertEqual(self._liste("corbeille"), [recente])
+        self.assertIsNone(self.db.get_job(vieille))
+        # L'index de recherche suit : sinon la réunion resterait
+        # trouvable après sa suppression.
+        with self.db.connect() as conn:
+            restes = conn.execute(
+                "SELECT count(*) AS n FROM segments_fts WHERE job_id = ?", (vieille,)
+            ).fetchone()["n"]
+        self.assertEqual(restes, 0)
+
+    def test_on_ne_jette_pas_la_reunion_d_un_collegue(self):
+        job_id = self._importee()
+        autre = create_app(
+            _settings(self.root, dev_user_email="lea@ekonum.fr"),
+            database=self.db,
+            gemini_key=GeminiKey(url="", token="", item="", field="", static_key="k"),
+        )
+        with TestClient(autre) as client:
+            self.assertEqual(client.delete(f"/api/jobs/{job_id}").status_code, 404)
+        self.assertIn(job_id, self._liste())
 
 
 class ChatterTestCase(_Fixture):

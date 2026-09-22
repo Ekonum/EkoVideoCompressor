@@ -21,7 +21,10 @@ async function call(method, url, body) {
 }
 
 export const api = {
-  listJobs: () => call('GET', '/api/jobs'),
+  listJobs: (etat = 'actif') => call('GET', `/api/jobs?etat=${etat}`),
+  jeter: (id) => call('DELETE', `/api/jobs/${id}`),
+  archiver: (id) => call('POST', `/api/jobs/${id}/archive`, {}),
+  restaurer: (id) => call('POST', `/api/jobs/${id}/restore`, {}),
   createJob: (payload) => call('POST', '/api/jobs', payload),
   job: (id) => call('GET', `/api/jobs/${id}`),
   detail: (id) => call('GET', `/api/jobs/${id}/detail`),
