@@ -82,10 +82,19 @@ class OdooGateway:
 
         Sert à proposer « c'est sans doute cette réunion-là » au moment
         où l'utilisateur dépose un enregistrement.
+
+        `min_attendees=1` : le filtre d'origine exigeait deux
+        participants pour écarter les créneaux personnels, mais une
+        réunion client dont l'invité n'est pas dans Odoo n'en compte
+        qu'un — et c'est exactement celle qu'on cherche. Le tri revient
+        à l'enquêteur, qui voit les noms.
         """
         moment = near or datetime.now(timezone.utc)
         try:
-            events = search_meeting_events(self._config(), near=moment, window_hours=window_hours)
+            events = search_meeting_events(
+                self._config(), near=moment, window_hours=window_hours,
+                min_attendees=1,
+            )
         except OdooError as exc:
             raise OdooUnavailable(_lisible(exc, self._database)) from exc
         return [

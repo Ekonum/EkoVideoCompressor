@@ -26,10 +26,11 @@ export function sonderDuree(fichier) {
  *  quitte jamais la machine — seule cette fenêtre part.
  */
 export function identifier(fichier, { audio, fenetre = 300, duree = 0 }) {
-  // L'heure de l'enregistrement : c'est elle qui permet de retrouver la
-  // réunion dans l'agenda, signal bien plus sûr qu'un nom entendu.
+  // L'heure de *début* de l'enregistrement : la date du fichier est
+  // celle de sa dernière écriture, donc la fin. Sur une réunion d'une
+  // heure, viser la fin fait manquer la réunion elle-même.
   const moment = fichier.lastModified
-    ? new Date(fichier.lastModified).toISOString()
+    ? new Date(fichier.lastModified - (duree || 0) * 1000).toISOString()
     : '';
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL('./media-worker.js', import.meta.url), {

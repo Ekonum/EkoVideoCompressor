@@ -1268,6 +1268,23 @@ class LiaisonAutomatiqueTestCase(_Fixture):
         self.assertEqual(vue["odoo"], {})
 
 
+class AgendaTestCase(unittest.TestCase):
+    """Le filtre d'agenda ne doit pas écarter la réunion qu'on cherche."""
+
+    def test_une_reunion_a_un_seul_participant_odoo_compte(self):
+        """La réunion « Quentin Seyve » n'avait que Robin en
+        participant : l'invité n'était pas dans la base."""
+        from unittest import mock
+
+        from app import odoo as module
+
+        passerelle = module.OdooGateway(url="u", database="d", login="l", api_key="k")
+        with mock.patch.object(module, "search_meeting_events",
+                               return_value=[]) as cherche:
+            passerelle.meetings()
+        self.assertEqual(cherche.call_args.kwargs["min_attendees"], 1)
+
+
 class InstantTestCase(unittest.TestCase):
     """L'heure de l'enregistrement, telle que le navigateur l'envoie."""
 
