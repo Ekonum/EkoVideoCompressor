@@ -51,6 +51,12 @@ services:
       # attendant » est le genre de provisoire qui reste.
       EKOVIDEO_SECRET_KEY: "${EKOVIDEO_SECRET_KEY:?clé de chiffrement requise}"
 
+      # Enrôlement des Mac : l'app locale propose de transférer sa
+      # bibliothèque. Suppose que Cloudflare Access laisse passer les
+      # trois chemins machine (voir web/docs/ENROLEMENT.md) — nos jetons
+      # y font office de serrure.
+      EKOVIDEO_ENROLEMENT: "1"
+
       EKOVIDEO_WEB_STATE: "/data"
 
     volumes:

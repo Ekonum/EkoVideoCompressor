@@ -1,7 +1,8 @@
 # Enrôler un Mac sur transcript.ekonum.fr
 
-État : **écrit, éteint**. `EKOVIDEO_ENROLEMENT` absente ou à `0`, les routes
-d'enrôlement répondent 404 — tant que la fonction dort, elle n'existe pas.
+État : **activé** (`EKOVIDEO_ENROLEMENT: "1"` dans le stack). Absente ou à
+`0`, les routes d'enrôlement répondent 404 — tant que la fonction dort, elle
+n'existe pas.
 
 ## La question tranchée
 
@@ -20,7 +21,7 @@ On suit le même motif plutôt que d'en inventer un second : **le navigateur
 derrière Access, les chemins machine derrière nos jetons**. Ce n'est pas une
 exception, c'est la convention maison.
 
-## Ce qu'il faudra faire, le jour de l'activation
+## Ce qui a été fait à l'activation
 
 1. **Zero Trust → Access → Applications**, sur l'application « Transcriptions »,
    exclure ces chemins (ou leur donner une politique *Bypass*) :
@@ -30,7 +31,11 @@ exception, c'est la convention maison.
    | `POST /api/enroll/device` | l'app, avant d'avoir un jeton | rien — ne donne rien d'exploitable |
    | `POST /api/enroll/token` | l'app, pour récupérer son jeton | le code appareil, à usage unique |
    | `POST /api/jobs/import` | l'app, pour pousser l'historique | `Authorization: Bearer ekt_…` |
-   | `GET /api/me` | l'app, pour vérifier son jeton | idem |
+
+   Trois chemins, pas un de plus. Access compare les chemins par préfixe :
+   ouvrir `/api/me` aurait aussi ouvert `/api/me/odoo`. Rien n'y serait
+   exploitable sans jeton, mais une surface qu'on n'utilise pas est une
+   surface qu'on n'a pas à défendre.
 
    La validation (`GET /api/enroll/{code}` et `…/approve`) **reste derrière
    Access** : c'est un geste humain, dans un navigateur, et le serveur refuse
