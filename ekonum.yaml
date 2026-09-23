@@ -1,0 +1,49 @@
+# Manifeste Ekonum — contrat d'application du portail.
+# Spécification : https://github.com/Ekonum/ekonum-portail/blob/main/docs/CONTRAT-APPLICATION.md
+#
+# Ce fichier décrit ce QUI EXISTE sur main, jamais ce qui est prévu. Ce qui manque est omis,
+# et le portail le signalera.
+#
+# Il décrit l'application macOS. La webapp transcript.ekonum.fr (PR #124 à #136) n'est pas
+# encore sur main : elle sera une seconde entrée du catalogue, de nature `application`, avec
+# son propre identifiant, déclarée au moment de sa fusion.
+schema_version: 1
+
+id: ekovideo-compressor
+name: EkoVideo Compressor
+description: Compression vidéo et transcription de réunions sur le Mac, avec enrichissement depuis Odoo.
+kind: installed
+owner: robin@ekonum.fr
+data_classification: client       # transcriptions de réunions et d'entretiens clients, stockées sur le poste
+lifecycle: active
+
+consumes:
+  odoo:                           # contexte de réunion (odoo_client.py, web_context.py)
+    - crm.lead
+    - sale.order
+    - res.partner
+    - project.project
+    - project.task
+    - calendar.event
+    - res.users
+    - mail.message
+  ekonum_apps: []
+  external:
+    - gemini
+    - openai
+    - assemblyai
+    - deepgram
+    - gladia
+    - github                      # mise à jour automatique via l'API releases/latest
+
+release_notes: https://github.com/Ekonum/EkoVideoCompressor/releases
+
+distribution:
+  platforms: [macos-arm64]
+  source: https://github.com/Ekonum/EkoVideoCompressor/releases
+  update: auto                    # bouton « Vérifier mise à jour » : télécharge la dernière release
+  channel: stable
+
+state:
+  sqlite:
+    - "~/Library/Application Support/EkoVideo Compressor/library.db"   # surchargeable par EKO_APP_SUPPORT_DIR
