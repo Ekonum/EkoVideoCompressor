@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { Bouton, Champ, Erreur } from './Communs.jsx';
-import { horodatage, usd, jour } from '../format.js';
+import { horodatage, usd, jour, mo } from '../format.js';
+import { useArchivage } from '../archivage.js';
+import { AvancementArchivage } from './Nouveau.jsx';
 
 /** Fiche d'une transcription : la lire, la corriger, la relancer.
  *
@@ -40,6 +42,7 @@ export function Detail({ jobId, surRetour }) {
             <h2 className="titre text-[1.0625rem] font-medium">Transcription</h2>
             <Copier texte={fiche.transcript} />
           </div>
+          <Video jobId={jobId} video={fiche.video} surMaj={recharger} />
           <div className="verre mt-3 max-h-[34rem] overflow-y-auto rounded-xl">
             {fiche.segments.length === 0 ? (
               <p className="px-4 py-6 text-fonce/50">Pas encore de segment.</p>
@@ -74,6 +77,85 @@ export function Detail({ jobId, surRetour }) {
         </aside>
       </div>
     </section>
+  );
+}
+
+/** La vidéo de la réunion, en stockage froid.
+ *
+ *  Le stockage froid se paie à l'envers de l'intuition : garder une
+ *  vidéo ne coûte presque rien, la relire coûte davantage. On prend
+ *  l'habitude dès maintenant, avant que GCS ne rende ce coût réel — d'où
+ *  une question avant chaque lecture, et rien qui se charge tout seul.
+ */
+function Video({ jobId, video, surMaj }) {
+  const tache = useArchivage(jobId);
+  const [etape, setEtape] = useState('repos'); // repos → question → lecture
+
+  useEffect(() => {
+    if (tache?.etape === 'termine') surMaj();
+  }, [tache?.etape]);
+
+  if (tache && tache.etape !== 'termine') {
+    return <div className="mt-3"><AvancementArchivage tache={tache} /></div>;
+  }
+  if (!video?.presente) {
+    return video?.en_cours ? (
+      <p className="mt-3 text-[0.8125rem] text-fonce/55">
+        L'envoi de la vidéo a été interrompu (onglet fermé ?). La transcription,
+        elle, est complète.
+      </p>
+    ) : null;
+  }
+
+  if (etape === 'lecture') {
+    return (
+      <video
+        className="mt-3 w-full rounded-xl bg-fonce"
+        src={`/api/jobs/${jobId}/video`}
+        controls
+        autoPlay
+        preload="metadata"
+      />
+    );
+  }
+
+  return (
+    <div className="verre mt-3 rounded-xl p-4">
+      {etape === 'question' ? (
+        <>
+          <p className="titre text-[0.9375rem] font-medium">Relire la vidéo ?</p>
+          <p className="mt-1 text-[0.875rem] text-fonce/70">
+            Elle est en <strong>stockage froid</strong> : la conserver ne coûte
+            presque rien, la relire coûte davantage. On ne la charge que si tu
+            en as besoin.
+          </p>
+          <div className="mt-3 flex gap-2">
+            <Bouton onClick={() => setEtape('lecture')}>Lire la vidéo</Bouton>
+            <button
+              type="button"
+              onClick={() => setEtape('repos')}
+              className="rounded-md px-3 py-1.5 text-[0.875rem] text-fonce/60 hover:text-fonce"
+            >
+              Pas maintenant
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-[0.875rem] text-fonce/70">
+            Vidéo archivée{video.octets ? ` — ${mo(video.octets)}` : ''}, en
+            stockage froid.
+          </p>
+          <button
+            type="button"
+            onClick={() => setEtape('question')}
+            className="rounded-md px-3 py-1.5 text-[0.8125rem] text-fonce/70 ring-1 ring-bord hover:bg-white/60 hover:text-fonce"
+          >
+            Regarder
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 

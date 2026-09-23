@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Bouton, Champ, Erreur } from './Communs.jsx';
 import { sonderDuree, identifier } from '../sonde.js';
 import { api } from '../api.js';
 import { useCompression } from '../useCompression.js';
+import { archiver, useArchivage } from '../archivage.js';
 import { Apercu } from './Apercu.jsx';
 import { usePipeline } from '../usePipeline.js';
 import { duree, mo, usd, horodatage, liste } from '../format.js';
@@ -26,6 +27,11 @@ export function Nouveau({ surTermine }) {
   const [glossaire, setGlossaire] = useState('');
   const [contexteOdoo, setContexteOdoo] = useState('');
   const [mode, setMode] = useState('transcrire');
+  const [videoDisponible, setVideoDisponible] = useState(false);
+  // L'archivage démarre avant que le traitement existe : la compression
+  // n'attend pas la création du job, l'envoi si.
+  const cibleRef = useRef(null);
+  const archivage = useArchivage(cibleRef.current?.cle);
   const [sonde, setSonde] = useState(null);
   const [dossier, setDossier] = useState(null);
   const [debut, setDebut] = useState(0);
@@ -38,6 +44,17 @@ export function Nouveau({ surTermine }) {
   useEffect(() => {
     if (pipeline.etat === 'termine' && pipeline.resultat) surTermine?.(pipeline.jobId);
   }, [pipeline.etat, pipeline.resultat, pipeline.jobId, surTermine]);
+
+  useEffect(() => {
+    api.settings().then((r) => setVideoDisponible(Boolean(r.video?.disponible))).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const cible = cibleRef.current;
+    if (!cible) return;
+    if (pipeline.jobId != null) cible.jobId = pipeline.jobId;
+    if (pipeline.etat === 'erreur') cible.abandon = true;
+  }, [pipeline.jobId, pipeline.etat]);
 
   // Entrée de rodage : « ?source=/chemin » charge un fichier servi par le
   // serveur au lieu de passer par le sélecteur, ce qui rend la chaîne
@@ -212,11 +229,19 @@ export function Nouveau({ surTermine }) {
               </button>
             ))}
           </div>
-          {mode !== 'transcrire' ? (
+          {mode === 'les-deux' && videoDisponible ? (
             <p className="mt-2 text-[0.8125rem] text-fonce/55">
-              La version compressée est écrite directement sur ton disque —
-              720p, HEVC, environ 92 % plus légère. Elle n'est jamais envoyée
-              au serveur.
+              La vidéo est compressée sur ce poste — 720p, HEVC, environ 92 %
+              plus légère — puis archivée en stockage froid avec la réunion.
+              Ton fichier d'origine ne quitte pas ta machine.
+            </p>
+          ) : mode !== 'transcrire' ? (
+            <p className="mt-2 text-[0.8125rem] text-fonce/55">
+              La version compressée est enregistrée sur ton disque — 720p,
+              HEVC, environ 92 % plus légère.
+              {mode === 'compresser' && videoDisponible
+                ? ' Pour l’archiver avec la réunion, choisis « Les deux ».'
+                : ''}
               {!compression.supportee
                 ? " Ce navigateur ne sait pas écrire un fichier sur le disque : utilise Chrome ou Edge."
                 : ''}
@@ -285,7 +310,13 @@ export function Nouveau({ surTermine }) {
               const borne = debut > 0 || (fin && fin < secondes)
                 ? { start: debut, end: fin || secondes }
                 : null;
-              if (mode !== 'transcrire') compression.compresser(fichier, borne);
+              if (mode === 'les-deux' && videoDisponible) {
+                const cible = { cle: `nouveau-${Date.now()}`, jobId: null };
+                cibleRef.current = cible;
+                archiver({ fichier, trim: borne, cible });
+              } else if (mode !== 'transcrire') {
+                compression.compresser(fichier, borne);
+              }
               if (mode === 'compresser') return;
               pipeline.lancer({
                 fichier,
@@ -327,6 +358,7 @@ export function Nouveau({ surTermine }) {
 
         <Erreur>{pipeline.erreur}</Erreur>
         <Erreur>{compression.erreur}</Erreur>
+        {archivage ? <AvancementArchivage tache={archivage} /> : null}
         <Compression compression={compression} />
 
         {pipeline.fenetres.length > 0 ? (
@@ -615,6 +647,36 @@ function Reunions({ surChoix }) {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+/** Où en est l'archivage de la vidéo, tant qu'on est sur cet écran.
+ *  La fiche de la réunion prend le relais une fois qu'on l'a ouverte. */
+export function AvancementArchivage({ tache }) {
+  const libelle = {
+    compression: 'Compression sur ce poste',
+    envoi: 'Envoi vers le stockage froid',
+    termine: 'Vidéo archivée',
+    erreur: 'Archivage interrompu',
+  }[tache.etape] || 'Archivage';
+  return (
+    <div className="mt-2">
+      <p className="text-[0.875rem] text-fonce/70">
+        {libelle}
+        {tache.etape === 'compression' || tache.etape === 'envoi'
+          ? ` — ${Math.round((tache.progression || 0) * 100)} %. Tu peux continuer à travailler, mais garde cet onglet ouvert.`
+          : ''}
+      </p>
+      {tache.etape === 'compression' || tache.etape === 'envoi' ? (
+        <div className="mt-1 h-1.5 w-full max-w-md overflow-hidden rounded-full bg-bord">
+          <div
+            className="h-full bg-turquoise transition-[width]"
+            style={{ width: `${(tache.progression || 0) * 100}%` }}
+          />
+        </div>
+      ) : null}
+      {tache.erreur ? <p className="mt-1 text-[0.8125rem] text-violet">{tache.erreur}</p> : null}
     </div>
   );
 }
