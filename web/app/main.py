@@ -597,6 +597,36 @@ def create_app(
         db.jeter_job(job_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+    @app.delete("/api/corbeille", status_code=status.HTTP_200_OK)
+    def vider_corbeille(owner_id: int = Depends(current_user)) -> dict:
+        """Supprime pour de bon tout ce qui est à la corbeille.
+
+        Seulement la corbeille : une réunion active ne peut pas
+        disparaître par ce chemin, il faut d'abord l'y avoir mise.
+        """
+        supprimees = [
+            int(job["id"]) for job in db.list_jobs(owner_id, limit=10_000, etat="corbeille")
+        ]
+        for job_id in supprimees:
+            db.supprimer_job(job_id)
+        return {"supprimees": supprimees}
+
+    @app.delete("/api/jobs/{job_id}/definitif", status_code=status.HTTP_204_NO_CONTENT,
+                response_class=Response)
+    def supprimer_definitivement(
+        job_id: int, owner_id: int = Depends(current_user)
+    ) -> Response:
+        """Efface une réunion déjà jetée, sans attendre la rétention."""
+        job = owned_job(job_id, owner_id)
+        if not job["deleted_at"]:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Mets d'abord la réunion à la corbeille : on ne supprime pas "
+                "définitivement ce qu'on n'a pas choisi de jeter.",
+            )
+        db.supprimer_job(job_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
     @app.post("/api/jobs/{job_id}/archive")
     def archiver(job_id: int, owner_id: int = Depends(current_user)) -> dict:
         """Hors de la bibliothèque, mais intacte et toujours cherchable."""

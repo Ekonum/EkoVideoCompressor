@@ -1274,6 +1274,26 @@ class LiaisonAutomatiqueTestCase(_Fixture):
 class AgendaTestCase(unittest.TestCase):
     """Le filtre d'agenda ne doit pas écarter la réunion qu'on cherche."""
 
+    def test_seules_les_reunions_ou_l_on_est_invite_sont_proposees(self):
+        """La clé API voit l'agenda de toute la société : un rendez-vous
+        d'un collègue n'est ni une suggestion utile, ni une piste pour
+        l'enquêteur."""
+        from unittest import mock
+
+        from app import odoo as module
+
+        passerelle = module.OdooGateway(url="u", database="d", login="l", api_key="k")
+        evenements = [
+            {"id": 1, "name": "Quentin Seyve", "partner_ids": [10], "attendees": []},
+            {"id": 2, "name": "Rendez-vous de Lùka", "partner_ids": [77, 78], "attendees": []},
+            {"id": 3, "name": "Démo Acritec", "partner_ids": [2046, 10], "attendees": []},
+        ]
+        with mock.patch.object(module, "search_meeting_events", return_value=evenements), \
+             mock.patch.object(module.OdooGateway, "identite",
+                               return_value={"user_id": 6, "partner_id": 10}):
+            vues = passerelle.meetings()
+        self.assertEqual([v["name"] for v in vues], ["Quentin Seyve", "Démo Acritec"])
+
     def test_une_reunion_a_un_seul_participant_odoo_compte(self):
         """La réunion « Quentin Seyve » n'avait que Robin en
         participant : l'invité n'était pas dans la base."""
@@ -1283,7 +1303,9 @@ class AgendaTestCase(unittest.TestCase):
 
         passerelle = module.OdooGateway(url="u", database="d", login="l", api_key="k")
         with mock.patch.object(module, "search_meeting_events",
-                               return_value=[]) as cherche:
+                               return_value=[]) as cherche, \
+             mock.patch.object(module.OdooGateway, "identite",
+                               return_value={"user_id": 6, "partner_id": 10}):
             passerelle.meetings()
         self.assertEqual(cherche.call_args.kwargs["min_attendees"], 1)
 
@@ -1740,6 +1762,26 @@ class CorbeilleTestCase(_Fixture):
                 "SELECT count(*) AS n FROM segments_fts WHERE job_id = ?", (vieille,)
             ).fetchone()["n"]
         self.assertEqual(restes, 0)
+
+    def test_vider_la_corbeille_n_efface_que_la_corbeille(self):
+        gardee = self._importee("Gardée")
+        jetee = self._importee("Jetée")
+        self.client.delete(f"/api/jobs/{jetee}")
+        vue = self.client.delete("/api/corbeille").json()
+        self.assertEqual(vue["supprimees"], [jetee])
+        self.assertIsNone(self.db.get_job(jetee))
+        self.assertIsNotNone(self.db.get_job(gardee))
+
+    def test_la_suppression_definitive_exige_la_corbeille(self):
+        """On ne supprime pas définitivement ce qu'on n'a pas choisi de
+        jeter."""
+        job_id = self._importee()
+        self.assertEqual(
+            self.client.delete(f"/api/jobs/{job_id}/definitif").status_code, 409)
+        self.client.delete(f"/api/jobs/{job_id}")
+        self.assertEqual(
+            self.client.delete(f"/api/jobs/{job_id}/definitif").status_code, 204)
+        self.assertIsNone(self.db.get_job(job_id))
 
     def test_on_ne_jette_pas_la_reunion_d_un_collegue(self):
         job_id = self._importee()

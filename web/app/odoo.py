@@ -97,6 +97,12 @@ class OdooGateway:
             )
         except OdooError as exc:
             raise OdooUnavailable(_lisible(exc, self._database)) from exc
+        # Seulement les réunions où la personne est invitée. La clé API
+        # voit tout l'agenda de la société, collègues compris : proposer
+        # « c'est sans doute cette réunion-là » pour un rendez-vous
+        # auquel on n'était pas, c'est du bruit — et pour l'enquêteur,
+        # une fausse piste.
+        moi = self.identite()["partner_id"]
         return [
             {
                 "id": event.get("id"),
@@ -108,6 +114,7 @@ class OdooGateway:
                 "resource_id": event.get("res_id") or 0,
             }
             for event in events
+            if moi in (event.get("partner_ids") or [])
         ]
 
     # Ce qu'on sait lire, et sous quel nom. L'ordre compte : c'est

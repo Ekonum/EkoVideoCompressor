@@ -97,10 +97,30 @@ export function Bibliotheque({ surOuvrir }) {
         ))}
       </div>
       {etat === 'corbeille' ? (
-        <p className="mt-2 text-[0.8125rem] text-fonce/50">
-          Les réunions jetées disparaissent définitivement au bout de{' '}
-          {retention} jours.
-        </p>
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+          <p className="text-[0.8125rem] text-fonce/50">
+            Les réunions jetées disparaissent définitivement au bout de{' '}
+            {retention} jours.
+          </p>
+          {jobs?.length ? (
+            <button
+              type="button"
+              onClick={async () => {
+                // Ici, et seulement ici, on confirme : c'est le seul
+                // geste de la bibliothèque qui ne se défait pas.
+                if (!window.confirm(
+                  `Supprimer définitivement ${jobs.length} réunion(s) ? `
+                  + 'Cette fois, rien ne sera récupérable.',
+                )) return;
+                try { await api.viderCorbeille(); recharger(); }
+                catch (e) { setErreur(e.message); }
+              }}
+              className="rounded-md px-3 py-1.5 text-[0.8125rem] text-violet ring-1 ring-violet/35 hover:bg-white/50"
+            >
+              Vider la corbeille
+            </button>
+          ) : null}
+        </div>
       ) : null}
 
       <Erreur>{erreur}</Erreur>
@@ -183,7 +203,8 @@ export function Bibliotheque({ surOuvrir }) {
  *
  *  Pas de confirmation avant de jeter : la corbeille *est* la
  *  confirmation, et elle se défait d'un clic. Demander deux fois pour un
- *  geste réversible ne protège de rien et use l'attention.
+ *  geste réversible ne protège de rien et use l'attention. La
+ *  suppression définitive, elle, se confirme : elle ne se défait pas.
  */
 function Actions({ job, etat, surFait, surErreur }) {
   const [occupe, setOccupe] = useState(false);
@@ -212,6 +233,19 @@ function Actions({ job, etat, surFait, surErreur }) {
       <>
         {bouton('Archiver', api.archiver, 'Sortir de la bibliothèque, sans perdre')}
         {bouton('Jeter', api.jeter, 'Mettre à la corbeille')}
+      </>
+    );
+  }
+  if (etat === 'corbeille') {
+    return (
+      <>
+        {bouton('Restaurer', api.restaurer, 'Remettre dans la bibliothèque')}
+        {bouton('Supprimer', async (id) => {
+          if (!window.confirm('Supprimer définitivement cette réunion ?')) {
+            throw new Error('Suppression annulée.');
+          }
+          return api.supprimerDefinitivement(id);
+        }, 'Supprimer définitivement — irréversible')}
       </>
     );
   }
