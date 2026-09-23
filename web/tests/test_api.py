@@ -52,6 +52,9 @@ def _settings(root: Path, **overrides) -> Settings:
         monthly_budget_usd=50.0,
         corbeille_jours=30,
         public_url="https://transcript.test",
+        video_item="",
+        video_field="Clé JSON",
+        video_dossier="",
         enrolement=True,
         liaison_auto="certaine",
         sonde_ignore=frozenset({"odoo", "ekonum"}),
@@ -1691,6 +1694,254 @@ class ReenrichissementTestCase(_Fixture):
         body = self._create(duration=600.0)
         vue = self.client.post(f"/api/jobs/{body['job_id']}/enrich", json={})
         self.assertEqual(vue.status_code, 409)
+
+
+class FauxStockage:
+    """Un Drive en mémoire, qui suit le même contrat que DriveStockage."""
+
+    def __init__(self):
+        self.sessions: dict[str, bytearray] = {}
+        self.fichiers: dict[str, bytes] = {}
+        self.supprimes: list[str] = []
+        self.lectures: list[str] = []
+
+    def ouvrir_envoi(self, nom, taille, type_="video/mp4"):
+        session = f"session-{len(self.sessions) + 1}"
+        self.sessions[session] = bytearray()
+        return session
+
+    def envoyer_morceau(self, session, debut, octets, total):
+        tampon = self.sessions[session]
+        assert debut == len(tampon), "morceau hors séquence"
+        tampon.extend(octets)
+        if len(tampon) < total:
+            return None
+        fichier_id = f"drive-{len(self.fichiers) + 1}"
+        self.fichiers[fichier_id] = bytes(tampon)
+        return fichier_id
+
+    def lire(self, fichier_id, plage=""):
+        from app.stockage import Plage
+
+        self.lectures.append(plage)
+        contenu = self.fichiers[fichier_id]
+        if plage.startswith("bytes="):
+            debut, _, fin = plage[6:].partition("-")
+            debut = int(debut)
+            fin = int(fin) if fin else len(contenu) - 1
+            morceau = contenu[debut:fin + 1]
+            return Plage(206, {"Content-Type": "video/mp4",
+                               "Content-Range": f"bytes {debut}-{fin}/{len(contenu)}",
+                               "Content-Length": str(len(morceau)),
+                               "Accept-Ranges": "bytes"}, iter([morceau]))
+        return Plage(200, {"Content-Type": "video/mp4",
+                           "Content-Length": str(len(contenu)),
+                           "Accept-Ranges": "bytes"}, iter([contenu]))
+
+    def supprimer(self, fichier_id):
+        self.supprimes.append(fichier_id)
+        self.fichiers.pop(fichier_id, None)
+
+
+class VideoTestCase(_Fixture):
+    """La vidéo compressée part dans le stockage froid, jamais sur le
+    disque du serveur."""
+
+    def setUp(self):
+        super().setUp()
+        self.drive = FauxStockage()
+        self.app = create_app(
+            self.settings, database=self.db,
+            gemini_key=GeminiKey(url="", token="", item="", field="", static_key="k"),
+            stockage_factory=lambda: self.drive,
+        )
+        self.client = TestClient(self.app)
+
+    def _reunion(self) -> int:
+        return self.client.post("/api/jobs/import", json={
+            "filename": "reunion.mov", "created_at": "2026-09-23 10:00:00",
+            "title": "Acritec - Revue", "transcript": "Robin : bonjour.",
+            "segments": [{"start": 0, "end": 3, "speaker": "Robin", "text": "bonjour"}],
+        }).json()["job_id"]
+
+    def _envoyer(self, job_id, contenu, morceau=4):
+        vue = self.client.post(f"/api/jobs/{job_id}/video", json={"taille": len(contenu)})
+        self.assertEqual(vue.status_code, 200, vue.text)
+        dernier = None
+        for debut in range(0, len(contenu), morceau):
+            dernier = self.client.put(f"/api/jobs/{job_id}/video?debut={debut}",
+                                      content=contenu[debut:debut + morceau]).json()
+        return dernier
+
+    def test_l_envoi_par_morceaux_aboutit_a_un_fichier(self):
+        job_id = self._reunion()
+        fin = self._envoyer(job_id, b"0123456789")
+        self.assertTrue(fin["termine"])
+        fiche = self.client.get(f"/api/jobs/{job_id}/detail").json()
+        self.assertTrue(fiche["video"]["presente"])
+        self.assertFalse(fiche["video"]["en_cours"])
+        self.assertEqual(self.drive.fichiers["drive-1"], b"0123456789")
+
+    def test_la_session_drive_ne_sort_jamais_du_serveur(self):
+        """Elle vaut autorisation d'écrire : le navigateur ne la voit pas."""
+        job_id = self._reunion()
+        vue = self.client.post(f"/api/jobs/{job_id}/video", json={"taille": 10}).json()
+        fiche = self.client.get(f"/api/jobs/{job_id}/detail").json()
+        self.assertNotIn("session", json.dumps(vue))
+        self.assertNotIn("session-1", json.dumps(fiche))
+
+    def test_la_lecture_se_fait_par_plages(self):
+        job_id = self._reunion()
+        self._envoyer(job_id, b"0123456789")
+        plage = self.client.get(f"/api/jobs/{job_id}/video",
+                                headers={"Range": "bytes=2-5"})
+        self.assertEqual(plage.status_code, 206)
+        self.assertEqual(plage.content, b"2345")
+        self.assertEqual(plage.headers["accept-ranges"], "bytes")
+
+    def test_une_lecture_compte_une_fois_pas_a_chaque_saut(self):
+        job_id = self._reunion()
+        self._envoyer(job_id, b"0123456789")
+        self.client.get(f"/api/jobs/{job_id}/video", headers={"Range": "bytes=0-"})
+        self.client.get(f"/api/jobs/{job_id}/video", headers={"Range": "bytes=6-9"})
+        fiche = self.client.get(f"/api/jobs/{job_id}/detail").json()
+        self.assertEqual(fiche["video"]["lectures"], 1)
+
+    def test_une_reunion_n_a_qu_une_video(self):
+        job_id = self._reunion()
+        self._envoyer(job_id, b"0123456789")
+        self.assertEqual(self.client.post(f"/api/jobs/{job_id}/video",
+                                          json={"taille": 3}).status_code, 409)
+
+    def test_purger_la_reunion_supprime_sa_video(self):
+        """Sinon le stockage accumulerait des fichiers que plus rien ne
+        référence."""
+        job_id = self._reunion()
+        self._envoyer(job_id, b"0123456789")
+        self.client.delete(f"/api/jobs/{job_id}")
+        self.client.delete("/api/corbeille")
+        self.assertEqual(self.drive.supprimes, ["drive-1"])
+        self.assertIsNone(self.db.get_job(job_id))
+
+    def test_si_drive_refuse_la_reunion_reste_a_la_corbeille(self):
+        from app.stockage import StockageIndisponible
+
+        job_id = self._reunion()
+        self._envoyer(job_id, b"0123456789")
+
+        def refuse(_id):
+            raise StockageIndisponible("Google Drive injoignable.")
+
+        self.drive.supprimer = refuse
+        self.client.delete(f"/api/jobs/{job_id}")
+        vue = self.client.delete("/api/corbeille").json()
+        self.assertEqual(vue["supprimees"], [])
+        self.assertIsNotNone(self.db.get_job(job_id))
+
+    def test_sans_stockage_configure_rien_n_est_propose(self):
+        self.assertFalse(
+            TestClient(create_app(
+                self.settings, database=self.db,
+                gemini_key=GeminiKey(url="", token="", item="", field="", static_key="k"),
+            )).get("/api/settings").json()["video"]["disponible"]
+        )
+        self.assertTrue(self.client.get("/api/settings").json()["video"]["disponible"])
+
+
+class DriveStockageHttpTestCase(unittest.TestCase):
+    """Le vrai client Drive, doublé au niveau HTTP."""
+
+    CLE = None
+
+    @classmethod
+    def setUpClass(cls):
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+
+        privee = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        cls.CLE = {
+            "client_email": "transcript@ekonum.iam.gserviceaccount.com",
+            "private_key": privee.private_bytes(
+                serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption()).decode(),
+        }
+
+    def _drive(self, reponses):
+        import io
+        import urllib.error
+
+        from app.stockage import DriveStockage
+
+        appels = []
+
+        class Reponse(io.BytesIO):
+            def __init__(self, corps=b"", status=200, headers=None):
+                super().__init__(corps)
+                self.status = self.code = status
+                self.headers = headers or {}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+        def opener(requete, timeout=None):
+            appels.append((requete.get_method(), requete.full_url,
+                           dict(requete.header_items())))
+            r = reponses.pop(0)
+            if r.get("status") == 308:
+                raise urllib.error.HTTPError(requete.full_url, 308, "Resume",
+                                             r.get("headers", {}), io.BytesIO(b""))
+            return Reponse(json.dumps(r.get("json", {})).encode(), r.get("status", 200),
+                           r.get("headers", {}))
+
+        return DriveStockage(self.CLE, "dossier-partage", opener=opener), appels
+
+    def test_un_morceau_intermediaire_rend_308_sans_erreur(self):
+        """Drive répond 308 « continue » : urllib le lève comme une
+        erreur, et le prendre pour un échec ferait avorter tout envoi."""
+        drive, appels = self._drive([
+            {"json": {"access_token": "jeton", "expires_in": 3600}},
+            {"status": 308},
+        ])
+        self.assertIsNone(drive.envoyer_morceau("https://session", 0, b"abcd", 10))
+        methode, _, entetes = appels[-1]
+        self.assertEqual(methode, "PUT")
+        self.assertEqual(entetes["Content-range"], "bytes 0-3/10")
+        # La session porte l'autorisation : pas de jeton sur le PUT.
+        self.assertNotIn("Authorization", entetes)
+
+    def test_le_dernier_morceau_rend_l_identifiant(self):
+        drive, _ = self._drive([{"json": {"id": "fichier-42"}}])
+        self.assertEqual(drive.envoyer_morceau("https://session", 8, b"ij", 10),
+                         "fichier-42")
+
+    def test_l_ouverture_vise_le_drive_partage(self):
+        drive, appels = self._drive([
+            {"json": {"access_token": "jeton", "expires_in": 3600}},
+            {"headers": {"Location": "https://session-drive"}},
+        ])
+        self.assertEqual(drive.ouvrir_envoi("transcript-1.mp4", 10), "https://session-drive")
+        methode, url, entetes = appels[-1]
+        self.assertIn("supportsAllDrives=true", url)
+        self.assertEqual(entetes["Authorization"], "Bearer jeton")
+
+    def test_le_jeton_du_compte_de_service_est_reutilise(self):
+        drive, appels = self._drive([
+            {"json": {"access_token": "jeton", "expires_in": 3600}},
+            {"headers": {"Location": "s1"}},
+            {"headers": {"Location": "s2"}},
+        ])
+        drive.ouvrir_envoi("a.mp4", 1)
+        drive.ouvrir_envoi("b.mp4", 1)
+        self.assertEqual(sum("oauth2" in url for _, url, _ in appels), 1)
+
+    def test_sans_cle_le_stockage_se_dit_indisponible(self):
+        from app.stockage import DriveStockage, StockageIndisponible
+
+        with self.assertRaises(StockageIndisponible):
+            DriveStockage({}, "dossier")
 
 
 class CorbeilleTestCase(_Fixture):

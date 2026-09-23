@@ -36,7 +36,10 @@ export function Detail({ jobId, surRetour }) {
 
       <div className="mt-8 grid gap-10 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <div>
-          <h2 className="titre text-[1.0625rem] font-medium">Transcription</h2>
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="titre text-[1.0625rem] font-medium">Transcription</h2>
+            <Copier texte={fiche.transcript} />
+          </div>
           <div className="verre mt-3 max-h-[34rem] overflow-y-auto rounded-xl">
             {fiche.segments.length === 0 ? (
               <p className="px-4 py-6 text-fonce/50">Pas encore de segment.</p>
@@ -71,6 +74,38 @@ export function Detail({ jobId, surRetour }) {
         </aside>
       </div>
     </section>
+  );
+}
+
+/** Copie la transcription telle qu'on la colle ailleurs — un courriel,
+ *  un chatter, un document : « Interlocuteur : texte », ligne par ligne.
+ *
+ *  Le bouton dit lui-même que c'est fait, plutôt qu'une notice ailleurs
+ *  dans la page qu'on ne regarde pas au moment de coller.
+ */
+function Copier({ texte }) {
+  const [etat, setEtat] = useState('repos');
+  if (!texte?.trim()) return null;
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(texte);
+          setEtat('copie');
+        } catch {
+          setEtat('refus');
+        }
+        setTimeout(() => setEtat('repos'), 2000);
+      }}
+      className="rounded-md px-3 py-1.5 text-[0.8125rem] text-fonce/70 ring-1 ring-bord transition-colors hover:bg-white/60 hover:text-fonce"
+    >
+      {etat === 'copie'
+        ? 'Copiée ✓'
+        : etat === 'refus'
+          ? 'Copie refusée par le navigateur'
+          : 'Copier la transcription'}
+    </button>
   );
 }
 

@@ -193,6 +193,13 @@ class Database:
             # Ce dont le modèle n'était pas sûr : l'app macOS l'écrivait
             # dans un fichier « à vérifier », le serveur le jetait.
             ("uncertain_json", "TEXT"),
+            # Vidéo compressée, hors du serveur. La session d'envoi vaut
+            # autorisation d'écrire : elle ne quitte jamais la base.
+            ("video_file_id", "TEXT"),
+            ("video_bytes", "INTEGER"),
+            ("video_session", "TEXT"),
+            ("video_uploaded_at", "TEXT"),
+            ("video_lectures", "INTEGER NOT NULL DEFAULT 0"),
             ("archived_at", "TEXT"),
             ("deleted_at", "TEXT"),
         ):
@@ -425,21 +432,49 @@ class Database:
             conn.execute("DELETE FROM segments_fts WHERE job_id = ?", (job_id,))
             conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
 
-    def purger_corbeille(self, jours: int) -> list[int]:
-        """Vide ce qui a dépassé le délai de rétention. Rend les
-        identifiants supprimés, pour que ça se journalise."""
+    def ouvrir_envoi_video(self, job_id: int, session: str, taille: int) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET video_session = ?, video_bytes = ?, "
+                "video_file_id = NULL, video_uploaded_at = NULL WHERE id = ?",
+                (session, int(taille), job_id),
+            )
+
+    def terminer_envoi_video(self, job_id: int, fichier_id: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET video_file_id = ?, video_session = NULL, "
+                "video_uploaded_at = ? WHERE id = ?",
+                (fichier_id, datetime.now().isoformat(timespec="seconds"), job_id),
+            )
+
+    def compter_lecture_video(self, job_id: int) -> None:
+        """Chaque lecture est comptée : en stockage froid, c'est elle qui
+        coûte. Le chiffre servira le jour où GCS la facturera vraiment."""
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET video_lectures = video_lectures + 1 WHERE id = ?",
+                (job_id,),
+            )
+
+    def corbeille_perimee(self, jours: int) -> list[int]:
+        """Les réunions jetées depuis plus de ``jours`` jours."""
         if jours <= 0:
             return []
         limite = (datetime.now() - timedelta(days=jours)).isoformat(timespec="seconds")
         with self.connect() as conn:
-            perimes = [
+            return [
                 int(r["id"])
                 for r in conn.execute(
-                    "SELECT id FROM jobs WHERE deleted_at IS NOT NULL "
-                    "AND deleted_at < ?",
+                    "SELECT id FROM jobs WHERE deleted_at IS NOT NULL AND deleted_at < ?",
                     (limite,),
                 )
             ]
+
+    def purger_corbeille(self, jours: int) -> list[int]:
+        """Vide ce qui a dépassé le délai de rétention. Rend les
+        identifiants supprimés, pour que ça se journalise."""
+        perimes = self.corbeille_perimee(jours)
         for job_id in perimes:
             self.supprimer_job(job_id)
         return perimes

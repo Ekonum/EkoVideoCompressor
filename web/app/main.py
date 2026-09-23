@@ -25,6 +25,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi import Response
+from fastapi.responses import StreamingResponse
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -48,6 +49,7 @@ from .coffre import Coffre, CoffreIndisponible
 from .db import Database
 from .odoo import OdooGateway, OdooUnavailable
 from .secrets import GeminiKey, SecretError
+from .stockage import MORCEAU, DriveStockage, StockageIndisponible
 from .enqueteur import MODELE_ENQUETE, Conclusion, enqueter_confirme
 from .sonde import FENETRE_SECONDES, fournisseur, identifier
 from .settings import Settings
@@ -188,6 +190,11 @@ class Reenrichissement(BaseModel):
     record_id: int = Field(default=0, ge=0)
 
 
+class EnvoiVideo(BaseModel):
+    taille: int = Field(gt=0, le=20 * 1024**3)
+    type: str = Field(default="video/mp4", max_length=64)
+
+
 class DemandeAppareil(BaseModel):
     """Ce qu'un appareil dit de lui en demandant à être enrôlé."""
 
@@ -217,6 +224,7 @@ def create_app(
     gemini_key: GeminiKey | None = None,
     verifier: AccessVerifier | None = None,
     odoo_factory=None,
+    stockage_factory=None,
 ) -> FastAPI:
     config = settings or Settings.from_env()
     db = database or Database(config.db_path)
@@ -228,6 +236,49 @@ def create_app(
         static_key=config.dev_api_key,
     )
     access = verifier or AccessVerifier(config.access_team_domain, config.access_aud)
+
+    cle_video = GeminiKey(  # lecteur de coffre générique, malgré son nom
+        url=config.broker_url,
+        token=config.broker_token,
+        item=config.video_item,
+        field=config.video_field,
+    )
+    etat_stockage: dict[str, Any] = {}
+
+    def stockage():
+        """Le stockage vidéo, ou ``StockageIndisponible``.
+
+        Construit à la première demande et gardé : il porte le jeton du
+        compte de service, qu'on ne renégocie pas à chaque morceau.
+        """
+        if stockage_factory is not None:
+            return stockage_factory()
+        if not (config.video_item and config.video_dossier):
+            raise StockageIndisponible("Stockage vidéo non configuré.")
+        if "instance" not in etat_stockage:
+            try:
+                cle = json.loads(cle_video.get())
+            except (SecretError, ValueError) as exc:
+                raise StockageIndisponible(
+                    "Clé du compte de service illisible dans le coffre."
+                ) from exc
+            etat_stockage["instance"] = DriveStockage(cle, config.video_dossier)
+        return etat_stockage["instance"]
+
+    def stockage_disponible() -> bool:
+        return stockage_factory is not None or bool(config.video_item and config.video_dossier)
+
+    def effacer(job_id: int) -> None:
+        """Supprime une réunion pour de bon, vidéo comprise.
+
+        La vidéo d'abord : si Drive refuse, la réunion reste à la
+        corbeille et on réessaiera, plutôt que de laisser un fichier
+        orphelin que plus rien ne référence.
+        """
+        job = db.get_job(job_id) or {}
+        if job.get("video_file_id"):
+            stockage().supprimer(str(job["video_file_id"]))
+        db.supprimer_job(job_id)
     coffre = Coffre(config.secret_key)
 
     def odoo_pour(owner_id: int) -> OdooGateway:
@@ -604,11 +655,13 @@ def create_app(
         Seulement la corbeille : une réunion active ne peut pas
         disparaître par ce chemin, il faut d'abord l'y avoir mise.
         """
-        supprimees = [
-            int(job["id"]) for job in db.list_jobs(owner_id, limit=10_000, etat="corbeille")
-        ]
-        for job_id in supprimees:
-            db.supprimer_job(job_id)
+        supprimees: list[int] = []
+        for job in db.list_jobs(owner_id, limit=10_000, etat="corbeille"):
+            try:
+                effacer(int(job["id"]))
+                supprimees.append(int(job["id"]))
+            except StockageIndisponible as exc:
+                log.warning("réunion %s gardée à la corbeille : %s", job["id"], exc)
         return {"supprimees": supprimees}
 
     @app.delete("/api/jobs/{job_id}/definitif", status_code=status.HTTP_204_NO_CONTENT,
@@ -624,8 +677,89 @@ def create_app(
                 "Mets d'abord la réunion à la corbeille : on ne supprime pas "
                 "définitivement ce qu'on n'a pas choisi de jeter.",
             )
-        db.supprimer_job(job_id)
+        try:
+            effacer(job_id)
+        except StockageIndisponible as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
         return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    # -- vidéo compressée ------------------------------------------------
+
+    @app.post("/api/jobs/{job_id}/video")
+    def ouvrir_envoi_video(
+        job_id: int, payload: EnvoiVideo, owner_id: int = Depends(current_user)
+    ) -> dict:
+        """Prépare l'envoi de la vidéo compressée d'une réunion.
+
+        La session Drive reste ici : le navigateur n'envoie que des
+        morceaux à transcript, qui les relaie.
+        """
+        job = owned_job(job_id, owner_id)
+        if job["video_file_id"]:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "Cette réunion a déjà sa vidéo."
+            )
+        try:
+            session = stockage().ouvrir_envoi(
+                f"transcript-{job_id}.mp4", payload.taille, payload.type or "video/mp4"
+            )
+        except StockageIndisponible as exc:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+        db.ouvrir_envoi_video(job_id, session, payload.taille)
+        return {"morceau": MORCEAU}
+
+    @app.put("/api/jobs/{job_id}/video")
+    async def envoyer_morceau_video(
+        job_id: int, debut: int, request: Request, owner_id: int = Depends(current_user)
+    ) -> dict:
+        job = owned_job(job_id, owner_id)
+        session = job["video_session"]
+        if not session:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "Aucun envoi de vidéo en cours pour cette réunion."
+            )
+        octets = await request.body()
+        if not octets or len(octets) > MORCEAU:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"Morceau vide ou trop gros (au plus {MORCEAU // (1024 * 1024)} Mio).",
+            )
+        total = int(job["video_bytes"] or 0)
+        try:
+            fichier_id = await asyncio.to_thread(
+                stockage().envoyer_morceau, session, debut, octets, total
+            )
+        except StockageIndisponible as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+        if fichier_id:
+            db.terminer_envoi_video(job_id, fichier_id)
+        return {"recu": debut + len(octets), "total": total, "termine": bool(fichier_id)}
+
+    @app.get("/api/jobs/{job_id}/video")
+    def lire_video(
+        job_id: int, request: Request, owner_id: int = Depends(current_user)
+    ):
+        """La vidéo, en flux et par plages — c'est ce qui permet d'avancer
+        dans la réunion sans la télécharger en entier.
+
+        Seule la première plage d'une lecture est comptée : un lecteur
+        en demande des dizaines en avançant, ce serait compter des
+        sauts, pas des lectures.
+        """
+        job = owned_job(job_id, owner_id)
+        if not job["video_file_id"]:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Pas de vidéo pour cette réunion.")
+        plage = request.headers.get("range", "")
+        try:
+            reponse = stockage().lire(str(job["video_file_id"]), plage)
+        except StockageIndisponible as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+        if plage in ("", "bytes=0-"):
+            db.compter_lecture_video(job_id)
+        return StreamingResponse(
+            reponse.flux, status_code=reponse.statut, headers=reponse.entetes,
+            media_type=reponse.entetes.get("Content-Type", "video/mp4"),
+        )
 
     @app.post("/api/jobs/{job_id}/archive")
     def archiver(job_id: int, owner_id: int = Depends(current_user)) -> dict:
@@ -649,8 +783,12 @@ def create_app(
         # serveur tient dans 256 Mo et n'a pas d'ordonnanceur, et une
         # corbeille qu'on consulte est une corbeille qu'on peut vider.
         if etat == "corbeille":
-            for perime in db.purger_corbeille(config.corbeille_jours):
-                log.info("corbeille : réunion %s purgée", perime)
+            for perime in db.corbeille_perimee(config.corbeille_jours):
+                try:
+                    effacer(perime)
+                    log.info("corbeille : réunion %s purgée", perime)
+                except StockageIndisponible as exc:
+                    log.warning("corbeille : réunion %s gardée : %s", perime, exc)
         return [
             {
                 "job_id": job["id"],
@@ -704,6 +842,13 @@ def create_app(
             # qu'il faut réécouter, et elle ne sert à rien si elle reste
             # dans la base.
             "uncertain": json.loads(job["uncertain_json"] or "[]"),
+            "video": {
+                "presente": bool(job["video_file_id"]),
+                "en_cours": bool(job["video_session"]),
+                "octets": job["video_bytes"],
+                "deposee_le": job["video_uploaded_at"],
+                "lectures": job["video_lectures"] or 0,
+            },
             "segments": db.segments_for_job(job_id),
             "previous_versions": json.loads(job["previous_versions_json"] or "[]"),
             "odoo": {
@@ -1306,6 +1451,7 @@ def create_app(
                 if provider_for_model(entry["id"]) == "gemini"
             ],
             "corbeille": {"retention_jours": config.corbeille_jours},
+            "video": {"disponible": stockage_disponible()},
             "budget": {
                 "spent_usd": round(spent, 4),
                 "cap_usd": config.monthly_budget_usd,
