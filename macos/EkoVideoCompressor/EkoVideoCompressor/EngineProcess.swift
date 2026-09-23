@@ -33,7 +33,14 @@ final class EngineProcess: ObservableObject {
         }
     }
 
-    func runAndWait(arguments: [String], workingDirectory: URL? = nil) async -> Int32 {
+    /// ``environment`` is merged over the app's own: it is how secrets
+    /// (a device token, an enrolment code) reach the engine without
+    /// appearing in its arguments, which any local process can read.
+    func runAndWait(
+        arguments: [String],
+        workingDirectory: URL? = nil,
+        environment: [String: String] = [:]
+    ) async -> Int32 {
         guard !isRunning else { return -1 }
         events.removeAll()
         outputLines.removeAll()
@@ -45,6 +52,10 @@ final class EngineProcess: ObservableObject {
         process.executableURL = Self.engineExecutableURL()
         process.arguments = arguments
         process.currentDirectoryURL = workingDirectory
+        if !environment.isEmpty {
+            process.environment = ProcessInfo.processInfo.environment
+                .merging(environment) { _, new in new }
+        }
 
         let output = Pipe()
         process.standardOutput = output
@@ -94,13 +105,21 @@ final class EngineProcess: ObservableObject {
         process?.terminate()
     }
 
-    static func runCommand(arguments: [String], workingDirectory: URL? = nil) async -> EngineCommandResult {
+    static func runCommand(
+        arguments: [String],
+        workingDirectory: URL? = nil,
+        environment: [String: String] = [:]
+    ) async -> EngineCommandResult {
         let executableURL = await MainActor.run { engineExecutableURL() }
         let output = await Task.detached(priority: .userInitiated) {
             let process = Process()
             process.executableURL = executableURL
             process.arguments = arguments
             process.currentDirectoryURL = workingDirectory
+            if !environment.isEmpty {
+                process.environment = ProcessInfo.processInfo.environment
+                    .merging(environment) { _, new in new }
+            }
             let pipe = Pipe()
             process.standardOutput = pipe
             process.standardError = pipe
