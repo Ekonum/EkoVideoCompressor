@@ -11,7 +11,7 @@ import { duree, usd, jour, horodatage } from '../format.js';
 export function Bibliotheque({ surOuvrir }) {
   const [jobs, setJobs] = useState(null);
   const [erreur, setErreur] = useState('');
-  const [tri, setTri] = useState({ champ: 'created_at', sens: 'desc' });
+  const [tri, setTri] = useState({ champ: 'quand', sens: 'desc' });
   const [recherche, setRecherche] = useState('');
   const [resultats, setResultats] = useState(null);
   const [etat, setEtat] = useState('actif');
@@ -22,6 +22,16 @@ export function Bibliotheque({ surOuvrir }) {
   }, [etat]);
 
   useEffect(() => { setJobs(null); recharger(); }, [recharger]);
+
+  // Tant qu'une réunion tourne, la liste se rafraîchit seule : on doit
+  // pouvoir lancer une deuxième transcription et regarder la première
+  // avancer d'ici.
+  const tourne = (jobs || []).some((j) => j.progress && j.status !== 'erreur');
+  useEffect(() => {
+    if (!tourne) return undefined;
+    const minuteur = setInterval(recharger, 4000);
+    return () => clearInterval(minuteur);
+  }, [tourne, recharger]);
 
   useEffect(() => {
     api.settings()
@@ -42,7 +52,8 @@ export function Bibliotheque({ surOuvrir }) {
 
   const triees = useMemo(() => {
     if (!jobs) return [];
-    const copie = [...jobs];
+    // La date qui compte est celle de la réunion ; à défaut, celle du dépôt.
+    const copie = jobs.map((j) => ({ ...j, quand: j.meeting_date || j.created_at }));
     copie.sort((a, b) => {
       const ga = a[tri.champ] ?? '';
       const gb = b[tri.champ] ?? '';
@@ -149,7 +160,7 @@ export function Bibliotheque({ surOuvrir }) {
             <thead className="border-b border-bord">
               <tr>
                 {colonne('title', 'Réunion')}
-                {colonne('created_at', 'Date')}
+                {colonne('quand', 'Date')}
                 {colonne('duration_seconds', 'Durée')}
                 {colonne('status', 'État')}
                 {colonne('cost_usd', 'Coût', 'text-right')}
@@ -174,9 +185,24 @@ export function Bibliotheque({ surOuvrir }) {
                       <span className="block text-[0.8125rem] text-fonce/45">{job.filename}</span>
                     ) : null}
                   </td>
-                  <td className="px-4 py-3 text-fonce/70">{jour(job.created_at)}</td>
+                  <td className="px-4 py-3 text-fonce/70">{jour(job.quand)}</td>
                   <td className="px-4 py-3 tabular-nums text-fonce/70">{duree(job.duration_seconds)}</td>
-                  <td className="px-4 py-3"><Etat valeur={job.status} /></td>
+                  <td className="px-4 py-3">
+                    <Etat valeur={job.status} />
+                    {job.progress && job.status !== 'erreur' && job.progress.total ? (
+                      <span className="mt-1 block w-24">
+                        <span className="block h-1 overflow-hidden rounded-full bg-bord">
+                          <span
+                            className="block h-full bg-turquoise transition-[width]"
+                            style={{ width: `${(job.progress.done / job.progress.total) * 100}%` }}
+                          />
+                        </span>
+                        <span className="text-[0.75rem] tabular-nums text-fonce/45">
+                          {job.progress.done}/{job.progress.total} fenêtres
+                        </span>
+                      </span>
+                    ) : null}
+                  </td>
                   <td className="px-4 py-3 text-right tabular-nums text-fonce/70">{usd(job.cost_usd)}</td>
                   <td
                     className="whitespace-nowrap px-4 py-3 text-right"

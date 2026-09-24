@@ -38,7 +38,10 @@ export default function App() {
         ) : vue === 'compte' ? (
           <Compte />
         ) : vue === 'nouveau' ? (
-          <Nouveau surTermine={(id) => { setVue('bibliotheque'); setOuvert(id); }} />
+          <Nouveau
+            surTermine={(id) => { setVue('bibliotheque'); setOuvert(id); }}
+            surBibliotheque={() => setVue('bibliotheque')}
+          />
         ) : (
           <Bibliotheque surOuvrir={setOuvert} />
         )}

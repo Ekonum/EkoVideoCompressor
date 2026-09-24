@@ -18,7 +18,13 @@ const MODELE = 'gemini-3.8-flash';
  *  quitte pas le poste. C'est la promesse centrale de l'outil ; elle
  *  mérite d'être écrite, pas déduite.
  */
-export function Nouveau({ surTermine }) {
+/** « 2026-09-21T18:34 » pour un champ datetime-local, à l'heure locale. */
+function versChampLocal(date) {
+  const decale = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return decale.toISOString().slice(0, 16);
+}
+
+export function Nouveau({ surTermine, surBibliotheque }) {
   const [fichier, setFichier] = useState(null);
   const [secondes, setSecondes] = useState(0);
   const [lecture, setLecture] = useState('');
@@ -28,6 +34,10 @@ export function Nouveau({ surTermine }) {
   const [contexteOdoo, setContexteOdoo] = useState('');
   const [mode, setMode] = useState('transcrire');
   const [videoDisponible, setVideoDisponible] = useState(false);
+  // Quand la réunion a eu lieu. Proposée d'après le fichier — daté de la
+  // fin de l'enregistrement, d'où la durée retranchée — et corrigeable :
+  // un fichier recopié ou renommé porte une date qui ment.
+  const [dateReunion, setDateReunion] = useState('');
   // L'archivage démarre avant que le traitement existe : la compression
   // n'attend pas la création du job, l'envoi si.
   const cibleRef = useRef(null);
@@ -83,7 +93,7 @@ export function Nouveau({ surTermine }) {
    *  remonte pas comme une erreur — on retombe simplement sur la
    *  saisie à la main.
    */
-  async function ecouter(choisi, total) {
+  async function ecouter(choisi, total, instant = '') {
     setSonde({ enCours: true });
     try {
       const reglages = await api.settings();
@@ -91,6 +101,7 @@ export function Nouveau({ surTermine }) {
         audio: reglages.audio,
         fenetre: reglages.probe?.window_seconds || 300,
         duree: total,
+        moment: instant,
       });
       setSonde({ ...vue, enCours: false });
       const retenu = vue.investigation?.record;
@@ -118,7 +129,9 @@ export function Nouveau({ surTermine }) {
       setDebut(0);
       setFin(total);
       setLecture(`${mo(choisi.size)} · ${duree(total)}`);
-      if (mode !== 'compresser') ecouter(choisi, total);
+      const debutReunion = new Date((choisi.lastModified || Date.now()) - total * 1000);
+      setDateReunion(versChampLocal(debutReunion));
+      if (mode !== 'compresser') ecouter(choisi, total, debutReunion.toISOString());
     } catch (e) {
       setFichier(null);
       setLecture(`Fichier illisible : ${e.message}`);
@@ -195,6 +208,21 @@ export function Nouveau({ surTermine }) {
             className="verre mt-3 block w-full cursor-pointer rounded-xl border-dashed px-4 py-6 text-fonce/70 file:mr-4 file:rounded-md file:border-0 file:bg-fonce file:px-3 file:py-1.5 file:text-clair"
           />
           {lecture ? <p className="mt-2 text-[0.875rem] text-fonce/60">{lecture}</p> : null}
+          {fichier ? (
+            <label className="mt-3 flex flex-wrap items-center gap-3 text-[0.875rem]">
+              <span className="text-fonce/70">Date de la réunion</span>
+              <input
+                type="datetime-local"
+                value={dateReunion}
+                onChange={(e) => setDateReunion(e.target.value)}
+                disabled={enCours}
+                className="rounded-md border border-bord bg-white px-2 py-1 tabular-nums"
+              />
+              <span className="text-[0.8125rem] text-fonce/45">
+                déduite du fichier — corrige-la s'il a été recopié
+              </span>
+            </label>
+          ) : null}
           <Apercu
             fichier={fichier}
             duree={secondes}
@@ -319,6 +347,7 @@ export function Nouveau({ surTermine }) {
               }
               if (mode === 'compresser') return;
               pipeline.lancer({
+                meetingDate: dateReunion ? new Date(dateReunion).toISOString() : null,
                 fichier,
                 // Seule la partie retenue est transcrite — donc payée.
                 duree: (fin || secondes) - debut,
@@ -363,6 +392,36 @@ export function Nouveau({ surTermine }) {
 
         {pipeline.fenetres.length > 0 ? (
           <Avancement fenetres={pipeline.fenetres} message={pipeline.message} />
+        ) : null}
+
+        {pipeline.etat === 'traitement' ? (
+          <div className="verre rounded-xl p-4">
+            <p className="text-[0.875rem] text-fonce/75">
+              {pipeline.envoiTermine
+                ? 'Tout est envoyé : le serveur termine seul. Tu peux fermer cet onglet.'
+                : 'Tu peux faire autre chose pendant ce temps — garde seulement cet onglet ouvert tant que l’envoi n’est pas fini.'}
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Bouton onClick={() => { pipeline.detacher(); surBibliotheque?.(); }}>
+                Revenir à la bibliothèque
+              </Bouton>
+              <button
+                type="button"
+                onClick={() => {
+                  // La transcription en cours continue ; on repart d'un
+                  // formulaire vierge pour la suivante.
+                  pipeline.detacher();
+                  setFichier(null); setSecondes(0); setLecture(''); setSonde(null);
+                  setDossier(null); setClient(''); setParticipants(''); setGlossaire('');
+                  setContexteOdoo(''); setDateReunion(''); setDebut(0); setFin(0);
+                  cibleRef.current = null;
+                }}
+                className="rounded-md px-3 py-1.5 text-[0.875rem] text-fonce/70 ring-1 ring-bord hover:bg-white/60"
+              >
+                Lancer une autre transcription
+              </button>
+            </div>
+          </div>
         ) : null}
       </div>
     </section>
@@ -515,54 +574,70 @@ function Sonde({ etat, retenu, surChoix }) {
       ) : null}
 
       {(etat.candidates || []).length ? (
-        <>
-          <p className="mt-3 text-[0.8125rem] text-fonce/55">
+        // Un bloc à part, sur fond clair : c'est une décision à prendre,
+        // pas une information de plus. Chaque dossier est une carte avec
+        // son bouton, et celui qui sera utilisé se voit d'un coup d'œil.
+        <div className="mt-4 rounded-lg border border-turquoise/40 bg-white/80 p-3">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <p className="titre text-[0.9375rem] font-medium">Dossier Odoo de cette réunion</p>
+            {enquete.record ? (
+              <span className="rounded-full bg-turquoise/20 px-2 py-0.5 text-[0.75rem] font-medium text-turquoise-sombre">
+                {CERTITUDE[enquete.confidence] || 'Proposé'}
+              </span>
+            ) : null}
+          </div>
+          <p className="mt-1 text-[0.8125rem] text-fonce/60">
             {enquete.record
-              ? `${CERTITUDE[enquete.confidence] || 'Dossier proposé'} — ${enquete.reason}`
-              : 'Dossiers Odoo correspondants — en choisir un charge son contexte.'}
+              ? enquete.reason
+              : 'Aucun n’est certain : choisis celui qui convient, son contexte guidera la transcription.'}
           </p>
-          {retenu ? (
-            <p className="mt-1 text-[0.8125rem] text-turquoise-sombre">
-              {retenu.auto
-                ? 'La transcription sera déposée ici automatiquement, sans te '
-                  + 'redemander.'
-                : 'Dossier retenu : la transcription attendra ton clic pour être '
-                  + 'déposée.'}
-            </p>
-          ) : null}
-          {enquete.record && (etat.candidates || []).length > 1 ? (
-            <p className="mt-1 text-[0.75rem] text-fonce/45">
-              Le premier est celui retenu ; les suivants ont aussi été
-              envisagés. Si la proposition est fausse, choisis le bon.
-            </p>
-          ) : null}
-          <ul className="mt-2 space-y-1">
-            {etat.candidates.map((dossier) => (
-              <li key={`${dossier.model}-${dossier.id}`}>
-                <button
-                  type="button"
-                  onClick={() => surChoix(dossier)}
-                  className={`w-full rounded-md px-2 py-1.5 text-left text-[0.875rem] hover:bg-papier ${
-                    retenu && retenu.id === dossier.id && retenu.model === dossier.model
-                      ? 'ring-1 ring-turquoise-sombre'
-                      : ''
+          <ul className="mt-3 space-y-2">
+            {etat.candidates.map((dossier) => {
+              const choisi = retenu && retenu.id === dossier.id && retenu.model === dossier.model;
+              return (
+                <li
+                  key={`${dossier.model}-${dossier.id}`}
+                  className={`flex items-center gap-3 rounded-lg border p-2.5 ${
+                    choisi ? 'border-turquoise-sombre bg-turquoise/10' : 'border-bord bg-white'
                   }`}
                 >
-                  <span className="titre font-medium">{dossier.name}</span>
-                  {dossier.partner ? (
-                    <span className="text-fonce/55"> · {dossier.partner}</span>
-                  ) : null}
-                  <span className="block text-[0.75rem] text-fonce/45">
-                    {dossier.reason ? `${dossier.reason} · ` : ''}
-                    {dossier.kind ? `${dossier.kind} · ` : ''}
-                    {dossier.matched ? `trouvé sur « ${dossier.matched} » · ` : ''}
-                    modifié le {dossier.updated}
-                  </span>
-                </button>
-              </li>
-            ))}
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[0.875rem]">
+                      <span className="titre font-medium">{dossier.name}</span>
+                      {dossier.partner ? <span className="text-fonce/55"> · {dossier.partner}</span> : null}
+                    </p>
+                    <p className="text-[0.75rem] text-fonce/50">
+                      {[dossier.kind, dossier.reason,
+                        dossier.matched ? `trouvé sur « ${dossier.matched} »` : '',
+                        dossier.updated ? `modifié le ${dossier.updated}` : '']
+                        .filter(Boolean).join(' · ')}
+                    </p>
+                  </div>
+                  {choisi ? (
+                    <span className="shrink-0 text-[0.8125rem] font-medium text-turquoise-sombre">
+                      ✓ utilisé
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => surChoix(dossier)}
+                      className="shrink-0 rounded-md bg-fonce px-3 py-1.5 text-[0.8125rem] text-clair hover:bg-fonce-doux"
+                    >
+                      Utiliser
+                    </button>
+                  )}
+                </li>
+              );
+            })}
           </ul>
-        </>
+          {retenu ? (
+            <p className="mt-2 text-[0.8125rem] text-turquoise-sombre">
+              {retenu.auto
+                ? 'La transcription y sera déposée automatiquement, sans te redemander.'
+                : 'La transcription attendra ton clic pour y être déposée.'}
+            </p>
+          ) : null}
+        </div>
       ) : null}
 
       {(enquete.trace || []).length ? (

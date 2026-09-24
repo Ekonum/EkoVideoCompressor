@@ -195,6 +195,11 @@ class Database:
             ("uncertain_json", "TEXT"),
             # Vidéo compressée, hors du serveur. La session d'envoi vaut
             # autorisation d'écrire : elle ne quitte jamais la base.
+            # Ce qu'est devenu le dépôt automatique dans Odoo : la
+            # finalisation se fait en tâche de fond, personne n'est là
+            # pour lire la réponse sur le moment.
+            ("odoo_depot_json", "TEXT"),
+            ("meeting_date", "TEXT"),
             ("video_file_id", "TEXT"),
             ("video_bytes", "INTEGER"),
             ("video_session", "TEXT"),
@@ -478,6 +483,34 @@ class Database:
         for job_id in perimes:
             self.supprimer_job(job_id)
         return perimes
+
+    def set_meeting_date(self, job_id: int, date_iso: str | None) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET meeting_date = ?, updated_at = ? WHERE id = ?",
+                (date_iso, datetime.now().isoformat(timespec="seconds"), job_id),
+            )
+
+    def noter_depot_odoo(self, job_id: int, issue: dict[str, Any]) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET odoo_depot_json = ? WHERE id = ?",
+                (json.dumps(issue or {}, ensure_ascii=False), job_id),
+            )
+
+    def reserver_finalisation(self, job_id: int) -> bool:
+        """Réserve la fusion finale, atomiquement.
+
+        Vrai pour le premier qui demande, faux pour les suivants : deux
+        fenêtres qui terminent ensemble ne doivent pas fusionner deux
+        fois (et déposer deux notes dans Odoo)."""
+        with self.connect() as conn:
+            curseur = conn.execute(
+                "UPDATE jobs SET status = 'finalisation', updated_at = ? "
+                "WHERE id = ? AND status NOT IN ('finalisation', 'termine')",
+                (datetime.now().isoformat(timespec="seconds"), job_id),
+            )
+            return curseur.rowcount == 1
 
     def set_job_status(
         self, job_id: int, status: str, *, error: str | None = None

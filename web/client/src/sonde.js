@@ -25,13 +25,14 @@ export function sonderDuree(fichier) {
  *  à la vraie transcription. Cinq minutes suffisent, et le fichier ne
  *  quitte jamais la machine — seule cette fenêtre part.
  */
-export function identifier(fichier, { audio, fenetre = 300, duree = 0 }) {
-  // L'heure de *début* de l'enregistrement : la date du fichier est
-  // celle de sa dernière écriture, donc la fin. Sur une réunion d'une
-  // heure, viser la fin fait manquer la réunion elle-même.
-  const moment = fichier.lastModified
+export function identifier(fichier, { audio, fenetre = 300, duree = 0, moment = '' }) {
+  // L'heure de la réunion : c'est elle qui permet de la retrouver dans
+  // l'agenda, signal bien plus sûr qu'un nom entendu. Celle saisie à la
+  // main prime ; à défaut, la date du fichier moins sa durée, puisque le
+  // fichier est daté de la fin de l'enregistrement.
+  const instant = moment || (fichier.lastModified
     ? new Date(fichier.lastModified - (duree || 0) * 1000).toISOString()
-    : '';
+    : '');
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL('./media-worker.js', import.meta.url), {
       type: 'module',
@@ -40,7 +41,7 @@ export function identifier(fichier, { audio, fenetre = 300, duree = 0 }) {
       if (data.kind === 'window-done') {
         worker.terminate();
         try {
-          resolve(await api.probe(data.bytes, data.type, moment));
+          resolve(await api.probe(data.bytes, data.type, instant));
         } catch (error) {
           reject(error);
         }

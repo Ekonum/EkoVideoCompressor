@@ -144,6 +144,60 @@ class _Fixture(unittest.TestCase):
 class ApiTestCase(_Fixture):
     """Le contrat d'exécution : plan, budget, envoi, reprise."""
 
+    def test_le_serveur_finit_seul_sans_que_le_navigateur_reste(self):
+        """On doit pouvoir quitter l'écran une fois les fenêtres
+        envoyées : personne n'appelle la finalisation, et la réunion se
+        termine quand même."""
+        import time as _time
+
+        body = self._create(duration=600.0)
+        for fenetre in body["chunks"]:
+            self.client.put(f"/api/jobs/{body['job_id']}/chunks/{fenetre['index']}",
+                            content=b"audio")
+        for _ in range(200):
+            vue = self.client.get(f"/api/jobs/{body['job_id']}").json()
+            if vue["status"] == "termine":
+                break
+            _time.sleep(0.01)
+        self.assertEqual(vue["status"], "termine")
+        fiche = self.client.get(f"/api/jobs/{body['job_id']}/detail").json()
+        self.assertTrue(fiche["transcript"])
+
+    def test_la_date_de_reunion_se_propose_et_se_corrige(self):
+        body = self._create(duration=600.0, meeting_date="2026-09-21T16:00:00Z")
+        fiche = self.client.get(f"/api/jobs/{body['job_id']}/detail").json()
+        self.assertEqual(fiche["meeting_date"], "2026-09-21T16:00+00:00")
+        self.client.patch(f"/api/jobs/{body['job_id']}",
+                          json={"meeting_date": "2026-09-21T14:30:00+00:00"})
+        fiche = self.client.get(f"/api/jobs/{body['job_id']}/detail").json()
+        self.assertEqual(fiche["meeting_date"], "2026-09-21T14:30+00:00")
+        self.assertEqual(self.client.patch(f"/api/jobs/{body['job_id']}",
+                                           json={"meeting_date": "hier"}).status_code, 400)
+
+    def test_un_import_rejoue_rattrape_la_date_sans_rien_ecraser(self):
+        charge = {"filename": "a.mov", "created_at": "2026-09-04 11:54:50",
+                  "title": "Acritec", "transcript": "Robin : bonjour.", "segments": []}
+        job_id = self.client.post("/api/jobs/import", json=charge).json()["job_id"]
+        self.client.post("/api/jobs/import",
+                         json={**charge, "meeting_date": "2026-09-04T07:00:00Z"})
+        self.client.post("/api/jobs/import",
+                         json={**charge, "meeting_date": "2030-01-01T00:00:00Z"})
+        fiche = self.client.get(f"/api/jobs/{job_id}/detail").json()
+        self.assertEqual(fiche["meeting_date"], "2026-09-04T07:00+00:00")
+
+    def test_la_bibliotheque_montre_l_avancement_de_ce_qui_tourne(self):
+        body = self._create(duration=3600.0)
+        ligne = next(j for j in self.client.get("/api/jobs").json()
+                     if j["job_id"] == body["job_id"])
+        self.assertEqual(ligne["progress"], {"done": 0, "total": len(body["chunks"])})
+
+    def test_la_fusion_ne_se_reserve_qu_une_fois(self):
+        """Deux fenêtres qui finissent au même instant ne doivent pas
+        fusionner deux fois — ni déposer deux notes dans Odoo."""
+        body = self._create(duration=600.0)
+        self.assertTrue(self.db.reserver_finalisation(body["job_id"]))
+        self.assertFalse(self.db.reserver_finalisation(body["job_id"]))
+
     def test_le_plan_de_decoupage_vient_du_serveur(self):
         """Le navigateur exécute un plan, il ne le calcule pas."""
         body = self._create(duration=3600.0)
@@ -1221,6 +1275,14 @@ class LiaisonAutomatiqueTestCase(_Fixture):
             for fenetre in job["chunks"]:
                 client.put(f"/api/jobs/{job['job_id']}/chunks/{fenetre['index']}",
                            content=b"audio")
+            # Le serveur finalise seul, en tâche de fond : un client
+            # attend la fin au lieu de la déclencher.
+            import time as _time
+
+            for _ in range(200):
+                if client.get(f"/api/jobs/{job['job_id']}").json()["status"] == "termine":
+                    break
+                _time.sleep(0.01)
             return client.post(f"/api/jobs/{job['job_id']}/finalize").json(), job
 
     def test_depose_et_previent_sans_rien_demander(self):

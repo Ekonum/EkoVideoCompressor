@@ -38,9 +38,40 @@ réunion Acritec du 4 septembre transcrite deux fois. Pas de choix de modèle
 exposé aux utilisateurs : ils ne connaissent pas ces noms, et ce n'est pas à
 eux d'arbitrer.
 
-## Importer les enregistrements Meet déjà dans Drive
+## Mettre en service le stockage Drive — prévu le week-end du 26-27 septembre
 
-Le Drive de l'équipe contient déjà des centaines de vidéos de réunions. Une
-fois le stockage en place, elles pourraient être transcrites et rattachées à
-leur dossier Odoo par la même sonde — mais seulement sur demande, réunion par
-réunion : les transcrire toutes coûterait cher pour un intérêt incertain.
+Le code est prêt et dort (`EKOVIDEO_VIDEO_ITEM` / `EKOVIDEO_VIDEO_DOSSIER`
+vides). Reste à créer, côté Google :
+
+1. le compte de service « transcript-stockage » et sa clé JSON (API Drive
+   activée ; lever `iam.disableServiceAccountKeyCreation` si elle bloque) ;
+2. le Drive partagé « transcript — stockage », le compte de service en
+   Gestionnaire, **puis retirer les humains** — c'est ce qui le rend invisible ;
+3. l'élément de coffre « Ekonum - Google transcript (compte de service) »,
+   champ « Clé JSON », lisible par l'application serveur « transcript ».
+
+Puis : poser les deux variables dans le stack, et faire un premier vrai envoi
+— le client Drive n'a été éprouvé que contre un Drive simulé.
+
+## Migrer les vidéos existantes du Drive vers ce stockage
+
+**Pourquoi** : le Drive de l'équipe déborde de vidéos de réunions (plus d'une
+centaine rien que sur la première page de recherche de Robin). Les ranger dans
+le stockage dédié fait le ménage, et les rattache à leur réunion dans
+transcript.
+
+**Comment, en deux temps** :
+
+1. **Inventaire, sans rien toucher** : lister les vidéos (propriétaire, date,
+   taille, dossier) et proposer pour chacune la réunion de la bibliothèque
+   correspondante — par la date d'enregistrement et l'agenda, comme la sonde.
+   Robin valide la liste avant tout déplacement.
+2. **Déplacement** : une vidéo quitte le Drive de quelqu'un pour le Drive
+   partagé — ce qui exige les droits de son propriétaire. Soit chacun lance la
+   migration de ses propres fichiers depuis transcript, soit une délégation
+   de domaine temporaire pour le compte de service. Les vidéos sans réunion
+   correspondante restent où elles sont : le ménage ne doit rien perdre.
+
+Les vidéos rattachées à une réunion déjà transcrite prennent sa place en
+stockage froid ; les autres pourront être transcrites à la demande — jamais
+en masse, pour ne pas payer des transcriptions sans intérêt.

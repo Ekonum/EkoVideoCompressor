@@ -118,6 +118,9 @@ class JobRequest(BaseModel):
     model: str = Field(min_length=1)
     language: str = "fr"
     context: dict[str, Any] = Field(default_factory=dict)
+    # Quand la réunion a eu lieu — pas quand on l'a déposée. Proposée
+    # d'après la date du fichier, corrigeable à la main.
+    meeting_date: str | None = Field(default=None, max_length=40)
 
 
 class ImportedSegment(BaseModel):
@@ -140,6 +143,7 @@ class ImportedJob(BaseModel):
     technical_terms: list[str] = Field(default_factory=list)
     cost_usd: float = 0.0
     segments: list[ImportedSegment] = Field(default_factory=list)
+    meeting_date: str = Field(default="", max_length=40)
 
 
 class OdooCredentials(BaseModel):
@@ -168,6 +172,7 @@ class ContextPatch(BaseModel):
     title: str | None = None
     speakers: dict[str, str] | None = None
     technical_terms: list[str] | None = None
+    meeting_date: str | None = Field(default=None, max_length=40)
 
 
 class TermReplacement(BaseModel):
@@ -431,6 +436,8 @@ def create_app(
             context=payload.context,
             chunks=windows,
         )
+        if payload.meeting_date:
+            db.set_meeting_date(job_id, _date_reunion(payload.meeting_date))
         # Le dossier choisi avant la transcription est retenu maintenant :
         # à la fin, le dépôt n'aura plus rien à demander.
         dossier = payload.context.get("odoo_record") or {}
@@ -522,17 +529,16 @@ def create_app(
             ],
         }
 
-    @app.post("/api/jobs/{job_id}/finalize", response_model=FinalizeResponse)
-    def finalize(job_id: int, owner_id: int = Depends(current_user)) -> FinalizeResponse:
-        job = owned_job(job_id, owner_id)
-        chunks = db.chunks_for_job(job_id)
-        missing = [c["idx"] for c in chunks if c["status"] != "termine"]
-        if missing:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                "Fenêtres encore manquantes : " + ", ".join(str(i) for i in missing),
-            )
+    def _finaliser(job_id: int) -> FinalizeResponse:
+        """Fusionne les fenêtres et termine la réunion.
 
+        Appelé par le serveur lui-même dès la dernière fenêtre
+        transcrite : la personne peut avoir quitté l'écran, fermé
+        l'onglet ou lancé une autre transcription entre-temps. Le
+        navigateur n'est plus là que pour encoder et envoyer.
+        """
+        job = db.get_job(job_id) or {}
+        chunks = db.chunks_for_job(job_id)
         results = [
             CloudChunkResult.from_dict(json.loads(c["result_json"] or "{}"))
             for c in chunks
@@ -554,8 +560,10 @@ def create_app(
         )
         for c in chunks:
             _discard(config.chunk_dir / f"job{job_id}_chunk{c['idx']}{CHUNK_SUFFIX}")
+        depot = _deposer_seul(db.get_job(job_id) or job, merged.title, text)
+        db.noter_depot_odoo(job_id, depot)
         return FinalizeResponse(
-            odoo=_deposer_seul(db.get_job(job_id) or job, merged.title, text),
+            odoo=depot,
             uncertain=merged.uncertain,
             job_id=job_id,
             title=merged.title,
@@ -564,6 +572,34 @@ def create_app(
             technical_terms=merged.technical_terms,
             cost_usd=merged.usage.cost_usd,
         )
+
+    @app.post("/api/jobs/{job_id}/finalize", response_model=FinalizeResponse)
+    def finalize(job_id: int, owner_id: int = Depends(current_user)) -> FinalizeResponse:
+        """Porte de secours : le serveur finalise seul, mais une réunion
+        restée « à finaliser » (serveur redémarré au mauvais moment) se
+        débloque ici. Déjà terminée, elle est simplement relue."""
+        job = owned_job(job_id, owner_id)
+        if job["status"] == "termine":
+            return FinalizeResponse(
+                job_id=job_id,
+                title=job["title"] or "",
+                transcript=job["transcript"] or "",
+                speakers=json.loads(job["speaker_map_json"] or "{}"),
+                technical_terms=json.loads(job["technical_terms_json"] or "[]"),
+                uncertain=json.loads(job["uncertain_json"] or "[]"),
+                cost_usd=float(job["cloud_cost_usd"] or 0),
+                odoo=json.loads(job["odoo_depot_json"] or "{}"),
+            )
+        chunks = db.chunks_for_job(job_id)
+        missing = [c["idx"] for c in chunks if c["status"] != "termine"]
+        if missing:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Fenêtres encore manquantes : " + ", ".join(str(i) for i in missing),
+            )
+        if not db.reserver_finalisation(job_id):
+            raise HTTPException(status.HTTP_409_CONFLICT, "Finalisation déjà en cours.")
+        return _finaliser(job_id)
 
     # -- bibliothèque --------------------------------------------------
 
@@ -802,9 +838,21 @@ def create_app(
                 "has_versions": bool(job["previous_versions_json"]),
                 "archived_at": job["archived_at"],
                 "deleted_at": job["deleted_at"],
+                "meeting_date": job["meeting_date"],
+                # Seulement pour ce qui tourne encore : la bibliothèque
+                # montre une réunion en cours progresser pendant qu'on en
+                # lance une autre.
+                "progress": _avancement(job) if job["status"] not in ("termine",) else None,
             }
             for job in db.list_jobs(owner_id, etat=etat)
         ]
+
+    def _avancement(job: dict) -> dict:
+        fenetres = db.chunks_for_job(int(job["id"]))
+        return {
+            "done": sum(1 for c in fenetres if c["status"] == "termine"),
+            "total": len(fenetres),
+        }
 
     @app.post("/api/jobs/import", status_code=status.HTTP_200_OK)
     def import_job(payload: ImportedJob, owner_id: int = Depends(current_user)) -> dict:
@@ -818,10 +866,15 @@ def create_app(
         job_id, nouveau = db.import_job(
             owner_id=owner_id,
             payload={
-                **payload.model_dump(exclude={"segments"}),
+                **payload.model_dump(exclude={"segments", "meeting_date"}),
                 "segments": [s.model_dump() for s in payload.segments],
             },
         )
+        # Une date de réunion complète une reprise déjà faite, sans rien
+        # écraser : c'est ce qui permet de la rattraper en relançant
+        # l'import, qui ne la transmettait pas au début.
+        if payload.meeting_date and not (db.get_job(job_id) or {}).get("meeting_date"):
+            db.set_meeting_date(job_id, _date_reunion(payload.meeting_date))
         return {"job_id": job_id, "imported": nouveau}
 
     @app.get("/api/jobs/{job_id}/detail")
@@ -842,6 +895,8 @@ def create_app(
             # qu'il faut réécouter, et elle ne sert à rien si elle reste
             # dans la base.
             "uncertain": json.loads(job["uncertain_json"] or "[]"),
+            "meeting_date": job["meeting_date"],
+            "created_at": job["created_at"],
             "video": {
                 "presente": bool(job["video_file_id"]),
                 "en_cours": bool(job["video_session"]),
@@ -852,6 +907,7 @@ def create_app(
             "segments": db.segments_for_job(job_id),
             "previous_versions": json.loads(job["previous_versions_json"] or "[]"),
             "odoo": {
+                "depot": json.loads(job["odoo_depot_json"] or "{}"),
                 "model": job["odoo_model"],
                 "record_id": job["odoo_record_id"],
                 "message_id": job["odoo_message_id"],
@@ -870,6 +926,8 @@ def create_app(
             speakers=patch.speakers,
             technical_terms=patch.technical_terms,
         )
+        if patch.meeting_date is not None:
+            db.set_meeting_date(job_id, _date_reunion(patch.meeting_date))
         return {"updated": True}
 
     @app.post("/api/jobs/{job_id}/terms/replace")
@@ -1501,8 +1559,14 @@ def create_app(
             remaining = [
                 c for c in db.chunks_for_job(job_id) if c["status"] != "termine"
             ]
-            if not remaining:
-                db.set_job_status(job_id, "a_finaliser")
+            # Deux fenêtres peuvent finir au même instant : une seule
+            # obtient la réservation, et donc la fusion.
+            if not remaining and db.reserver_finalisation(job_id):
+                try:
+                    await asyncio.to_thread(_finaliser, job_id)
+                except Exception:  # garde-fou : la tâche de fond ne doit rien avaler
+                    log.exception("job %s : finalisation automatique en échec", job_id)
+                    db.set_job_status(job_id, "a_finaliser")
 
     def _transcribe_blocking(job: dict, window: dict, path: Path) -> CloudChunkResult:
         context = context_for_chunk(
@@ -1526,6 +1590,14 @@ def create_app(
     if static_dir.is_dir():
         app.mount("/", StaticFiles(directory=static_dir), name="static")
     return app
+
+
+def _date_reunion(texte: str) -> str | None:
+    """Normalise une date de réunion saisie, ou la refuse franchement."""
+    lu = _instant(texte)
+    if texte.strip() and lu is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Date illisible : {texte!r}.")
+    return lu.isoformat(timespec="minutes") if lu else None
 
 
 def _instant(moment: str) -> datetime | None:

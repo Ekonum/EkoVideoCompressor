@@ -40,6 +40,7 @@ const ETATS = {
   en_attente: ['En attente', 'bg-fonce/8 text-fonce/70'],
   en_cours: ['En cours', 'bg-turquoise/20 text-turquoise-sombre'],
   a_finaliser: ['À finaliser', 'bg-turquoise/20 text-turquoise-sombre'],
+  finalisation: ['Fusion…', 'bg-turquoise/20 text-turquoise-sombre'],
   termine: ['Terminé', 'bg-turquoise text-fonce'],
   erreur: ['Erreur', 'bg-[#b3261e]/12 text-[#8c1d18]'],
 };

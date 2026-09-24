@@ -32,6 +32,13 @@ export function Detail({ jobId, surRetour }) {
       <p className="mt-1 text-[0.875rem] text-fonce/55">
         {fiche.filename} · {fiche.model} · {usd(fiche.cost_usd)}
       </p>
+      <DateReunion
+        jobId={jobId}
+        valeur={fiche.meeting_date || fiche.created_at}
+        deduite={!fiche.meeting_date}
+        surMaj={recharger}
+        surErreur={setErreur}
+      />
 
       <Erreur>{erreur}</Erreur>
       {note ? <p className="mt-4 text-[0.875rem] text-turquoise-sombre">{note}</p> : null}
@@ -77,6 +84,64 @@ export function Detail({ jobId, surRetour }) {
         </aside>
       </div>
     </section>
+  );
+}
+
+/** La date de la réunion — celle où elle a eu lieu, pas celle du dépôt.
+ *  Corrigeable sur place : c'est elle qui trie la bibliothèque. */
+function DateReunion({ jobId, valeur, deduite, surMaj, surErreur }) {
+  const [edition, setEdition] = useState(false);
+  const [saisie, setSaisie] = useState('');
+  const date = valeur ? new Date(valeur.replace(' ', 'T')) : null;
+  const lisible = date && !Number.isNaN(date.getTime())
+    ? date.toLocaleString('fr-FR', { dateStyle: 'full', timeStyle: 'short' })
+    : 'date inconnue';
+
+  if (!edition) {
+    return (
+      <p className="mt-1 text-[0.875rem] text-fonce/70">
+        Réunion du {lisible}
+        {deduite ? <span className="text-fonce/45"> (date du dépôt)</span> : null}
+        <button
+          type="button"
+          onClick={() => {
+            const d = date && !Number.isNaN(date.getTime()) ? date : new Date();
+            const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+            setSaisie(local.toISOString().slice(0, 16));
+            setEdition(true);
+          }}
+          className="ml-2 text-[0.8125rem] text-turquoise-sombre underline-offset-2 hover:underline"
+        >
+          modifier
+        </button>
+      </p>
+    );
+  }
+  return (
+    <form
+      className="mt-1 flex flex-wrap items-center gap-2 text-[0.875rem]"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        try {
+          await api.patch(jobId, { meeting_date: new Date(saisie).toISOString() });
+          setEdition(false);
+          surMaj();
+        } catch (erreur) { surErreur(erreur.message); }
+      }}
+    >
+      <input
+        type="datetime-local"
+        value={saisie}
+        onChange={(e) => setSaisie(e.target.value)}
+        className="rounded-md border border-bord bg-white px-2 py-1 tabular-nums"
+        autoFocus
+      />
+      <Bouton type="submit">Enregistrer</Bouton>
+      <button type="button" onClick={() => setEdition(false)}
+              className="text-[0.8125rem] text-fonce/55 hover:text-fonce">
+        Annuler
+      </button>
+    </form>
   );
 }
 
@@ -311,14 +376,29 @@ function Termes({ fiche, jobId, surMaj, surNote, surErreur }) {
         <p className="mt-2 text-[0.875rem] text-fonce/50">Aucun terme relevé.</p>
       )}
 
-      <p className="mt-4 text-[0.8125rem] text-fonce/55">
-        Corriger un terme mal entendu le remplace dans toute la transcription,
-        les segments et le glossaire.
-      </p>
-      <div className="mt-2 space-y-2">
-        <Champ label="Écrit" placeholder="Acritek" value={ancien} onChange={(e) => setAncien(e.target.value)} />
-        <Champ label="À la place" placeholder="Acritec" value={nouveau} onChange={(e) => setNouveau(e.target.value)} />
+      <h3 className="titre mt-5 text-[0.9375rem] font-medium">Corriger un mot mal entendu</h3>
+      {/* Une phrase à compléter plutôt que deux champs empilés : le sens
+          du remplacement se lit, il ne se devine pas. */}
+      <div className="mt-2 grid grid-cols-[1fr_auto_1fr] items-end gap-2">
+        <Champ
+          label="Mot transcrit (faux)"
+          placeholder="Acritek"
+          value={ancien}
+          onChange={(e) => setAncien(e.target.value)}
+        />
+        <span aria-hidden className="pb-2 text-fonce/40">→</span>
+        <Champ
+          label="Bonne orthographe"
+          placeholder="Acritec"
+          value={nouveau}
+          onChange={(e) => setNouveau(e.target.value)}
+        />
       </div>
+      <p className="mt-2 text-[0.8125rem] text-fonce/55">
+        {ancien.trim() && nouveau.trim()
+          ? <>« {ancien.trim()} » deviendra « {nouveau.trim()} » partout : transcription, segments et vocabulaire.</>
+          : 'Le remplacement s’applique à toute la réunion, et le bon mot rejoint le vocabulaire de l’équipe.'}
+      </p>
       <Bouton
         variante="discret"
         className="mt-3 w-full"
@@ -336,7 +416,7 @@ function Termes({ fiche, jobId, surMaj, surNote, surErreur }) {
           } catch (e) { surErreur(e.message); }
         }}
       >
-        Corriger partout
+        Remplacer partout
       </Bouton>
     </div>
   );
