@@ -82,7 +82,10 @@ export function Nouveau({ surTermine, surBibliotheque }) {
       setSecondes(total);
       setDebut(0);
       setFin(total);
+      setDateReunion(versChampLocal(new Date(Date.now() - total * 1000)));
       setLecture(`${mo(charge.size)} · ${duree(total)} (rodage)`);
+      // Même parcours qu'un fichier choisi à la main, sonde comprise.
+      ecouter(charge, total);
     })().catch((e) => setLecture(`Rodage impossible : ${e.message}`));
   }, []);
 

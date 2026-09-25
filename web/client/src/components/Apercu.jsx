@@ -120,11 +120,24 @@ export function Apercu({ fichier, duree, debut, fin, surDebut, surFin, actif }) 
     <div className="verre mt-4 rounded-xl p-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <p className="titre text-[0.9375rem] font-medium">Écouter et rogner</p>
+        {/* « tout reprendre » vit ici, dans l'en-tête : placé entre les
+            champs, il faisait passer la ligne à la ligne et remonter la
+            frise sous le curseur — au pire moment, en pleine prise. */}
         <p className="text-[0.8125rem] tabular-nums text-fonce/60">
           {rogne ? (
-            <span className="text-turquoise-sombre">
-              {horodatage(fin - debut)} gardées sur {horodatage(duree)}
-            </span>
+            <>
+              <span className="text-turquoise-sombre">
+                {horodatage(fin - debut)} gardées sur {horodatage(duree)}
+              </span>
+              <button
+                type="button"
+                disabled={actif}
+                onClick={() => { surDebut(0); surFin(duree); }}
+                className="ml-3 text-fonce/55 underline-offset-2 hover:text-fonce hover:underline"
+              >
+                tout reprendre
+              </button>
+            </>
           ) : `${horodatage(duree)} — tout est gardé`}
         </p>
       </div>
@@ -168,16 +181,6 @@ export function Apercu({ fichier, duree, debut, fin, surDebut, surFin, actif }) 
           </div>
           <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
             {champTemps('Début', debut, 'debut')}
-            {rogne ? (
-              <button
-                type="button"
-                disabled={actif}
-                onClick={() => { surDebut(0); surFin(duree); }}
-                className="text-[0.8125rem] text-fonce/55 underline-offset-2 hover:text-fonce hover:underline"
-              >
-                tout reprendre
-              </button>
-            ) : null}
             {champTemps('Fin', fin, 'fin')}
           </div>
         </div>
