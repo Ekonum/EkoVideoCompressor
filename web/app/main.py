@@ -558,8 +558,13 @@ def create_app(
             uncertain=merged.uncertain,
             cost_usd=merged.usage.cost_usd,
         )
+        # Les noms que le modèle a reconnus s'appliquent aux répliques :
+        # sans cela, la transcription affichait « sanaa.philippe@… » à côté
+        # d'une carte qui disait déjà « Sanaa Philippe ».
+        db.renommer_interlocuteurs(job_id, merged.speakers)
         for c in chunks:
             _discard(config.chunk_dir / f"job{job_id}_chunk{c['idx']}{CHUNK_SUFFIX}")
+        text = (db.get_job(job_id) or {}).get("transcript") or text
         depot = _deposer_seul(db.get_job(job_id) or job, merged.title, text)
         db.noter_depot_odoo(job_id, depot)
         return FinalizeResponse(
@@ -923,9 +928,10 @@ def create_app(
         db.update_job_context(
             job_id,
             title=patch.title,
-            speakers=patch.speakers,
             technical_terms=patch.technical_terms,
         )
+        if patch.speakers is not None:
+            db.renommer_interlocuteurs(job_id, patch.speakers)
         if patch.meeting_date is not None:
             db.set_meeting_date(job_id, _date_reunion(patch.meeting_date))
         return {"updated": True}
@@ -1229,15 +1235,26 @@ def create_app(
             output_tokens=usage.output_tokens,
             cost_usd=usage.cost_usd,
         )
-        # La version précédente est empilée : se raviser doit rester
-        # possible, y compris sur un enrichissement.
-        db.archive_current_version(job_id)
+        nouveau_titre = enrichi.get("title") or job["title"]
+        noms = {k: v for k, v in (enrichi.get("speakers") or {}).items() if v and v != k}
+        change = nouveau_titre != job["title"] or bool(noms) or (
+            (enrichi.get("technical_terms") or None) is not None
+            and enrichi.get("technical_terms") != json.loads(job["technical_terms_json"] or "[]")
+        )
+        # On n'empile une version que si la relecture change quelque
+        # chose : sinon chaque dépôt manuel, qui relit d'abord, ajoutait
+        # une « version antérieure » identique à l'actuelle.
+        if change:
+            db.archive_current_version(job_id)
         db.update_job_context(
             job_id,
-            title=enrichi.get("title") or job["title"],
-            speakers=enrichi.get("speakers") or None,
+            title=nouveau_titre,
             technical_terms=enrichi.get("technical_terms") or None,
         )
+        if noms:
+            db.renommer_interlocuteurs(job_id, {
+                **json.loads(job["speaker_map_json"] or "{}"), **noms,
+            })
         db.set_uncertain(job_id, enrichi.get("uncertain_passages") or [])
         return {
             "job_id": job_id,

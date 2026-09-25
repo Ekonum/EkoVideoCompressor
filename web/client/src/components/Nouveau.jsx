@@ -290,13 +290,21 @@ export function Nouveau({ surTermine, surBibliotheque }) {
             etat={sonde}
             retenu={dossier}
             surChoix={(choisi) => {
-              // Choisi à la main : on lie, mais on ne dépose pas sans
-              // demander — la personne vient justement de corriger.
-              setDossier({ ...choisi, auto: false });
+              // Choisir un dossier, c'est le valider : la transcription y
+              // sera déposée à la fin, sauf à décocher la case plus bas.
+              setDossier({ ...choisi, auto: true });
               appliquerDossier(choisi);
             }}
           />
-          <Reunions surChoix={appliquerContexte} />
+          <Reunions
+            surChoix={(choix) => {
+              appliquerContexte(choix);
+              // La réunion d'agenda pointe souvent déjà un dossier : le
+              // choisir doit le retenir, sinon la liaison se perdait et
+              // rien n'était déposé à la fin.
+              if (choix.dossier) setDossier({ ...choix.dossier, auto: true });
+            }}
+          />
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <Champ
               label="Partie prenante"
@@ -332,6 +340,36 @@ export function Nouveau({ surTermine, surBibliotheque }) {
             />
           </div>
         </div>
+
+        {dossier && mode !== 'compresser' ? (
+          <div className="rounded-xl border border-turquoise/40 bg-white/80 px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[0.875rem]">
+                <span className="text-fonce/55">Dossier Odoo : </span>
+                <span className="titre font-medium">{dossier.name}</span>
+                {dossier.partner ? <span className="text-fonce/55"> · {dossier.partner}</span> : null}
+              </p>
+              <button
+                type="button"
+                disabled={enCours}
+                onClick={() => setDossier(null)}
+                className="text-[0.8125rem] text-fonce/55 hover:text-fonce"
+              >
+                retirer
+              </button>
+            </div>
+            <label className="mt-2 flex items-center gap-2 text-[0.875rem] text-fonce/80">
+              <input
+                type="checkbox"
+                checked={Boolean(dossier.auto)}
+                disabled={enCours}
+                onChange={(e) => setDossier({ ...dossier, auto: e.target.checked })}
+                className="h-4 w-4 accent-[#2AD39F]"
+              />
+              Déposer la transcription dans ce dossier à la fin, et me prévenir
+            </label>
+          </div>
+        ) : null}
 
         <div className="flex flex-wrap items-center gap-4">
           <Bouton
@@ -633,13 +671,6 @@ function Sonde({ etat, retenu, surChoix }) {
               );
             })}
           </ul>
-          {retenu ? (
-            <p className="mt-2 text-[0.8125rem] text-turquoise-sombre">
-              {retenu.auto
-                ? 'La transcription y sera déposée automatiquement, sans te redemander.'
-                : 'La transcription attendra ton clic pour y être déposée.'}
-            </p>
-          ) : null}
         </div>
       ) : null}
 
@@ -703,6 +734,10 @@ function Reunions({ surChoix }) {
                     // cas le plus fréquent, et savoir qui parle change
                     // l'attribution des répliques.
                     invites: r.attendees,
+                    dossier: r.resource_model && r.resource_id
+                      ? { model: r.resource_model, id: r.resource_id,
+                          name: `rattaché à « ${r.name} »`, kind: 'réunion d’agenda' }
+                      : null,
                   });
                 } catch {
                   // Le contexte est un bonus : son échec ne doit pas

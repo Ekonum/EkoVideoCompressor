@@ -47,7 +47,10 @@ export function Detail({ jobId, surRetour }) {
         <div>
           <div className="flex items-center justify-between gap-3">
             <h2 className="titre text-[1.0625rem] font-medium">Transcription</h2>
-            <Copier texte={fiche.transcript} />
+            <div className="flex flex-wrap gap-2">
+              <Relecture fiche={fiche} jobId={jobId} surMaj={recharger} surNote={setNote} surErreur={setErreur} />
+              <Copier texte={fiche.transcript} />
+            </div>
           </div>
           <Video jobId={jobId} video={fiche.video} surMaj={recharger} />
           <div className="verre mt-3 max-h-[34rem] overflow-y-auto rounded-xl">
@@ -77,7 +80,6 @@ export function Detail({ jobId, surRetour }) {
           <Interlocuteurs fiche={fiche} jobId={jobId} surMaj={recharger} surNote={setNote} surErreur={setErreur} />
           <Termes fiche={fiche} jobId={jobId} surMaj={recharger} surNote={setNote} surErreur={setErreur} />
           <AVerifier fiche={fiche} />
-          <Relecture fiche={fiche} jobId={jobId} surMaj={recharger} surNote={setNote} surErreur={setErreur} />
           <Fenetres jobId={jobId} surNote={setNote} surErreur={setErreur} />
           <Odoo fiche={fiche} jobId={jobId} surMaj={recharger} surNote={setNote} surErreur={setErreur} />
           <Versions versions={fiche.previous_versions} />
@@ -230,7 +232,7 @@ function Video({ jobId, video, surMaj }) {
  *  Le bouton dit lui-même que c'est fait, plutôt qu'une notice ailleurs
  *  dans la page qu'on ne regarde pas au moment de coller.
  */
-function Copier({ texte }) {
+function Copier({ texte, libelle = 'Copier la transcription' }) {
   const [etat, setEtat] = useState('repos');
   if (!texte?.trim()) return null;
   return (
@@ -251,7 +253,7 @@ function Copier({ texte }) {
         ? 'Copiée ✓'
         : etat === 'refus'
           ? 'Copie refusée par le navigateur'
-          : 'Copier la transcription'}
+          : libelle}
     </button>
   );
 }
@@ -299,28 +301,23 @@ function Relecture({ fiche, jobId, surMaj, surNote, surErreur }) {
   const [occupe, setOccupe] = useState(false);
   if (!fiche.transcript?.trim()) return null;
   return (
-    <div>
-      <h2 className="titre text-[1.0625rem] font-medium">Relecture</h2>
-      <p className="mt-1 text-[0.8125rem] text-fonce/55">
-        Refaire le titre, les noms et les corrections métier à partir du texte
-        déjà transcrit — sans repayer la transcription.
-      </p>
-      <Bouton
-        className="mt-2"
-        disabled={occupe}
-        onClick={async () => {
-          setOccupe(true);
-          try {
-            const vue = await api.reenrichir(jobId);
-            surNote(`Relu pour ${usd(vue.cost_usd)} — ${vue.title}`);
-            surMaj();
-          } catch (e) { surErreur(e.message); }
-          finally { setOccupe(false); }
-        }}
-      >
-        {occupe ? 'Relecture…' : 'Relire'}
-      </Bouton>
-    </div>
+    <button
+      type="button"
+      disabled={occupe}
+      title="Relit le texte déjà transcrit pour refaire le titre, les noms et les corrections métier — sans retranscrire, pour moins d'un centime."
+      onClick={async () => {
+        setOccupe(true);
+        try {
+          const vue = await api.reenrichir(jobId);
+          surNote(`Relu pour ${usd(vue.cost_usd)} — ${vue.title}`);
+          surMaj();
+        } catch (e) { surErreur(e.message); }
+        finally { setOccupe(false); }
+      }}
+      className="rounded-md px-3 py-1.5 text-[0.8125rem] text-fonce/70 ring-1 ring-bord transition-colors hover:bg-white/60 hover:text-fonce disabled:opacity-50"
+    >
+      {occupe ? 'Relecture…' : 'Refaire titre et noms'}
+    </button>
   );
 }
 
@@ -461,16 +458,41 @@ function Fenetres({ jobId, surNote, surErreur }) {
   );
 }
 
+/** Les versions précédentes, lisibles.
+ *
+ *  Une relance ou une relecture empile la version d'avant plutôt que de
+ *  l'écraser. Encore faut-il pouvoir la lire : chacune se déplie sur son
+ *  texte complet, qu'on peut copier pour reprendre un passage.
+ */
 function Versions({ versions }) {
   if (!versions?.length) return null;
   return (
     <div>
       <h2 className="titre text-[1.0625rem] font-medium">Versions précédentes</h2>
+      <p className="mt-1 text-[0.8125rem] text-fonce/55">
+        Gardées à chaque relance ou relecture : rien n'est perdu.
+      </p>
       <ul className="mt-3 space-y-2">
         {versions.map((v, rang) => (
-          <li key={rang} className="verre rounded-lg border-violet/25 px-3 py-2">
-            <span className="text-[0.8125rem] text-fonce/55">{jour(v.archived_at)}</span>
-            <span className="block truncate text-[0.875rem]">{v.title || 'Sans titre'}</span>
+          <li key={rang}>
+            <details className="verre group rounded-lg px-3 py-2">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-2">
+                <span className="min-w-0">
+                  <span className="block text-[0.75rem] text-fonce/50">
+                    {jour(v.archived_at)}
+                  </span>
+                  <span className="block truncate text-[0.875rem]">{v.title || 'Sans titre'}</span>
+                </span>
+                <span className="shrink-0 text-[0.75rem] text-violet group-open:hidden">lire</span>
+                <span className="hidden shrink-0 text-[0.75rem] text-fonce/50 group-open:inline">replier</span>
+              </summary>
+              <div className="mt-2 max-h-72 overflow-y-auto whitespace-pre-wrap rounded-md bg-white/70 p-2 text-[0.8125rem] leading-relaxed text-fonce/80">
+                {v.transcript || 'Texte non conservé pour cette version.'}
+              </div>
+              <div className="mt-2 flex justify-end">
+                <Copier texte={v.transcript} libelle="Copier cette version" />
+              </div>
+            </details>
           </li>
         ))}
       </ul>
@@ -488,6 +510,9 @@ function Odoo({ fiche, jobId, surMaj, surNote, surErreur }) {
   const [requete, setRequete] = useState('');
   const [candidats, setCandidats] = useState(null);
   const [envoi, setEnvoi] = useState(false);
+  // Relire puis déposer prend une vingtaine de secondes : sans étape
+  // affichée, l'écran paraissait figé alors que tout se passait bien.
+  const [etape, setEtape] = useState('');
   const lien = fiche.odoo || {};
 
   useEffect(() => {
@@ -557,6 +582,13 @@ function Odoo({ fiche, jobId, surMaj, surNote, surErreur }) {
         />
       </div>
 
+      {etape ? (
+        <p className="mt-2 flex items-center gap-2 text-[0.8125rem] text-turquoise-sombre">
+          <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-turquoise border-t-transparent" />
+          {etape}
+        </p>
+      ) : null}
+
       {candidats?.length === 0 ? (
         <p className="mt-2 text-[0.8125rem] text-fonce/50">Aucun dossier trouvé.</p>
       ) : null}
@@ -574,16 +606,18 @@ function Odoo({ fiche, jobId, surMaj, surNote, surErreur }) {
                     // Relire d'abord : le dossier qu'on vient de choisir
                     // change le titre et les noms, et la note déposée
                     // doit porter la bonne version.
+                    setEtape(`Lecture du dossier « ${c.name} » et relecture du texte…`);
                     const relu = await api
                       .reenrichir(jobId, { model: c.model, record_id: c.id })
                       .catch(() => null);
+                    setEtape('Dépôt dans le chatter…');
                     await api.odooPublish(jobId, { model: c.model, record_id: c.id });
                     surNote(relu
                       ? `Relue puis déposée dans « ${c.name} ».`
                       : `Déposée dans « ${c.name} ».`);
                     surMaj();
                   } catch (e) { surErreur(e.message); }
-                  finally { setEnvoi(false); }
+                  finally { setEnvoi(false); setEtape(''); }
                 }}
                 className="w-full rounded-md px-2 py-1.5 text-left text-[0.875rem] transition-colors hover:bg-white/60 disabled:opacity-40"
               >

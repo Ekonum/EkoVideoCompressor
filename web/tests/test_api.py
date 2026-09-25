@@ -191,6 +191,40 @@ class ApiTestCase(_Fixture):
                      if j["job_id"] == body["job_id"])
         self.assertEqual(ligne["progress"], {"done": 0, "total": len(body["chunks"])})
 
+    def test_renommer_un_interlocuteur_reecrit_les_repliques(self):
+        """Enregistrer un nom doit se voir dans la transcription, pas
+        seulement dans la carte."""
+        job_id = self.client.post("/api/jobs/import", json={
+            "filename": "pes.m4a", "created_at": "2026-09-24 12:03:10",
+            "title": "PES", "transcript": "Intervenant 1 : Bonjour.\nIntervenant 2 : Salut.",
+            "speakers": {"Intervenant 1": "", "Intervenant 2": ""},
+            "segments": [
+                {"start": 0, "end": 2, "speaker": "Intervenant 1", "text": "Bonjour."},
+                {"start": 2, "end": 4, "speaker": "Intervenant 2", "text": "Salut."},
+            ],
+        }).json()["job_id"]
+        self.client.patch(f"/api/jobs/{job_id}", json={
+            "speakers": {"Intervenant 1": "Robin", "Intervenant 2": "Steeve Ouinet"}})
+        fiche = self.client.get(f"/api/jobs/{job_id}/detail").json()
+        self.assertEqual([s["speaker"] for s in fiche["segments"]], ["Robin", "Steeve Ouinet"])
+        self.assertEqual(fiche["transcript"], "Robin : Bonjour.\nSteeve Ouinet : Salut.")
+        self.assertEqual(fiche["speakers"], {"Robin": "Robin", "Steeve Ouinet": "Steeve Ouinet"})
+        # La recherche suit les nouveaux noms.
+        trouve = self.client.get("/api/search", params={"q": "Salut"}).json()[0]
+        self.assertEqual(trouve["speaker"], "Steeve Ouinet")
+
+    def test_un_second_renommage_part_des_noms_affiches(self):
+        job_id = self.client.post("/api/jobs/import", json={
+            "filename": "b.m4a", "created_at": "2026-09-24 12:03:11",
+            "title": "B", "transcript": "[00:01] Intervenant 1: Oui.",
+            "segments": [{"start": 1, "end": 2, "speaker": "Intervenant 1", "text": "Oui."}],
+        }).json()["job_id"]
+        self.client.patch(f"/api/jobs/{job_id}", json={"speakers": {"Intervenant 1": "Steve"}})
+        self.client.patch(f"/api/jobs/{job_id}", json={"speakers": {"Steve": "Steeve"}})
+        fiche = self.client.get(f"/api/jobs/{job_id}/detail").json()
+        self.assertEqual(fiche["transcript"], "[00:01] Steeve: Oui.")
+        self.assertEqual(fiche["segments"][0]["speaker"], "Steeve")
+
     def test_la_fusion_ne_se_reserve_qu_une_fois(self):
         """Deux fenêtres qui finissent au même instant ne doivent pas
         fusionner deux fois — ni déposer deux notes dans Odoo."""
@@ -455,7 +489,9 @@ class LibraryTestCase(_Fixture):
     def test_le_detail_porte_segments_interlocuteurs_et_termes(self):
         job_id = self._finished_job()
         detail = self.client.get(f"/api/jobs/{job_id}/detail").json()
-        self.assertEqual(detail["speakers"], {"Intervenant 1": "Robin"})
+        # Les noms reconnus s'appliquent aux répliques : la carte reflète
+        # ensuite ce qu'on voit, pas les étiquettes brutes du modèle.
+        self.assertEqual(detail["speakers"], {"Robin": "Robin"})
         self.assertEqual(detail["technical_terms"], ["terme0"])
         self.assertEqual(len(detail["segments"]), 1)
         self.assertEqual(detail["segments"][0]["speaker"], "Robin")
@@ -1710,11 +1746,30 @@ class ReenrichissementTestCase(_Fixture):
 
         fiche = self.client.get(f"/api/jobs/{job_id}/detail").json()
         self.assertEqual(fiche["title"], "ACRITEC - Facturation électronique")
-        self.assertEqual(fiche["speakers"], {"Intervenant 1": "David JAUCH"})
+        # Le nom trouvé s'applique aux répliques, comme au premier passage.
+        self.assertEqual(fiche["speakers"], {"David JAUCH": "David JAUCH"})
+        self.assertEqual(fiche["segments"][0]["speaker"], "David JAUCH")
         self.assertEqual(fiche["uncertain"][0]["text"], "le code SDIS ?")
         # La version d'avant reste récupérable.
         self.assertEqual(fiche["previous_versions"][0]["title"],
                          "Réunion du 4 septembre")
+
+    def test_une_relecture_sans_changement_n_empile_pas_de_version(self):
+        """Sinon chaque dépôt manuel, qui relit d'abord, ajoutait une
+        « version antérieure » identique à l'actuelle."""
+        import app.main as main_module
+        from cloud_transcription import CloudUsage
+
+        job_id = self._job()
+        fiche = self.client.get(f"/api/jobs/{job_id}/detail").json()
+        main_module.enrich_transcript_via_gemini = lambda *a, **k: (
+            {"title": fiche["title"], "speakers": {}, "technical_terms": [],
+             "corrections": [], "uncertain_passages": []},
+            CloudUsage(model="gemini-3.1-flash-lite"),
+        )
+        self.client.post(f"/api/jobs/{job_id}/enrich", json={})
+        fiche = self.client.get(f"/api/jobs/{job_id}/detail").json()
+        self.assertEqual(fiche["previous_versions"], [])
 
     def test_le_texte_n_est_pas_retranscrit_et_coute_des_centimes(self):
         job_id = self._job()

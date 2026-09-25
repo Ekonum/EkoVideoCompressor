@@ -484,6 +484,51 @@ class Database:
             self.supprimer_job(job_id)
         return perimes
 
+    def renommer_interlocuteurs(self, job_id: int, carte: dict[str, str]) -> dict[str, str]:
+        """Applique les noms choisis aux répliques, pas seulement à la carte.
+
+        Enregistrer « Intervenant 2 → Steeve Ouinet » ne changeait que la
+        table de correspondance : les répliques gardaient leur étiquette,
+        et rien ne semblait s'être passé. Les segments, l'index de
+        recherche et le texte sont réécrits ; la carte redevient
+        l'identité des noms actuels, pour qu'un second renommage parte de
+        ce qu'on voit.
+
+        Le texte est corrigé en place plutôt que régénéré : celui des
+        réunions reprises du Mac ne vient pas des segments.
+        """
+        renommages = {
+            ancien: nouveau.strip()
+            for ancien, nouveau in (carte or {}).items()
+            if nouveau and nouveau.strip() and nouveau.strip() != ancien
+        }
+        job = self.get_job(job_id) or {}
+        if renommages:
+            segments = [
+                {"start": s["start_second"], "end": s["end_second"],
+                 "speaker": renommages.get(s["speaker"] or "", s["speaker"] or ""),
+                 "text": s["text"]}
+                for s in self.segments_for_job(job_id)
+            ]
+            self.replace_segments(job_id, segments)
+            texte = job.get("transcript") or ""
+            for ancien, nouveau in renommages.items():
+                # En tête de ligne, après un éventuel horodatage entre
+                # crochets : « Intervenant 2 : » comme « [00:12] Intervenant 2: ».
+                motif = re.compile(
+                    r"(^|\n)((?:\[[^\]\n]*\]\s*)?)" + re.escape(ancien) + r"(\s*:)"
+                )
+                texte = motif.sub(lambda m: f"{m.group(1)}{m.group(2)}{nouveau}{m.group(3)}", texte)
+            with self.connect() as conn:
+                conn.execute("UPDATE jobs SET transcript = ? WHERE id = ?", (texte, job_id))
+        noms = [
+            (nouveau.strip() or ancien)
+            for ancien, nouveau in (carte or {}).items()
+        ]
+        nouvelle_carte = {nom: nom for nom in dict.fromkeys(noms)}
+        self.update_job_context(job_id, speakers=nouvelle_carte)
+        return nouvelle_carte
+
     def set_meeting_date(self, job_id: int, date_iso: str | None) -> None:
         with self.connect() as conn:
             conn.execute(
