@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bouton, Champ, Erreur } from './Communs.jsx';
+import { Bouton, Champ, DateHeure, Erreur } from './Communs.jsx';
 import { sonderDuree, identifier } from '../sonde.js';
 import { api } from '../api.js';
 import { useCompression } from '../useCompression.js';
@@ -41,6 +41,9 @@ export function Nouveau({ surTermine, surBibliotheque }) {
   // L'archivage démarre avant que le traitement existe : la compression
   // n'attend pas la création du job, l'envoi si.
   const cibleRef = useRef(null);
+  // Le champ fichier garde sa sélection tant qu'on ne le vide pas : sans
+  // cela, « Lancer une autre transcription » montrait encore l'ancien.
+  const champFichier = useRef(null);
   const archivage = useArchivage(cibleRef.current?.cle);
   const [sonde, setSonde] = useState(null);
   const [dossier, setDossier] = useState(null);
@@ -204,6 +207,7 @@ export function Nouveau({ surTermine, surBibliotheque }) {
         <div>
           <h2 className="titre text-[1.0625rem] font-medium">1. Le fichier</h2>
           <input
+            ref={champFichier}
             type="file"
             accept="video/*,audio/*"
             onChange={choisir}
@@ -212,19 +216,13 @@ export function Nouveau({ surTermine, surBibliotheque }) {
           />
           {lecture ? <p className="mt-2 text-[0.875rem] text-fonce/60">{lecture}</p> : null}
           {fichier ? (
-            <label className="mt-3 flex flex-wrap items-center gap-3 text-[0.875rem]">
+            <div className="mt-3 flex flex-wrap items-center gap-3 text-[0.875rem]">
               <span className="text-fonce/70">Date de la réunion</span>
-              <input
-                type="datetime-local"
-                value={dateReunion}
-                onChange={(e) => setDateReunion(e.target.value)}
-                disabled={enCours}
-                className="rounded-md border border-bord bg-white px-2 py-1 tabular-nums"
-              />
+              <DateHeure valeur={dateReunion} surChange={setDateReunion} disabled={enCours} />
               <span className="text-[0.8125rem] text-fonce/45">
                 déduite du fichier — corrige-la s'il a été recopié
               </span>
-            </label>
+            </div>
           ) : null}
           <Apercu
             fichier={fichier}
@@ -456,6 +454,8 @@ export function Nouveau({ surTermine, surBibliotheque }) {
                   setDossier(null); setClient(''); setParticipants(''); setGlossaire('');
                   setContexteOdoo(''); setDateReunion(''); setDebut(0); setFin(0);
                   cibleRef.current = null;
+                  if (champFichier.current) champFichier.current.value = '';
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
                 }}
                 className="rounded-md px-3 py-1.5 text-[0.875rem] text-fonce/70 ring-1 ring-bord hover:bg-white/60"
               >

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
-import { Bouton, Champ, Erreur } from './Communs.jsx';
+import { Bouton, Champ, DateHeure, Erreur } from './Communs.jsx';
 import { horodatage, usd, jour, mo } from '../format.js';
 import { useArchivage } from '../archivage.js';
 import { AvancementArchivage } from './Nouveau.jsx';
@@ -15,6 +15,19 @@ export function Detail({ jobId, surRetour }) {
   const [fiche, setFiche] = useState(null);
   const [erreur, setErreur] = useState('');
   const [note, setNote] = useState('');
+  const [surlignee, setSurlignee] = useState(null);
+
+  /** Amène la transcription à la réplique qui couvre cet instant. */
+  const allerA = (secondes) => {
+    const segments = fiche?.segments || [];
+    if (!segments.length || secondes == null) return;
+    let rang = 0;
+    segments.forEach((seg, i) => { if (seg.start_second <= secondes) rang = i; });
+    document.getElementById(`segment-${rang}`)
+      ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    setSurlignee(rang);
+    setTimeout(() => setSurlignee((r) => (r === rang ? null : r)), 2500);
+  };
 
   const recharger = () => api.detail(jobId).then(setFiche).catch((e) => setErreur(e.message));
   useEffect(() => { recharger(); }, [jobId]);
@@ -59,7 +72,13 @@ export function Detail({ jobId, surRetour }) {
             ) : (
               <ol>
                 {fiche.segments.map((s, rang) => (
-                  <li key={rang} className="flex gap-4 px-4 py-2">
+                  <li
+                    key={rang}
+                    id={`segment-${rang}`}
+                    className={`flex gap-4 px-4 py-2 transition-colors duration-700 ${
+                      surlignee === rang ? 'bg-turquoise/25' : ''
+                    }`}
+                  >
                     <span className="w-12 shrink-0 pt-0.5 text-[0.8125rem] tabular-nums text-fonce/40">
                       {horodatage(s.start_second)}
                     </span>
@@ -79,7 +98,7 @@ export function Detail({ jobId, surRetour }) {
         <aside className="space-y-8">
           <Interlocuteurs fiche={fiche} jobId={jobId} surMaj={recharger} surNote={setNote} surErreur={setErreur} />
           <Termes fiche={fiche} jobId={jobId} surMaj={recharger} surNote={setNote} surErreur={setErreur} />
-          <AVerifier fiche={fiche} />
+          <AVerifier fiche={fiche} surAller={allerA} />
           <Fenetres jobId={jobId} surNote={setNote} surErreur={setErreur} />
           <Odoo fiche={fiche} jobId={jobId} surMaj={recharger} surNote={setNote} surErreur={setErreur} />
           <Versions versions={fiche.previous_versions} />
@@ -131,13 +150,7 @@ function DateReunion({ jobId, valeur, deduite, surMaj, surErreur }) {
         } catch (erreur) { surErreur(erreur.message); }
       }}
     >
-      <input
-        type="datetime-local"
-        value={saisie}
-        onChange={(e) => setSaisie(e.target.value)}
-        className="rounded-md border border-bord bg-white px-2 py-1 tabular-nums"
-        autoFocus
-      />
+      <DateHeure valeur={saisie} surChange={setSaisie} />
       <Bouton type="submit">Enregistrer</Bouton>
       <button type="button" onClick={() => setEdition(false)}
               className="text-[0.8125rem] text-fonce/55 hover:text-fonce">
@@ -258,12 +271,19 @@ function Copier({ texte, libelle = 'Copier la transcription' }) {
   );
 }
 
+/** « 17:29 » ou « 1:02:03 » → secondes ; null si illisible. */
+function lireHorodatage(texte) {
+  const parties = String(texte || '').trim().split(':').map(Number);
+  if (!parties.length || parties.some((p) => Number.isNaN(p))) return null;
+  return parties.reduce((total, p) => total * 60 + p, 0);
+}
+
 /** Ce dont le modèle n'était pas sûr.
  *
  *  L'app macOS écrivait ça dans un fichier « à vérifier » ; c'est la
  *  liste de ce qu'il faut réécouter, et elle ne vaut que si on la voit.
  */
-function AVerifier({ fiche }) {
+function AVerifier({ fiche, surAller }) {
   const passages = fiche.uncertain || [];
   if (!passages.length) return null;
   return (
@@ -271,20 +291,30 @@ function AVerifier({ fiche }) {
       <h2 className="titre text-[1.0625rem] font-medium">À vérifier</h2>
       <p className="mt-1 text-[0.8125rem] text-fonce/55">
         {passages.length} passage{passages.length > 1 ? 's' : ''} dont le modèle
-        doute.
+        doute — un clic amène la transcription au bon endroit.
       </p>
       <ul className="mt-2 space-y-2">
-        {passages.map((p, i) => (
-          <li key={i} className="rounded-lg bg-papier p-2.5">
-            <span className="block text-[0.75rem] tabular-nums text-fonce/45">
-              {p.timestamp || '—'}
-            </span>
-            <span className="block text-[0.875rem]">{p.text}</span>
-            {p.reason ? (
-              <span className="block text-[0.8125rem] text-fonce/55">{p.reason}</span>
-            ) : null}
-          </li>
-        ))}
+        {passages.map((p, i) => {
+          const t = lireHorodatage(p.timestamp);
+          return (
+            <li key={i}>
+              <button
+                type="button"
+                disabled={t === null}
+                onClick={() => surAller(t)}
+                className="w-full rounded-lg bg-papier p-2.5 text-left transition-colors hover:bg-turquoise/15 disabled:cursor-default disabled:hover:bg-papier"
+              >
+                <span className="block text-[0.75rem] tabular-nums text-turquoise-sombre">
+                  {p.timestamp || '—'}
+                </span>
+                <span className="block text-[0.875rem]">{p.text}</span>
+                {p.reason ? (
+                  <span className="block text-[0.8125rem] text-fonce/55">{p.reason}</span>
+                ) : null}
+              </button>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );
