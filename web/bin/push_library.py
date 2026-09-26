@@ -117,6 +117,7 @@ def main() -> int:
             "technical_terms": json.loads(job["technical_terms_json"] or "[]"),
             "cost_usd": float(job["cloud_cost_usd"] or 0),
             "segments": segments,
+            "meeting_date": (job["meeting_date"] if "meeting_date" in job.keys() else "") or "",
         }
 
         if args.simulation:

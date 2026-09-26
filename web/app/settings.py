@@ -57,8 +57,47 @@ class Settings:
     odoo_broker_item: str
     odoo_broker_field: str
 
+    # Chiffre les clés API Odoo personnelles. Absente, le serveur refuse
+    # d'en enregistrer une : stocker en clair « en attendant » est le
+    # genre de provisoire qui reste.
+    secret_key: str
+
     # Garde-fou budget : plafond d'équipe, la clé Gemini étant partagée.
     monthly_budget_usd: float
+
+    # L'adresse publique du service, pour les liens qu'on affiche
+    # ailleurs que dans le navigateur — l'app macOS ne peut pas la
+    # deviner.
+    public_url: str
+
+    # Stockage des vidéos compressées : un Drive partagé dédié, piloté
+    # par un compte de service dont la clé JSON est dans le coffre.
+    # Sans élément de coffre ou sans dossier, la fonction reste absente
+    # de l'interface — rien ne casse, rien n'est proposé.
+    video_item: str
+    video_field: str
+    video_dossier: str
+
+    # Enrôlement d'appareil : éteint tant que l'équipe n'a pas fini ses
+    # essais. L'allumer suppose aussi d'ouvrir un chemin dans Cloudflare
+    # Access — aujourd'hui l'API est protégée deux fois, et une app
+    # macOS ne peut pas franchir Access.
+    enrolement: bool
+
+    # Combien de jours une réunion reste récupérable dans la corbeille.
+    # 0 supprime immédiatement — à n'utiliser que si on sait pourquoi.
+    corbeille_jours: int
+
+    # À partir de quelle certitude la liaison se fait sans demander :
+    # « certaine », « probable », ou « jamais » pour tout valider à la
+    # main. Une mauvaise liaison dépose la transcription chez un autre
+    # client : le défaut est donc le plus prudent qui reste utile.
+    liaison_auto: str
+
+    # Termes que la sonde ne doit pas chercher dans Odoo : notre propre
+    # nom et celui du produit qu'on vend reviennent dans presque tous
+    # les dossiers, donc ne désignent personne.
+    sonde_ignore: frozenset[str]
 
     # Bac à sable local : court-circuite Access et le broker. Refusé dès
     # qu'une configuration Access est présente, pour qu'un déploiement ne
@@ -95,9 +134,33 @@ class Settings:
             odoo_url=os.environ.get("EKOVIDEO_ODOO_URL", "").strip(),
             odoo_database=os.environ.get("EKOVIDEO_ODOO_DB", "").strip(),
             odoo_login=os.environ.get("EKOVIDEO_ODOO_LOGIN", "").strip(),
-            odoo_broker_item=os.environ.get("EKOVIDEO_ODOO_BROKER_ITEM", "Ekonum - API Odoo"),
+            odoo_broker_item=os.environ.get(
+                # Nom exact dans le coffre, vérifié avec « ekonum-secret
+                # list » : « Ekonum - API Odoo » n'existe pas.
+                "EKOVIDEO_ODOO_BROKER_ITEM", "contact - API Odoo"
+            ),
             odoo_broker_field=os.environ.get("EKOVIDEO_ODOO_BROKER_FIELD", "Clé API"),
+            secret_key=os.environ.get("EKOVIDEO_SECRET_KEY", "").strip(),
             monthly_budget_usd=float(os.environ.get("EKOVIDEO_MONTHLY_BUDGET_USD", "50")),
+            video_item=os.environ.get("EKOVIDEO_VIDEO_ITEM", "").strip(),
+            video_field=os.environ.get("EKOVIDEO_VIDEO_FIELD", "Clé JSON").strip(),
+            video_dossier=os.environ.get("EKOVIDEO_VIDEO_DOSSIER", "").strip(),
+            public_url=os.environ.get(
+                "EKOVIDEO_PUBLIC_URL", "https://transcript.ekonum.fr"
+            ).strip(),
+            enrolement=os.environ.get("EKOVIDEO_ENROLEMENT", "").strip().lower()
+            in {"1", "true", "oui"},
+            corbeille_jours=int(os.environ.get("EKOVIDEO_CORBEILLE_JOURS", "30")),
+            liaison_auto=os.environ.get("EKOVIDEO_LIAISON_AUTO", "certaine")
+            .strip()
+            .lower(),
+            sonde_ignore=frozenset(
+                terme.strip().lower()
+                for terme in os.environ.get(
+                    "EKOVIDEO_SONDE_IGNORE", "Odoo,Ekonum"
+                ).split(",")
+                if terme.strip()
+            ),
             dev_mode=dev,
             dev_user_email=os.environ.get("EKOVIDEO_DEV_USER", "dev@ekonum.fr").strip(),
             dev_api_key=os.environ.get("GEMINI_API_KEY", "").strip(),

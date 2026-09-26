@@ -15,18 +15,23 @@ from __future__ import annotations
 
 import asyncio
 import json
+import html
 import logging
 import os
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi import Response
+from fastapi.responses import StreamingResponse
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from cloud_transcription import (
+    enrich_transcript_via_gemini,
     CLOUD_TRANSCRIPTION_MODELS,
     CloudChunkResult,
     CloudTranscriptionError,
@@ -39,9 +44,14 @@ from cloud_transcription import (
 )
 
 from .auth import AccessVerifier, AuthError
+from .chatter import ChatterError, composer
+from .coffre import Coffre, CoffreIndisponible
 from .db import Database
 from .odoo import OdooGateway, OdooUnavailable
 from .secrets import GeminiKey, SecretError
+from .stockage import MORCEAU, DriveStockage, StockageIndisponible
+from .enqueteur import MODELE_ENQUETE, Conclusion, enqueter_confirme
+from .sonde import FENETRE_SECONDES, fournisseur, identifier
 from .settings import Settings
 from .terms import replace_term
 from .transcription import context_for_chunk, transcribe_chunk, transcript_text
@@ -82,6 +92,24 @@ MAX_CONCURRENT_CHUNKS = 2
 # marge couvre un réglage plus généreux sans jamais approcher les 100 Mo
 # du tunnel.
 MAX_CHUNK_BYTES = 60 * 1024 * 1024
+# Cinq minutes en MP3 64 kbit/s pèsent 2,4 Mo : la marge permet une
+# fenêtre un peu plus large, pas le dépôt d'une réunion entière.
+MAX_SONDE_BYTES = 8 * 1024 * 1024
+
+# Le ré-enrichissement ne relit que du texte : le modèle le moins cher
+# du catalogue suffit, et c'est ce qui rend la correction d'une liaison
+# indolore.
+MODELE_ENRICHISSEMENT = "gemini-3.1-flash-lite"
+
+# Du plus sûr au moins sûr. Lier sans demander à partir de « probable »
+# est un réglage possible ; ce n'est pas le défaut.
+ECHELLE = ["certaine", "probable", "incertaine"]
+
+
+def liaison_sans_demander(confiance: str, seuil: str) -> bool:
+    if seuil not in ECHELLE or confiance not in ECHELLE:
+        return False
+    return ECHELLE.index(confiance) <= ECHELLE.index(seuil)
 
 
 class JobRequest(BaseModel):
@@ -90,6 +118,9 @@ class JobRequest(BaseModel):
     model: str = Field(min_length=1)
     language: str = "fr"
     context: dict[str, Any] = Field(default_factory=dict)
+    # Quand la réunion a eu lieu — pas quand on l'a déposée. Proposée
+    # d'après la date du fichier, corrigeable à la main.
+    meeting_date: str | None = Field(default=None, max_length=40)
 
 
 class ImportedSegment(BaseModel):
@@ -112,6 +143,26 @@ class ImportedJob(BaseModel):
     technical_terms: list[str] = Field(default_factory=list)
     cost_usd: float = 0.0
     segments: list[ImportedSegment] = Field(default_factory=list)
+    meeting_date: str = Field(default="", max_length=40)
+
+
+class OdooCredentials(BaseModel):
+    """Clé API Odoo **personnelle**.
+
+    Pas de clé partagée : la note déposée dans le chatter porte
+    l'identité du propriétaire de la clé. Avec une clé commune, tout
+    serait signé du même compte et l'attribution — la raison d'être du
+    chatter — disparaîtrait.
+    """
+
+    login: str = Field(min_length=1, max_length=254)
+    api_key: str = Field(min_length=8, max_length=512)
+
+
+class OdooPublication(BaseModel):
+    model: str = Field(min_length=1, max_length=64)
+    record_id: int = Field(gt=0)
+    header: str = Field(default="", max_length=500)
 
 
 class ContextPatch(BaseModel):
@@ -121,6 +172,7 @@ class ContextPatch(BaseModel):
     title: str | None = None
     speakers: dict[str, str] | None = None
     technical_terms: list[str] | None = None
+    meeting_date: str | None = Field(default=None, max_length=40)
 
 
 class TermReplacement(BaseModel):
@@ -136,13 +188,38 @@ class VocabularyRecord(BaseModel):
     terms: list[str] = Field(default_factory=list)
 
 
+class Reenrichissement(BaseModel):
+    """Recoller un dossier Odoo au texte déjà transcrit."""
+
+    model: str = Field(default="", max_length=64)
+    record_id: int = Field(default=0, ge=0)
+
+
+class EnvoiVideo(BaseModel):
+    taille: int = Field(gt=0, le=20 * 1024**3)
+    type: str = Field(default="video/mp4", max_length=64)
+
+
+class DemandeAppareil(BaseModel):
+    """Ce qu'un appareil dit de lui en demandant à être enrôlé."""
+
+    appareil: str = Field(default="", max_length=120)
+
+
+class CodeAppareil(BaseModel):
+    code_appareil: str = Field(min_length=8, max_length=128)
+
+
 class FinalizeResponse(BaseModel):
     job_id: int
     title: str
     transcript: str
     speakers: dict[str, str]
     technical_terms: list[str]
+    uncertain: list[dict[str, Any]] = Field(default_factory=list)
     cost_usd: float
+    # Ce qu'il est advenu du dépôt automatique, quand il y en avait un.
+    odoo: dict[str, Any] = Field(default_factory=dict)
 
 
 def create_app(
@@ -151,7 +228,8 @@ def create_app(
     database: Database | None = None,
     gemini_key: GeminiKey | None = None,
     verifier: AccessVerifier | None = None,
-    odoo: OdooGateway | None = None,
+    odoo_factory=None,
+    stockage_factory=None,
 ) -> FastAPI:
     config = settings or Settings.from_env()
     db = database or Database(config.db_path)
@@ -163,18 +241,68 @@ def create_app(
         static_key=config.dev_api_key,
     )
     access = verifier or AccessVerifier(config.access_team_domain, config.access_aud)
-    odoo_gateway = odoo or OdooGateway(
-        GeminiKey(
-            url=config.broker_url,
-            token=config.broker_token,
-            item=config.odoo_broker_item,
-            field=config.odoo_broker_field,
-            static_key=os.environ.get("ODOO_API_KEY", ""),
-        ),
-        url=config.odoo_url,
-        database=config.odoo_database,
-        login=config.odoo_login,
+
+    cle_video = GeminiKey(  # lecteur de coffre générique, malgré son nom
+        url=config.broker_url,
+        token=config.broker_token,
+        item=config.video_item,
+        field=config.video_field,
     )
+    etat_stockage: dict[str, Any] = {}
+
+    def stockage():
+        """Le stockage vidéo, ou ``StockageIndisponible``.
+
+        Construit à la première demande et gardé : il porte le jeton du
+        compte de service, qu'on ne renégocie pas à chaque morceau.
+        """
+        if stockage_factory is not None:
+            return stockage_factory()
+        if not (config.video_item and config.video_dossier):
+            raise StockageIndisponible("Stockage vidéo non configuré.")
+        if "instance" not in etat_stockage:
+            try:
+                cle = json.loads(cle_video.get())
+            except (SecretError, ValueError) as exc:
+                raise StockageIndisponible(
+                    "Clé du compte de service illisible dans le coffre."
+                ) from exc
+            etat_stockage["instance"] = DriveStockage(cle, config.video_dossier)
+        return etat_stockage["instance"]
+
+    def stockage_disponible() -> bool:
+        return stockage_factory is not None or bool(config.video_item and config.video_dossier)
+
+    def effacer(job_id: int) -> None:
+        """Supprime une réunion pour de bon, vidéo comprise.
+
+        La vidéo d'abord : si Drive refuse, la réunion reste à la
+        corbeille et on réessaiera, plutôt que de laisser un fichier
+        orphelin que plus rien ne référence.
+        """
+        job = db.get_job(job_id) or {}
+        if job.get("video_file_id"):
+            stockage().supprimer(str(job["video_file_id"]))
+        db.supprimer_job(job_id)
+    coffre = Coffre(config.secret_key)
+
+    def odoo_pour(owner_id: int) -> OdooGateway:
+        """La passerelle Odoo **de cette personne**.
+
+        Pas de clé de service partagée, même en lecture : une recherche
+        faite sous un compte commun ignorerait les règles d'accès de la
+        personne et lui montrerait des dossiers qui ne sont pas les
+        siens.
+        """
+        if odoo_factory is not None:
+            return odoo_factory(owner_id)
+        login, chiffree = db.odoo_credentials(owner_id)
+        return OdooGateway(
+            url=config.odoo_url,
+            database=config.odoo_database,
+            login=login,
+            api_key=coffre.dechiffrer(chiffree) if (login and chiffree) else "",
+        )
     if not access.configured and not config.dev_mode:
         raise RuntimeError(
             "Cloudflare Access n'est pas configuré (EKOVIDEO_ACCESS_TEAM_DOMAIN "
@@ -308,6 +436,18 @@ def create_app(
             context=payload.context,
             chunks=windows,
         )
+        if payload.meeting_date:
+            db.set_meeting_date(job_id, _date_reunion(payload.meeting_date))
+        # Le dossier choisi avant la transcription est retenu maintenant :
+        # à la fin, le dépôt n'aura plus rien à demander.
+        dossier = payload.context.get("odoo_record") or {}
+        if dossier.get("model") and dossier.get("record_id"):
+            db.set_odoo_link(
+                job_id,
+                model=str(dossier["model"]),
+                record_id=int(dossier["record_id"]),
+                message_id=None,
+            )
         # Enregistré maintenant, pas à la fin : ajouter « Acritec » doit
         # faire remonter les termes qui l'accompagnent dès la réunion
         # suivante, même si celle-ci échoue.
@@ -389,17 +529,16 @@ def create_app(
             ],
         }
 
-    @app.post("/api/jobs/{job_id}/finalize", response_model=FinalizeResponse)
-    def finalize(job_id: int, owner_id: int = Depends(current_user)) -> FinalizeResponse:
-        job = owned_job(job_id, owner_id)
-        chunks = db.chunks_for_job(job_id)
-        missing = [c["idx"] for c in chunks if c["status"] != "termine"]
-        if missing:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                "Fenêtres encore manquantes : " + ", ".join(str(i) for i in missing),
-            )
+    def _finaliser(job_id: int) -> FinalizeResponse:
+        """Fusionne les fenêtres et termine la réunion.
 
+        Appelé par le serveur lui-même dès la dernière fenêtre
+        transcrite : la personne peut avoir quitté l'écran, fermé
+        l'onglet ou lancé une autre transcription entre-temps. Le
+        navigateur n'est plus là que pour encoder et envoyer.
+        """
+        job = db.get_job(job_id) or {}
+        chunks = db.chunks_for_job(job_id)
         results = [
             CloudChunkResult.from_dict(json.loads(c["result_json"] or "{}"))
             for c in chunks
@@ -416,11 +555,21 @@ def create_app(
             transcript=text,
             speakers=merged.speakers,
             technical_terms=merged.technical_terms,
+            uncertain=merged.uncertain,
             cost_usd=merged.usage.cost_usd,
         )
+        # Les noms que le modèle a reconnus s'appliquent aux répliques :
+        # sans cela, la transcription affichait « sanaa.philippe@… » à côté
+        # d'une carte qui disait déjà « Sanaa Philippe ».
+        db.renommer_interlocuteurs(job_id, merged.speakers)
         for c in chunks:
             _discard(config.chunk_dir / f"job{job_id}_chunk{c['idx']}{CHUNK_SUFFIX}")
+        text = (db.get_job(job_id) or {}).get("transcript") or text
+        depot = _deposer_seul(db.get_job(job_id) or job, merged.title, text)
+        db.noter_depot_odoo(job_id, depot)
         return FinalizeResponse(
+            odoo=depot,
+            uncertain=merged.uncertain,
             job_id=job_id,
             title=merged.title,
             transcript=text,
@@ -429,10 +578,258 @@ def create_app(
             cost_usd=merged.usage.cost_usd,
         )
 
+    @app.post("/api/jobs/{job_id}/finalize", response_model=FinalizeResponse)
+    def finalize(job_id: int, owner_id: int = Depends(current_user)) -> FinalizeResponse:
+        """Porte de secours : le serveur finalise seul, mais une réunion
+        restée « à finaliser » (serveur redémarré au mauvais moment) se
+        débloque ici. Déjà terminée, elle est simplement relue."""
+        job = owned_job(job_id, owner_id)
+        if job["status"] == "termine":
+            return FinalizeResponse(
+                job_id=job_id,
+                title=job["title"] or "",
+                transcript=job["transcript"] or "",
+                speakers=json.loads(job["speaker_map_json"] or "{}"),
+                technical_terms=json.loads(job["technical_terms_json"] or "[]"),
+                uncertain=json.loads(job["uncertain_json"] or "[]"),
+                cost_usd=float(job["cloud_cost_usd"] or 0),
+                odoo=json.loads(job["odoo_depot_json"] or "{}"),
+            )
+        chunks = db.chunks_for_job(job_id)
+        missing = [c["idx"] for c in chunks if c["status"] != "termine"]
+        if missing:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Fenêtres encore manquantes : " + ", ".join(str(i) for i in missing),
+            )
+        if not db.reserver_finalisation(job_id):
+            raise HTTPException(status.HTTP_409_CONFLICT, "Finalisation déjà en cours.")
+        return _finaliser(job_id)
+
     # -- bibliothèque --------------------------------------------------
 
+    def _deposer_seul(job: dict, titre: str, transcript: str) -> dict:
+        """Dépose la transcription et prévient, si tout était décidé.
+
+        La transcription est déjà enregistrée quand on arrive ici : un
+        dépôt raté ne doit donc rien casser, seulement se raconter. Le
+        bouton « Déposer dans Odoo » reste la porte de secours.
+        """
+        modele = str(job["odoo_model"] or "")
+        record_id = int(job["odoo_record_id"] or 0)
+        contexte = json.loads(job["context_json"] or "{}")
+        if not (modele and record_id) or job["odoo_message_id"]:
+            return {}
+        if not contexte.get("odoo_auto"):
+            return {"pending": True, "model": modele, "record_id": record_id}
+
+        owner_id = int(job["owner_id"])
+        try:
+            passerelle = odoo_pour(owner_id)
+            chatter = passerelle.chatter()
+            message_id = chatter.publier(
+                modele,
+                record_id,
+                composer(titre or "Transcription complète", transcript,
+                         entete="Déposé automatiquement par transcript.ekonum.fr."),
+            )
+        except (ChatterError, OdooUnavailable, CoffreIndisponible) as exc:
+            log.warning("dépôt automatique impossible (job %s) : %s", job["id"], exc)
+            return {"published": False, "error": str(exc),
+                    "model": modele, "record_id": record_id}
+
+        db.set_odoo_link(int(job["id"]), model=modele, record_id=record_id,
+                         message_id=message_id)
+        return {
+            "published": True,
+            "message_id": message_id,
+            "model": modele,
+            "record_id": record_id,
+            **_prevenir(passerelle, chatter, modele, record_id, titre),
+        }
+
+    def _prevenir(passerelle, chatter, modele: str, record_id: int, titre: str) -> dict:
+        """Dit que c'est fait, là où la personne le verra.
+
+        La conversation OdooBot d'abord, une activité sur le dossier à
+        défaut. Ne pas prévenir n'annule pas le dépôt : c'est signalé,
+        pas fatal.
+        """
+        lien = f"{config.odoo_url.rstrip('/')}/odoo/{modele.split('.')[0]}/{record_id}"
+        texte = (
+            f'Transcription déposée : <b>{html.escape(titre or "réunion")}</b> — '
+            f'<a href="{html.escape(lien)}">ouvrir le dossier</a>.'
+        )
+        try:
+            identite = passerelle.identite()
+            message = chatter.prevenir(identite["partner_id"], texte)
+            if message:
+                return {"notified": "odoobot"}
+            activite = chatter.activite(
+                modele, record_id, identite["user_id"],
+                f"Transcription déposée : {titre or 'réunion'}",
+                "Déposée automatiquement, à relire.",
+            )
+            return {"notified": "activite" if activite else "aucun"}
+        except (ChatterError, OdooUnavailable) as exc:
+            log.warning("ping impossible : %s", exc)
+            return {"notified": "aucun", "notify_error": str(exc)}
+
+    @app.delete("/api/jobs/{job_id}", status_code=status.HTTP_204_NO_CONTENT,
+                response_class=Response)
+    def jeter(job_id: int, owner_id: int = Depends(current_user)) -> Response:
+        """À la corbeille, pas au néant.
+
+        Une transcription représente parfois une heure de réunion et
+        quelques dizaines de centimes : la perdre sur un clic de travers
+        serait une faute. Elle reste récupérable pendant le délai de
+        rétention, puis disparaît pour de bon.
+        """
+        owned_job(job_id, owner_id)
+        db.jeter_job(job_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.delete("/api/corbeille", status_code=status.HTTP_200_OK)
+    def vider_corbeille(owner_id: int = Depends(current_user)) -> dict:
+        """Supprime pour de bon tout ce qui est à la corbeille.
+
+        Seulement la corbeille : une réunion active ne peut pas
+        disparaître par ce chemin, il faut d'abord l'y avoir mise.
+        """
+        supprimees: list[int] = []
+        for job in db.list_jobs(owner_id, limit=10_000, etat="corbeille"):
+            try:
+                effacer(int(job["id"]))
+                supprimees.append(int(job["id"]))
+            except StockageIndisponible as exc:
+                log.warning("réunion %s gardée à la corbeille : %s", job["id"], exc)
+        return {"supprimees": supprimees}
+
+    @app.delete("/api/jobs/{job_id}/definitif", status_code=status.HTTP_204_NO_CONTENT,
+                response_class=Response)
+    def supprimer_definitivement(
+        job_id: int, owner_id: int = Depends(current_user)
+    ) -> Response:
+        """Efface une réunion déjà jetée, sans attendre la rétention."""
+        job = owned_job(job_id, owner_id)
+        if not job["deleted_at"]:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Mets d'abord la réunion à la corbeille : on ne supprime pas "
+                "définitivement ce qu'on n'a pas choisi de jeter.",
+            )
+        try:
+            effacer(job_id)
+        except StockageIndisponible as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    # -- vidéo compressée ------------------------------------------------
+
+    @app.post("/api/jobs/{job_id}/video")
+    def ouvrir_envoi_video(
+        job_id: int, payload: EnvoiVideo, owner_id: int = Depends(current_user)
+    ) -> dict:
+        """Prépare l'envoi de la vidéo compressée d'une réunion.
+
+        La session Drive reste ici : le navigateur n'envoie que des
+        morceaux à transcript, qui les relaie.
+        """
+        job = owned_job(job_id, owner_id)
+        if job["video_file_id"]:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "Cette réunion a déjà sa vidéo."
+            )
+        try:
+            session = stockage().ouvrir_envoi(
+                f"transcript-{job_id}.mp4", payload.taille, payload.type or "video/mp4"
+            )
+        except StockageIndisponible as exc:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+        db.ouvrir_envoi_video(job_id, session, payload.taille)
+        return {"morceau": MORCEAU}
+
+    @app.put("/api/jobs/{job_id}/video")
+    async def envoyer_morceau_video(
+        job_id: int, debut: int, request: Request, owner_id: int = Depends(current_user)
+    ) -> dict:
+        job = owned_job(job_id, owner_id)
+        session = job["video_session"]
+        if not session:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "Aucun envoi de vidéo en cours pour cette réunion."
+            )
+        octets = await request.body()
+        if not octets or len(octets) > MORCEAU:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"Morceau vide ou trop gros (au plus {MORCEAU // (1024 * 1024)} Mio).",
+            )
+        total = int(job["video_bytes"] or 0)
+        try:
+            fichier_id = await asyncio.to_thread(
+                stockage().envoyer_morceau, session, debut, octets, total
+            )
+        except StockageIndisponible as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+        if fichier_id:
+            db.terminer_envoi_video(job_id, fichier_id)
+        return {"recu": debut + len(octets), "total": total, "termine": bool(fichier_id)}
+
+    @app.get("/api/jobs/{job_id}/video")
+    def lire_video(
+        job_id: int, request: Request, owner_id: int = Depends(current_user)
+    ):
+        """La vidéo, en flux et par plages — c'est ce qui permet d'avancer
+        dans la réunion sans la télécharger en entier.
+
+        Seule la première plage d'une lecture est comptée : un lecteur
+        en demande des dizaines en avançant, ce serait compter des
+        sauts, pas des lectures.
+        """
+        job = owned_job(job_id, owner_id)
+        if not job["video_file_id"]:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Pas de vidéo pour cette réunion.")
+        plage = request.headers.get("range", "")
+        try:
+            reponse = stockage().lire(str(job["video_file_id"]), plage)
+        except StockageIndisponible as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+        if plage in ("", "bytes=0-"):
+            db.compter_lecture_video(job_id)
+        return StreamingResponse(
+            reponse.flux, status_code=reponse.statut, headers=reponse.entetes,
+            media_type=reponse.entetes.get("Content-Type", "video/mp4"),
+        )
+
+    @app.post("/api/jobs/{job_id}/archive")
+    def archiver(job_id: int, owner_id: int = Depends(current_user)) -> dict:
+        """Hors de la bibliothèque, mais intacte et toujours cherchable."""
+        owned_job(job_id, owner_id)
+        db.archiver_job(job_id)
+        return {"job_id": job_id, "etat": "archive"}
+
+    @app.post("/api/jobs/{job_id}/restore")
+    def restaurer(job_id: int, owner_id: int = Depends(current_user)) -> dict:
+        """Ressort d'archive comme de corbeille : un seul geste."""
+        owned_job(job_id, owner_id)
+        db.restaurer_job(job_id)
+        return {"job_id": job_id, "etat": "actif"}
+
     @app.get("/api/jobs")
-    def list_jobs(owner_id: int = Depends(current_user)) -> list[dict]:
+    def list_jobs(
+        etat: str = "actif", owner_id: int = Depends(current_user)
+    ) -> list[dict]:
+        # La purge se fait ici plutôt que par une tâche planifiée : le
+        # serveur tient dans 256 Mo et n'a pas d'ordonnanceur, et une
+        # corbeille qu'on consulte est une corbeille qu'on peut vider.
+        if etat == "corbeille":
+            for perime in db.corbeille_perimee(config.corbeille_jours):
+                try:
+                    effacer(perime)
+                    log.info("corbeille : réunion %s purgée", perime)
+                except StockageIndisponible as exc:
+                    log.warning("corbeille : réunion %s gardée : %s", perime, exc)
         return [
             {
                 "job_id": job["id"],
@@ -444,9 +841,23 @@ def create_app(
                 "cost_usd": job["cloud_cost_usd"],
                 "created_at": job["created_at"],
                 "has_versions": bool(job["previous_versions_json"]),
+                "archived_at": job["archived_at"],
+                "deleted_at": job["deleted_at"],
+                "meeting_date": job["meeting_date"],
+                # Seulement pour ce qui tourne encore : la bibliothèque
+                # montre une réunion en cours progresser pendant qu'on en
+                # lance une autre.
+                "progress": _avancement(job) if job["status"] not in ("termine",) else None,
             }
-            for job in db.list_jobs(owner_id)
+            for job in db.list_jobs(owner_id, etat=etat)
         ]
+
+    def _avancement(job: dict) -> dict:
+        fenetres = db.chunks_for_job(int(job["id"]))
+        return {
+            "done": sum(1 for c in fenetres if c["status"] == "termine"),
+            "total": len(fenetres),
+        }
 
     @app.post("/api/jobs/import", status_code=status.HTTP_200_OK)
     def import_job(payload: ImportedJob, owner_id: int = Depends(current_user)) -> dict:
@@ -460,10 +871,15 @@ def create_app(
         job_id, nouveau = db.import_job(
             owner_id=owner_id,
             payload={
-                **payload.model_dump(exclude={"segments"}),
+                **payload.model_dump(exclude={"segments", "meeting_date"}),
                 "segments": [s.model_dump() for s in payload.segments],
             },
         )
+        # Une date de réunion complète une reprise déjà faite, sans rien
+        # écraser : c'est ce qui permet de la rattraper en relançant
+        # l'import, qui ne la transmettait pas au début.
+        if payload.meeting_date and not (db.get_job(job_id) or {}).get("meeting_date"):
+            db.set_meeting_date(job_id, _date_reunion(payload.meeting_date))
         return {"job_id": job_id, "imported": nouveau}
 
     @app.get("/api/jobs/{job_id}/detail")
@@ -480,8 +896,28 @@ def create_app(
             "transcript": job["transcript"] or "",
             "speakers": json.loads(job["speaker_map_json"] or "{}"),
             "technical_terms": json.loads(job["technical_terms_json"] or "[]"),
+            # Ce dont le modèle n'était pas sûr : c'est la liste de ce
+            # qu'il faut réécouter, et elle ne sert à rien si elle reste
+            # dans la base.
+            "uncertain": json.loads(job["uncertain_json"] or "[]"),
+            "meeting_date": job["meeting_date"],
+            "created_at": job["created_at"],
+            "video": {
+                "presente": bool(job["video_file_id"]),
+                "en_cours": bool(job["video_session"]),
+                "octets": job["video_bytes"],
+                "deposee_le": job["video_uploaded_at"],
+                "lectures": job["video_lectures"] or 0,
+            },
             "segments": db.segments_for_job(job_id),
             "previous_versions": json.loads(job["previous_versions_json"] or "[]"),
+            "odoo": {
+                "depot": json.loads(job["odoo_depot_json"] or "{}"),
+                "model": job["odoo_model"],
+                "record_id": job["odoo_record_id"],
+                "message_id": job["odoo_message_id"],
+                "published_at": job["odoo_published_at"],
+            },
         }
 
     @app.patch("/api/jobs/{job_id}")
@@ -492,9 +928,12 @@ def create_app(
         db.update_job_context(
             job_id,
             title=patch.title,
-            speakers=patch.speakers,
             technical_terms=patch.technical_terms,
         )
+        if patch.speakers is not None:
+            db.renommer_interlocuteurs(job_id, patch.speakers)
+        if patch.meeting_date is not None:
+            db.set_meeting_date(job_id, _date_reunion(patch.meeting_date))
         return {"updated": True}
 
     @app.post("/api/jobs/{job_id}/terms/replace")
@@ -541,6 +980,81 @@ def create_app(
         db.set_job_status(job_id, "en_attente")
         return {"reset": index}
 
+    # -- enrôlement d'un appareil ----------------------------------------
+    #
+    # Le motif est celui des téléviseurs : l'appareil affiche un code
+    # court, la personne l'ouvre dans son navigateur — déjà authentifiée
+    # par Access — et valide. L'appareil repart avec son propre jeton.
+    # Rien à recopier, aucun mot de passe nulle part.
+
+    def _enrolement_ouvert() -> None:
+        if not config.enrolement:
+            # 404 plutôt que 403 : tant que la fonction dort, elle
+            # n'existe pas.
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Chemin inconnu.")
+
+    @app.post("/api/enroll/device", status_code=status.HTTP_201_CREATED)
+    def enroler_appareil(payload: DemandeAppareil) -> dict:
+        """Ouvre une demande. Seule route sans authentification.
+
+        Elle ne donne rien : un code appareil inutile tant qu'un humain
+        n'a pas validé dans son navigateur, et qui expire en quinze
+        minutes.
+        """
+        _enrolement_ouvert()
+        db.purger_enrolements()
+        code_appareil, code_humain, echeance = db.ouvrir_enrolement(payload.appareil)
+        return {
+            "code_appareil": code_appareil,
+            "code_humain": code_humain,
+            # La racine, pas un chemin dédié : l'interface est une page
+            # unique, et seul ce paramètre la fait bifurquer.
+            "url": f"{config.public_url.rstrip('/')}/?code={code_humain}",
+            "expire_le": echeance,
+        }
+
+    @app.get("/api/enroll/{code_humain}")
+    def voir_enrolement(code_humain: str, owner_id: int = Depends(human_user)) -> dict:
+        """Ce que la personne doit voir avant de valider : quel appareil,
+        demandé quand."""
+        _enrolement_ouvert()
+        demande = db.enrolement_par_code_humain(code_humain)
+        if not demande:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Code inconnu ou expiré.")
+        return {
+            "appareil": demande["appareil"],
+            "statut": demande["statut"],
+            "demande_le": demande["created_at"],
+            "expire_le": demande["expires_at"],
+        }
+
+    @app.post("/api/enroll/{code_humain}/approve")
+    def approuver_enrolement(
+        code_humain: str, owner_id: int = Depends(human_user)
+    ) -> dict:
+        """Valide l'appareil, sous **son** identité.
+
+        `human_user` : un jeton d'API ne peut pas enrôler un appareil de
+        plus. Sinon un jeton volé se multiplierait tout seul.
+        """
+        _enrolement_ouvert()
+        if not db.approuver_enrolement(code_humain, owner_id):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Demande inconnue, expirée ou déjà traitée. Relance "
+                "l'enrôlement depuis l'application.",
+            )
+        return {"statut": "approuve"}
+
+    @app.post("/api/enroll/token")
+    def reclamer_jeton(payload: CodeAppareil) -> dict:
+        """L'appareil vient chercher son jeton, une seule fois."""
+        _enrolement_ouvert()
+        vue = db.reclamer_enrolement(payload.code_appareil)
+        if vue["statut"] == "inconnu":
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Demande inconnue.")
+        return vue
+
     @app.get("/api/me")
     def me(request: Request, owner_id: int = Depends(current_user)) -> dict:
         """Qui suis-je, et comment suis-je entré.
@@ -554,6 +1068,41 @@ def create_app(
             "email": db.email_for_user(owner_id),
             "via": "jeton d'API" if par_jeton else "Cloudflare Access",
         }
+
+    @app.get("/api/me/odoo")
+    def voir_odoo(owner_id: int = Depends(current_user)) -> dict:
+        """État du raccordement Odoo. **Ne rend jamais la clé.**"""
+        login, chiffree = db.odoo_credentials(owner_id)
+        return {
+            "configured": bool(login and chiffree),
+            "login": login,
+            "server": config.odoo_url,
+            "chiffrement_disponible": coffre.disponible,
+        }
+
+    @app.put("/api/me/odoo")
+    def poser_odoo(
+        payload: OdooCredentials, owner_id: int = Depends(human_user)
+    ) -> dict:
+        """Enregistre la clé API personnelle, chiffrée.
+
+        Réservé à une connexion humaine : un jeton d'API ne doit pas
+        pouvoir déposer une identité Odoo à la place de quelqu'un.
+        """
+        try:
+            chiffree = coffre.chiffrer(payload.api_key)
+        except CoffreIndisponible as exc:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)
+            ) from exc
+        db.set_odoo_credentials(owner_id, login=payload.login, key_chiffree=chiffree)
+        return {"configured": True, "login": payload.login.strip()}
+
+    @app.delete("/api/me/odoo", status_code=status.HTTP_204_NO_CONTENT,
+                response_class=Response)
+    def retirer_odoo(owner_id: int = Depends(human_user)) -> Response:
+        db.clear_odoo_credentials(owner_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.post("/api/tokens", status_code=status.HTTP_201_CREATED)
     def create_token(payload: TokenRequest, owner_id: int = Depends(human_user)) -> dict:
@@ -602,38 +1151,366 @@ def create_app(
         db.forget_vocabulary(term)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+    @app.get("/api/odoo/records")
+    def odoo_records(q: str = "", owner_id: int = Depends(current_user)) -> dict:
+        """Dossiers candidats, pour choisir où déposer."""
+        passerelle = odoo_pour(owner_id)
+        if not passerelle.configured:
+            return {
+                "available": False,
+                "reason": "Ajoute ta clé API Odoo dans ton compte.",
+                "records": [],
+            }
+        try:
+            return {"available": True, "records": passerelle.search_records(q)}
+        except OdooUnavailable as exc:
+            log.warning("recherche Odoo indisponible : %s", exc)
+            return {"available": False, "reason": str(exc), "records": []}
+
+    @app.post("/api/jobs/{job_id}/enrich")
+    def reenrichir(
+        job_id: int,
+        payload: Reenrichissement,
+        owner_id: int = Depends(current_user),
+    ) -> dict:
+        """Refait titre, noms et corrections sans retranscrire.
+
+        C'est ce qui rend une mauvaise liaison peu coûteuse : quand le
+        dossier retenu était le mauvais, il suffit d'en désigner un
+        autre et de relire le texte à sa lumière. Une transcription
+        complète coûte cent fois plus.
+        """
+        job = owned_job(job_id, owner_id)
+        transcript = (job["transcript"] or "").strip()
+        if not transcript:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "Cette réunion n'a pas de transcription."
+            )
+
+        contexte = json.loads(job["context_json"] or "{}")
+        if payload.model and payload.record_id:
+            # Un dossier désigné remplace celui d'avant, contexte compris.
+            passerelle = odoo_pour(owner_id)
+            if not passerelle.configured:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    "Ajoute ta clé API Odoo dans ton compte pour charger ce dossier.",
+                )
+            try:
+                pack = passerelle.context_pack(payload.model, payload.record_id)
+            except OdooUnavailable as exc:
+                raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+            contexte = {
+                **contexte,
+                "client_company": pack.get("client_company") or "",
+                "glossary_terms": pack.get("terms") or [],
+                "odoo_context": pack.get("summary") or "",
+            }
+            db.set_odoo_link(
+                job_id, model=payload.model, record_id=payload.record_id,
+                message_id=job["odoo_message_id"],
+            )
+            db.update_job_context_json(job_id, contexte)
+
+        try:
+            enrichi, usage = enrich_transcript_via_gemini(
+                keys.get(),
+                MODELE_ENRICHISSEMENT,
+                transcript,
+                language=str(job["language"] or "fr"),
+                glossary_terms=list(contexte.get("glossary_terms") or []),
+                expected_speaker_names=list(contexte.get("expected_speaker_names") or []),
+                meeting_context=str(contexte.get("meeting_context") or ""),
+                odoo_context=str(contexte.get("odoo_context") or ""),
+            )
+        except (CloudTranscriptionError, SecretError) as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+        db.add_api_usage(
+            job_id=job_id,
+            provider=provider_for_model(MODELE_ENRICHISSEMENT),
+            model=usage.model or MODELE_ENRICHISSEMENT,
+            step="reenrichissement",
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cost_usd=usage.cost_usd,
+        )
+        nouveau_titre = enrichi.get("title") or job["title"]
+        noms = {k: v for k, v in (enrichi.get("speakers") or {}).items() if v and v != k}
+        change = nouveau_titre != job["title"] or bool(noms) or (
+            (enrichi.get("technical_terms") or None) is not None
+            and enrichi.get("technical_terms") != json.loads(job["technical_terms_json"] or "[]")
+        )
+        # On n'empile une version que si la relecture change quelque
+        # chose : sinon chaque dépôt manuel, qui relit d'abord, ajoutait
+        # une « version antérieure » identique à l'actuelle.
+        if change:
+            db.archive_current_version(job_id)
+        db.update_job_context(
+            job_id,
+            title=nouveau_titre,
+            technical_terms=enrichi.get("technical_terms") or None,
+        )
+        if noms:
+            db.renommer_interlocuteurs(job_id, {
+                **json.loads(job["speaker_map_json"] or "{}"), **noms,
+            })
+        db.set_uncertain(job_id, enrichi.get("uncertain_passages") or [])
+        return {
+            "job_id": job_id,
+            "title": enrichi.get("title") or job["title"],
+            "speakers": enrichi.get("speakers") or {},
+            "technical_terms": enrichi.get("technical_terms") or [],
+            "corrections": enrichi.get("corrections") or [],
+            "uncertain": enrichi.get("uncertain_passages") or [],
+            "cost_usd": usage.cost_usd,
+        }
+
+    @app.post("/api/jobs/{job_id}/odoo/publish")
+    def publier_odoo(
+        job_id: int, payload: OdooPublication, owner_id: int = Depends(current_user)
+    ) -> dict:
+        """Dépose la transcription dans le chatter, en accordéon.
+
+        Remplace la recopie manuelle qui a fini par gonfler des
+        opportunités jusqu'à 300 000 caractères. L'accordéon garde le
+        texte intégral disponible sans noyer l'historique commercial.
+        """
+        job = owned_job(job_id, owner_id)
+        transcript = (job["transcript"] or "").strip()
+        if not transcript:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Cette réunion n'a pas de transcription à déposer.",
+            )
+        if job["odoo_message_id"]:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Déjà déposée dans Odoo — la reposter empilerait deux copies.",
+            )
+
+        corps = composer(
+            job["title"] or "Transcription complète",
+            transcript,
+            entete=payload.header,
+        )
+        try:
+            passerelle = odoo_pour(owner_id)
+        except CoffreIndisponible as exc:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+        if not passerelle.configured:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Aucune clé API Odoo personnelle enregistrée. La note doit "
+                "porter ton identité, pas celle d'un compte partagé — "
+                "ajoute ta clé dans ton compte.",
+            )
+        try:
+            message_id = passerelle.chatter().publier(
+                payload.model, payload.record_id, corps
+            )
+        except (ChatterError, OdooUnavailable) as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+        db.set_odoo_link(
+            job_id,
+            model=payload.model,
+            record_id=payload.record_id,
+            message_id=message_id,
+        )
+        return {"message_id": message_id, "model": payload.model,
+                "record_id": payload.record_id}
+
+    @app.post("/api/probe")
+    async def sonder(
+        request: Request, moment: str = "", owner_id: int = Depends(current_user)
+    ) -> dict:
+        """Écoute le début d'un enregistrement et propose un dossier.
+
+        Une fenêtre courte suffit pour savoir de qui et de quoi on
+        parle ; le dossier retenu fournira ensuite le contexte de la
+        vraie transcription. La sonde n'écrit rien dans Odoo : elle
+        propose, c'est tout.
+        """
+        corps = await request.body()
+        if not corps:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Fenêtre audio vide.")
+        if len(corps) > MAX_SONDE_BYTES:
+            raise HTTPException(
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                "Fenêtre trop lourde pour une sonde : cinq minutes suffisent.",
+            )
+
+        chemin = config.chunk_dir / f"sonde{owner_id}_{int(time.time()*1000)}{CHUNK_SUFFIX}"
+        chemin.write_bytes(corps)
+        try:
+            indices = await asyncio.to_thread(
+                identifier, str(chemin), api_key=keys.get()
+            )
+        except (CloudTranscriptionError, SecretError) as exc:
+            log.warning("sonde en échec : %s", exc)
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+        finally:
+            _discard(chemin)
+
+        db.add_api_usage(
+            job_id=None,
+            provider=fournisseur(),
+            model=indices.usage.model,
+            step="sonde_identification",
+            input_tokens=indices.usage.input_tokens,
+            output_tokens=indices.usage.output_tokens,
+            cost_usd=indices.usage.cost_usd,
+        )
+
+        # L'enquête coûte du jugement, pas de l'audio : on la mène dans
+        # un fil pour ne pas bloquer la boucle d'événements pendant ses
+        # allers-retours avec Odoo.
+        enquete = await asyncio.to_thread(_enqueter, owner_id, indices, moment)
+        db.add_api_usage(
+            job_id=None,
+            provider=fournisseur(MODELE_ENQUETE),
+            model=enquete.usage.model or MODELE_ENQUETE,
+            step="sonde_enquete",
+            input_tokens=enquete.usage.input_tokens,
+            output_tokens=enquete.usage.output_tokens,
+            cost_usd=enquete.usage.cost_usd,
+        )
+
+        return {
+            "clues": indices.to_dict(),
+            "cost_usd": round(indices.usage.cost_usd + enquete.usage.cost_usd, 6),
+            "investigation": {
+                **enquete.to_dict(),
+                # L'interface n'a pas à connaître le seuil : elle a
+                # besoin de savoir si elle doit demander.
+                "auto": bool(
+                    enquete.dossier
+                    and liaison_sans_demander(enquete.confiance, config.liaison_auto)
+                ),
+            },
+            # Le repli : la recherche directe reste là quand l'enquête
+            # renonce, pour que la personne ait quand même une liste.
+            # Le retenu d'abord, ses alternatives ensuite : se corriger
+            # doit coûter un clic, pas une nouvelle enquête.
+            "candidates": (
+                [enquete.dossier, *enquete.autres] if enquete.dossier else _candidats(
+                    owner_id, indices.groupes_de_recherche(config.sonde_ignore)
+                )
+            ),
+        }
+
+    def _enqueter(owner_id: int, indices, moment: str = "") -> Conclusion:
+        """Mène l'enquête avec la clé Odoo de la personne, ou renonce.
+
+        Odoo enrichit, il ne conditionne pas : sans clé, pas d'enquête,
+        et la transcription reste possible.
+        """
+        try:
+            passerelle = odoo_pour(owner_id)
+        except CoffreIndisponible:
+            return Conclusion(raison="Coffre indisponible.")
+        if not passerelle.configured:
+            return Conclusion(raison="Aucune clé API Odoo personnelle.")
+        try:
+            return enqueter_confirme(
+                indices.to_dict(),
+                chercher=lambda terme, modeles: passerelle.search_records(
+                    terme, modeles=modeles
+                ),
+                lire=passerelle.resume_dossier,
+                # L'agenda du moment de l'enregistrement : une réunion
+                # inscrite à cette heure-là pointe souvent déjà le
+                # dossier, et c'est le signal le plus fiable.
+                agenda=lambda: passerelle.meetings(
+                    near=_instant(moment), window_hours=3.0
+                ),
+                api_key=keys.get(),
+            )
+        except (CloudTranscriptionError, SecretError) as exc:
+            log.warning("enquête impossible : %s", exc)
+            return Conclusion(raison=f"Enquête impossible : {exc}")
+
+    def _candidats(
+        owner_id: int, groupes: list[list[str]], limite: int = 5
+    ) -> list[dict]:
+        """Les dossiers qui collent aux indices, sans jamais bloquer.
+
+        On s'arrête au premier groupe qui trouve : une fois la société
+        reconnue, chercher aussi les personnes et les sujets ne fait que
+        noyer le bon dossier.
+
+        Odoo enrichit, il ne conditionne pas : pas de clé, pas de
+        réseau, pas de candidats — et la transcription reste possible.
+        """
+        try:
+            passerelle = odoo_pour(owner_id)
+        except CoffreIndisponible:
+            return []
+        if not passerelle.configured:
+            return []
+        trouves: list[dict] = []
+        vus: set[tuple[str, int]] = set()
+        for groupe in groupes:
+            for terme in groupe[:4]:
+                try:
+                    lignes = passerelle.search_records(terme, limit=limite)
+                except OdooUnavailable as exc:
+                    log.warning("recherche Odoo indisponible : %s", exc)
+                    return trouves
+                for ligne in lignes:
+                    cle = (ligne["model"], int(ligne["id"]))
+                    if cle in vus:
+                        continue
+                    vus.add(cle)
+                    # Le terme qui a trouvé le dossier vaut explication :
+                    # « proposé parce qu'on a entendu Acritec ».
+                    trouves.append({**ligne, "matched": terme})
+                    if len(trouves) >= limite:
+                        return trouves
+            if trouves:
+                return trouves
+        return trouves
+
     @app.get("/api/odoo/meetings")
-    def odoo_meetings(_: int = Depends(current_user)) -> dict:
+    def odoo_meetings(owner_id: int = Depends(current_user)) -> dict:
         """Réunions du moment, pour proposer « c'est celle-là ».
 
         Une panne Odoo n'est pas une erreur ici : elle rend simplement la
         liste vide et le dit. Odoo enrichit, il ne conditionne pas — une
         réunion doit se transcrire même si le serveur est en maintenance.
         """
-        if not odoo_gateway.configured:
-            return {"available": False, "reason": "Odoo n'est pas configuré.", "meetings": []}
+        passerelle = odoo_pour(owner_id)
+        if not passerelle.configured:
+            return {
+                "available": False,
+                "reason": "Ajoute ta clé API Odoo dans ton compte.",
+                "meetings": [],
+            }
         try:
-            return {"available": True, "meetings": odoo_gateway.meetings()}
+            return {"available": True, "meetings": passerelle.meetings()}
         except OdooUnavailable as exc:
             log.warning("Odoo indisponible : %s", exc)
             return {"available": False, "reason": str(exc), "meetings": []}
 
     @app.get("/api/odoo/context")
     def odoo_context(
-        model: str, record_id: int, _: int = Depends(current_user)
+        model: str, record_id: int, owner_id: int = Depends(current_user)
     ) -> dict:
         """Pack de contexte d'une réunion : résumé, termes, société cliente."""
-        if not odoo_gateway.configured:
+        passerelle = odoo_pour(owner_id)
+        if not passerelle.configured:
             raise HTTPException(
-                status.HTTP_503_SERVICE_UNAVAILABLE, "Odoo n'est pas configuré."
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "Ajoute ta clé API Odoo dans ton compte.",
             )
         try:
-            return odoo_gateway.context_pack(model, record_id)
+            return passerelle.context_pack(model, record_id)
         except OdooUnavailable as exc:
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 
     @app.get("/api/settings")
-    def settings_view(_: int = Depends(current_user)) -> dict:
+    def settings_view(owner_id: int = Depends(current_user)) -> dict:
         """Ce que l'interface a besoin de savoir : les modèles offerts et
         où en est le budget d'équipe — la clé Gemini étant partagée, le
         plafond l'est aussi."""
@@ -648,11 +1525,17 @@ def create_app(
                 for entry in CLOUD_TRANSCRIPTION_MODELS
                 if provider_for_model(entry["id"]) == "gemini"
             ],
+            "corbeille": {"retention_jours": config.corbeille_jours},
+            "video": {"disponible": stockage_disponible()},
             "budget": {
                 "spent_usd": round(spent, 4),
                 "cap_usd": config.monthly_budget_usd,
             },
-            "odoo": {"configured": odoo_gateway.configured},
+            "odoo": {"configured": odoo_pour(owner_id).configured},
+            # Le navigateur encode la fenêtre de la sonde avant d'avoir
+            # créé un traitement : il lui faut le profil ici aussi.
+            "audio": AUDIO_PROFILE,
+            "probe": {"window_seconds": FENETRE_SECONDES},
         }
 
     @app.get("/api/search")
@@ -693,8 +1576,14 @@ def create_app(
             remaining = [
                 c for c in db.chunks_for_job(job_id) if c["status"] != "termine"
             ]
-            if not remaining:
-                db.set_job_status(job_id, "a_finaliser")
+            # Deux fenêtres peuvent finir au même instant : une seule
+            # obtient la réservation, et donc la fusion.
+            if not remaining and db.reserver_finalisation(job_id):
+                try:
+                    await asyncio.to_thread(_finaliser, job_id)
+                except Exception:  # garde-fou : la tâche de fond ne doit rien avaler
+                    log.exception("job %s : finalisation automatique en échec", job_id)
+                    db.set_job_status(job_id, "a_finaliser")
 
     def _transcribe_blocking(job: dict, window: dict, path: Path) -> CloudChunkResult:
         context = context_for_chunk(
@@ -718,6 +1607,32 @@ def create_app(
     if static_dir.is_dir():
         app.mount("/", StaticFiles(directory=static_dir), name="static")
     return app
+
+
+def _date_reunion(texte: str) -> str | None:
+    """Normalise une date de réunion saisie, ou la refuse franchement."""
+    lu = _instant(texte)
+    if texte.strip() and lu is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Date illisible : {texte!r}.")
+    return lu.isoformat(timespec="minutes") if lu else None
+
+
+def _instant(moment: str) -> datetime | None:
+    """L'heure de l'enregistrement, telle que le navigateur la connaît.
+
+    Le fichier porte sa date de dernière modification ; à défaut,
+    « maintenant » reste une approximation utile pour un dépôt fait dans
+    la foulée.
+    """
+    texte = (moment or "").strip()
+    if not texte:
+        return None
+    try:
+        lu = datetime.fromisoformat(texte.replace("Z", "+00:00"))
+    except ValueError:
+        log.info("moment illisible : %r", moment)
+        return None
+    return lu if lu.tzinfo else lu.replace(tzinfo=timezone.utc)
 
 
 def _discard(path: Path) -> None:

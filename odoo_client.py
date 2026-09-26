@@ -37,8 +37,8 @@ except ModuleNotFoundError:  # pragma: no cover - chemin serveur web
 
     _log = _logging.getLogger("ekovideo.odoo")
 
-    def append_app_log(source: str, message: str) -> None:
-        _log.info("%s %s", source, message)
+    def append_app_log(message: str) -> None:
+        _log.info("%s", message)
 
     def tail_text(text: str | None, limit: int = 4000) -> str:
         # Même sémantique que la version du moteur, ellipse comprise :
@@ -1083,11 +1083,17 @@ def extract_company_name_from_pack(pack: dict | None) -> str:
         _, partner_name = _scalar_from_many2one(partner_value)
         if partner_name:
             cleaned = partner_name.strip()
-            # Many partners in Odoo include the company in
-            # parentheses or after a comma: "Jean Dupont, Caste"
-            # or "Jean Dupont (Caste)". Prefer the company part
-            # because the title needs the org, not the contact.
-            for sep in (", ", " (", ":"):
+            # Odoo names a contact after its company, company first:
+            # ``res.partner._get_complete_name`` renders
+            # "ACRITEC, David JAUCH". The title needs the org, not the
+            # contact, so the part *before* the comma wins.
+            if ", " in cleaned:
+                candidate = cleaned.split(", ", 1)[0].strip()
+                if candidate:
+                    return candidate
+            # Hand-typed names sometimes carry the company in
+            # parentheses instead: "Jean Dupont (Caste)".
+            for sep in (" (", ":"):
                 if sep in cleaned:
                     candidate = cleaned.split(sep, 1)[1].rstrip(")")
                     if candidate.strip():
@@ -1256,13 +1262,60 @@ def _format_message(msg: dict) -> str:
 _GLOSSARY_STOPWORDS = {
     "Bonjour", "Merci", "Cordialement", "Salutations", "Madame",
     "Monsieur", "Mme", "Mr", "Anonyme", "Odoo", "Réunion",
+    # Entêtes de compte-rendu : capitalisés, jamais des noms propres.
+    "Synthèse", "Compte-rendu", "Transcription", "Participants",
+    "Date", "Objectif", "Contexte", "Conclusion", "Prochaines étapes",
 }
+
+# Mots français courants qu'une majuscule de début de phrase déguise en
+# nom propre. La liste reste courte : le filtre « déjà vu en
+# minuscules » ci-dessous attrape le reste dès que le texte est long.
+_MOTS_COURANTS = {
+    "je", "tu", "il", "elle", "on", "nous", "vous", "ils", "elles",
+    "le", "la", "les", "un", "une", "des", "du", "de", "ce", "cet",
+    "cette", "ces", "mon", "ma", "mes", "son", "sa", "ses", "notre",
+    "votre", "leur", "leurs", "et", "ou", "mais", "donc", "or", "ni",
+    "car", "si", "que", "qui", "quoi", "dont", "où", "quand", "comme",
+    "dans", "sur", "sous", "pour", "par", "avec", "sans", "vers",
+    "chez", "entre", "après", "avant", "depuis", "pendant", "selon",
+    "oui", "non", "ok", "voici", "voilà", "bien", "bon", "bonne",
+    "top", "merci", "aussi", "alors", "ainsi", "enfin", "ensuite",
+    "puis", "très", "plus", "moins", "tout", "tous", "toute", "toutes",
+    "autre", "autres", "même", "plusieurs", "chaque", "certains",
+    "objectif", "note", "notes", "point", "points", "suite", "retour",
+    "organisé", "organisée", "prévu", "prévue", "fait", "faite",
+    "opportunité", "devis", "projet", "tâche", "réunion",
+    # Interjections : fréquentes dans un chatter recopié d'une
+    # transcription, jamais un terme métier.
+    "ah", "oh", "eh", "bah", "hein", "ouais", "était", "est", "côté",
+}
+
+# Un mot qui apparaît aussi en minuscules dans le même texte n'est pas
+# un nom propre : c'est un début de phrase. « Voici », « Non », « Ok »
+# se voient ailleurs en « voici », « non », « ok » ; « Acritec » ou
+# « Peppol », jamais.
+def _sans_elision(mot: str) -> str:
+    """« L'objectif » → « objectif », « C'était » → « était ».
+
+    Une lettre ou deux suivies d'une apostrophe, en français, c'est un
+    article ou un pronom élidé : il n'appartient pas au nom.
+    """
+    marque = re.match(r"^[A-Za-zÀ-ÿ]{1,2}'(.+)$", mot)
+    return marque.group(1) if marque else mot
+
+
+_MOT_MINUSCULE_RE = re.compile(
+    r"\b[a-zàâçéèêëîïôûùüÿœ][\wàâçéèêëîïôûùüÿœ'\-]*\b"
+)
 
 # Match capitalised tokens (incl. é à ç etc.) + multi-token proper
 # nouns ("Sophie Martin"). Restricted to 2-4 token sequences so
 # arbitrary capitalised sentence openers don't sneak in.
+# Une seule espace entre les mots, jamais un saut de ligne : sinon la
+# fin d'un titre et le début du paragraphe suivant forment un faux
+# terme (« Acritec\nCompte-rendu »).
 _ENTITY_RE = re.compile(
-    r"\b([A-ZÉÈÊÀÂÎÔÛÇ][\wÉÈÊÀÂÎÔÛÇéèêàâîôûç'\-]+(?:\s+[A-ZÉÈÊÀÂÎÔÛÇ][\wÉÈÊÀÂÎÔÛÇéèêàâîôûç'\-]+){0,3})\b"
+    r"\b([A-ZÉÈÊÀÂÎÔÛÇ][\wÉÈÊÀÂÎÔÛÇéèêàâîôûç'\-]+(?:[ ][A-ZÉÈÊÀÂÎÔÛÇ][\wÉÈÊÀÂÎÔÛÇéèêàâîôûç'\-]+){0,3})\b"
 )
 
 
@@ -1317,6 +1370,19 @@ def extract_odoo_glossary_candidates(
         if candidate and candidate not in candidates:
             candidates.append(candidate)
 
+    # Les noms structurels (client, projet, tâche) échappent au filtre :
+    # on sait qu'ils comptent, même si le texte les écrit parfois en
+    # minuscules.
+    structurels = {n.strip().lower() for n in explicit_names}
+    minuscules = {m.group(0).lower() for m in _MOT_MINUSCULE_RE.finditer(combined)}
+
+    def courant(mot: str) -> bool:
+        """Ce mot-là est-il un mot de la langue, pas un nom propre ?"""
+        forme = _sans_elision(mot.strip(" ,;:.!?'\"")).lower()
+        if not forme or forme.lower() in structurels:
+            return False
+        return forme in _MOTS_COURANTS or forme in minuscules
+
     seen: set[str] = set()
     unique: list[str] = []
     for raw in candidates:
@@ -1324,6 +1390,18 @@ def extract_odoo_glossary_candidates(
         if not cleaned or len(cleaned) < 2:
             continue
         if cleaned in _GLOSSARY_STOPWORDS:
+            continue
+        # « C'était HeyGen », « Après HeyGen », « Côté Acritec » : la
+        # majuscule de tête appartient à la phrase, pas au nom. On la
+        # retire au lieu de jeter le nom propre avec elle.
+        if cleaned.lower() not in structurels:
+            mots = cleaned.split(" ")
+            while len(mots) > 1 and courant(mots[0]):
+                mots = mots[1:]
+            cleaned = " ".join(mots)
+        if len(cleaned) < 2 or cleaned in _GLOSSARY_STOPWORDS:
+            continue
+        if " " not in cleaned and courant(cleaned):
             continue
         key = cleaned.lower()
         if key in seen:

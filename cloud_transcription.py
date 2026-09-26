@@ -1416,10 +1416,33 @@ class GeminiClient:
         prompt: str,
     ) -> dict:
         """One ``generateContent`` call; returns the raw response."""
+        return self.generate_audio_json(
+            model_id=model_id,
+            file_uri=file_uri,
+            mime_type=mime_type,
+            prompt=prompt,
+            schema=RESPONSE_SCHEMA,
+        )
+
+    def generate_audio_json(
+        self,
+        *,
+        model_id: str,
+        file_uri: str,
+        mime_type: str,
+        prompt: str,
+        schema: dict,
+    ) -> dict:
+        """Audio in, JSON out, against an arbitrary schema.
+
+        Transcription is one use; the identification probe — a short
+        window read only for *who and what* — is another, and it wants
+        its own, much smaller schema.
+        """
         entry = cloud_model_entry(model_id)
         generation_config: dict[str, Any] = {
             "responseMimeType": "application/json",
-            "responseSchema": RESPONSE_SCHEMA,
+            "responseSchema": schema,
             "temperature": 0.2,
         }
         thinking = entry.get("thinking")
@@ -1452,6 +1475,35 @@ class GeminiClient:
                 raise
             generation_config.pop("thinkingConfig", None)
             body, _ = self._json_request("POST", url, payload=payload)
+        return body
+
+    def generate_with_tools(
+        self,
+        *,
+        model_id: str,
+        contents: list[dict],
+        tools: list[dict],
+        system: str = "",
+    ) -> dict:
+        """Un tour de boucle agentique : le modèle répond, ou appelle un
+        outil.
+
+        L'appelant tient la boucle — il exécute l'outil demandé, ajoute
+        la réponse aux ``contents`` et rappelle. C'est lui qui décide
+        quand s'arrêter, parce que c'est lui qui paie.
+        """
+        payload: dict[str, Any] = {
+            "contents": contents,
+            "tools": [{"functionDeclarations": tools}],
+            "generationConfig": {"temperature": 0.1},
+        }
+        if system:
+            payload["systemInstruction"] = {"parts": [{"text": system}]}
+        url = (
+            f"{GEMINI_API_BASE}/v1beta/models/"
+            f"{canonical_cloud_model_id(model_id)}:generateContent"
+        )
+        body, _ = self._json_request("POST", url, payload=payload)
         return body
 
     def generate_text_json(

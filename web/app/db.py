@@ -20,7 +20,7 @@ import sqlite3
 import unicodedata
 import threading
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -96,6 +96,21 @@ CREATE INDEX IF NOT EXISTS idx_usage_created ON api_usage(created_at);
 -- Odoo, un serveur MCP. Seule l'empreinte est stockée — un vol de base
 -- ne doit pas rendre les jetons utilisables, et personne (pas même
 -- l'interface) ne peut réafficher un jeton après sa création.
+-- Enrôlement d'un appareil : l'app macOS obtient un jeton sans qu'on
+-- ait à recopier quoi que ce soit à la main. Le code appareil est
+-- stocké haché, comme un jeton ; le code humain, court et lisible, ne
+-- vaut que le temps de la validation.
+CREATE TABLE IF NOT EXISTS enrolements (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    appareil          TEXT NOT NULL DEFAULT '',
+    code_appareil_sha TEXT NOT NULL UNIQUE,
+    code_humain       TEXT NOT NULL UNIQUE,
+    owner_id          INTEGER REFERENCES users(id),
+    statut            TEXT NOT NULL DEFAULT 'en_attente',
+    created_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at        TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS api_tokens (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     owner_id     INTEGER NOT NULL REFERENCES users(id),
@@ -154,6 +169,46 @@ class Database:
         self._local = threading.local()
         with self.connect() as conn:
             conn.executescript(SCHEMA)
+            self._migrate(conn)
+
+    def _migrate(self, conn) -> None:
+        """Migrations additives, jouées à chaque démarrage.
+
+        La base de production porte déjà l'historique repris : les
+        nouvelles colonnes s'ajoutent, la table ne se recrée pas.
+        """
+        for colonne, ddl in (
+            ("odoo_login", "TEXT"),
+            ("odoo_key_chiffree", "TEXT"),
+        ):
+            self._ensure_column(conn, "users", colonne, ddl)
+
+        for colonne, ddl in (
+            ("odoo_model", "TEXT"),
+            ("odoo_record_id", "INTEGER"),
+            ("odoo_message_id", "INTEGER"),
+            ("odoo_published_at", "TEXT"),
+            # Corbeille et archives : une réunion ne disparaît pas d'un
+            # clic, et une réunion close n'encombre pas la bibliothèque.
+            # Ce dont le modèle n'était pas sûr : l'app macOS l'écrivait
+            # dans un fichier « à vérifier », le serveur le jetait.
+            ("uncertain_json", "TEXT"),
+            # Vidéo compressée, hors du serveur. La session d'envoi vaut
+            # autorisation d'écrire : elle ne quitte jamais la base.
+            # Ce qu'est devenu le dépôt automatique dans Odoo : la
+            # finalisation se fait en tâche de fond, personne n'est là
+            # pour lire la réponse sur le moment.
+            ("odoo_depot_json", "TEXT"),
+            ("meeting_date", "TEXT"),
+            ("video_file_id", "TEXT"),
+            ("video_bytes", "INTEGER"),
+            ("video_session", "TEXT"),
+            ("video_uploaded_at", "TEXT"),
+            ("video_lectures", "INTEGER NOT NULL DEFAULT 0"),
+            ("archived_at", "TEXT"),
+            ("deleted_at", "TEXT"),
+        ):
+            self._ensure_column(conn, "jobs", colonne, ddl)
 
     def _ensure_column(self, conn, table: str, column: str, ddl: str) -> None:
         """Ajout de colonne idempotent — le pendant du helper de sync-hub.
@@ -203,6 +258,35 @@ class Database:
                 "SELECT email FROM users WHERE id = ?", (owner_id,)
             ).fetchone()
             return str(row["email"]) if row else ""
+
+    def set_odoo_credentials(
+        self, owner_id: int, *, login: str, key_chiffree: str
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE users SET odoo_login = ?, odoo_key_chiffree = ? WHERE id = ?",
+                (login.strip(), key_chiffree, owner_id),
+            )
+
+    def odoo_credentials(self, owner_id: int) -> tuple[str, str]:
+        """Identifiant et clé **chiffrée**. Le déchiffrement est ailleurs :
+        la base ne doit jamais rendre un secret en clair."""
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT odoo_login, odoo_key_chiffree FROM users WHERE id = ?",
+                (owner_id,),
+            ).fetchone()
+            if not row:
+                return "", ""
+            return str(row["odoo_login"] or ""), str(row["odoo_key_chiffree"] or "")
+
+    def clear_odoo_credentials(self, owner_id: int) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE users SET odoo_login = NULL, odoo_key_chiffree = NULL "
+                "WHERE id = ?",
+                (owner_id,),
+            )
 
     # -- jobs ----------------------------------------------------------
 
@@ -294,13 +378,184 @@ class Database:
             row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
             return dict(row) if row else None
 
-    def list_jobs(self, owner_id: int, limit: int = 100) -> list[dict[str, Any]]:
+    # États d'une réunion dans la bibliothèque. « actif » est le défaut :
+    # une archive ou une corbeille qu'on voit par accident n'aide
+    # personne.
+    ETATS = {
+        "actif": "deleted_at IS NULL AND archived_at IS NULL",
+        "archive": "deleted_at IS NULL AND archived_at IS NOT NULL",
+        "corbeille": "deleted_at IS NOT NULL",
+        "tout": "1 = 1",
+    }
+
+    def list_jobs(
+        self, owner_id: int, limit: int = 100, etat: str = "actif"
+    ) -> list[dict[str, Any]]:
+        filtre = self.ETATS.get(etat, self.ETATS["actif"])
         with self.connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM jobs WHERE owner_id = ? ORDER BY id DESC LIMIT ?",
+                f"SELECT * FROM jobs WHERE owner_id = ? AND {filtre} "
+                "ORDER BY id DESC LIMIT ?",
                 (owner_id, limit),
             ).fetchall()
             return [dict(r) for r in rows]
+
+    # -- corbeille et archives -------------------------------------------
+
+    def _marquer(self, job_id: int, champ: str, valeur: str | None) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                f"UPDATE jobs SET {champ} = ?, updated_at = ? WHERE id = ?",
+                (valeur, datetime.now().isoformat(timespec="seconds"), job_id),
+            )
+
+    def jeter_job(self, job_id: int) -> None:
+        """À la corbeille : réversible, et purgée après le délai."""
+        self._marquer(job_id, "deleted_at", datetime.now().isoformat(timespec="seconds"))
+
+    def archiver_job(self, job_id: int) -> None:
+        """Hors de la bibliothèque, mais intacte et cherchable."""
+        self._marquer(job_id, "archived_at", datetime.now().isoformat(timespec="seconds"))
+
+    def restaurer_job(self, job_id: int) -> None:
+        """Ressort d'archive comme de corbeille : un seul geste à retenir."""
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET deleted_at = NULL, archived_at = NULL, "
+                "updated_at = ? WHERE id = ?",
+                (datetime.now().isoformat(timespec="seconds"), job_id),
+            )
+
+    def supprimer_job(self, job_id: int) -> None:
+        """Suppression définitive, index de recherche compris.
+
+        `ON DELETE CASCADE` emporte les fenêtres et les segments, mais
+        pas la table FTS, qui est virtuelle et ignore les clés
+        étrangères : l'oublier laisserait la réunion trouvable après sa
+        suppression."""
+        with self.connect() as conn:
+            conn.execute("DELETE FROM segments_fts WHERE job_id = ?", (job_id,))
+            conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+
+    def ouvrir_envoi_video(self, job_id: int, session: str, taille: int) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET video_session = ?, video_bytes = ?, "
+                "video_file_id = NULL, video_uploaded_at = NULL WHERE id = ?",
+                (session, int(taille), job_id),
+            )
+
+    def terminer_envoi_video(self, job_id: int, fichier_id: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET video_file_id = ?, video_session = NULL, "
+                "video_uploaded_at = ? WHERE id = ?",
+                (fichier_id, datetime.now().isoformat(timespec="seconds"), job_id),
+            )
+
+    def compter_lecture_video(self, job_id: int) -> None:
+        """Chaque lecture est comptée : en stockage froid, c'est elle qui
+        coûte. Le chiffre servira le jour où GCS la facturera vraiment."""
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET video_lectures = video_lectures + 1 WHERE id = ?",
+                (job_id,),
+            )
+
+    def corbeille_perimee(self, jours: int) -> list[int]:
+        """Les réunions jetées depuis plus de ``jours`` jours."""
+        if jours <= 0:
+            return []
+        limite = (datetime.now() - timedelta(days=jours)).isoformat(timespec="seconds")
+        with self.connect() as conn:
+            return [
+                int(r["id"])
+                for r in conn.execute(
+                    "SELECT id FROM jobs WHERE deleted_at IS NOT NULL AND deleted_at < ?",
+                    (limite,),
+                )
+            ]
+
+    def purger_corbeille(self, jours: int) -> list[int]:
+        """Vide ce qui a dépassé le délai de rétention. Rend les
+        identifiants supprimés, pour que ça se journalise."""
+        perimes = self.corbeille_perimee(jours)
+        for job_id in perimes:
+            self.supprimer_job(job_id)
+        return perimes
+
+    def renommer_interlocuteurs(self, job_id: int, carte: dict[str, str]) -> dict[str, str]:
+        """Applique les noms choisis aux répliques, pas seulement à la carte.
+
+        Enregistrer « Intervenant 2 → Steeve Ouinet » ne changeait que la
+        table de correspondance : les répliques gardaient leur étiquette,
+        et rien ne semblait s'être passé. Les segments, l'index de
+        recherche et le texte sont réécrits ; la carte redevient
+        l'identité des noms actuels, pour qu'un second renommage parte de
+        ce qu'on voit.
+
+        Le texte est corrigé en place plutôt que régénéré : celui des
+        réunions reprises du Mac ne vient pas des segments.
+        """
+        renommages = {
+            ancien: nouveau.strip()
+            for ancien, nouveau in (carte or {}).items()
+            if nouveau and nouveau.strip() and nouveau.strip() != ancien
+        }
+        job = self.get_job(job_id) or {}
+        if renommages:
+            segments = [
+                {"start": s["start_second"], "end": s["end_second"],
+                 "speaker": renommages.get(s["speaker"] or "", s["speaker"] or ""),
+                 "text": s["text"]}
+                for s in self.segments_for_job(job_id)
+            ]
+            self.replace_segments(job_id, segments)
+            texte = job.get("transcript") or ""
+            for ancien, nouveau in renommages.items():
+                # En tête de ligne, après un éventuel horodatage entre
+                # crochets : « Intervenant 2 : » comme « [00:12] Intervenant 2: ».
+                motif = re.compile(
+                    r"(^|\n)((?:\[[^\]\n]*\]\s*)?)" + re.escape(ancien) + r"(\s*:)"
+                )
+                texte = motif.sub(lambda m: f"{m.group(1)}{m.group(2)}{nouveau}{m.group(3)}", texte)
+            with self.connect() as conn:
+                conn.execute("UPDATE jobs SET transcript = ? WHERE id = ?", (texte, job_id))
+        noms = [
+            (nouveau.strip() or ancien)
+            for ancien, nouveau in (carte or {}).items()
+        ]
+        nouvelle_carte = {nom: nom for nom in dict.fromkeys(noms)}
+        self.update_job_context(job_id, speakers=nouvelle_carte)
+        return nouvelle_carte
+
+    def set_meeting_date(self, job_id: int, date_iso: str | None) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET meeting_date = ?, updated_at = ? WHERE id = ?",
+                (date_iso, datetime.now().isoformat(timespec="seconds"), job_id),
+            )
+
+    def noter_depot_odoo(self, job_id: int, issue: dict[str, Any]) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET odoo_depot_json = ? WHERE id = ?",
+                (json.dumps(issue or {}, ensure_ascii=False), job_id),
+            )
+
+    def reserver_finalisation(self, job_id: int) -> bool:
+        """Réserve la fusion finale, atomiquement.
+
+        Vrai pour le premier qui demande, faux pour les suivants : deux
+        fenêtres qui terminent ensemble ne doivent pas fusionner deux
+        fois (et déposer deux notes dans Odoo)."""
+        with self.connect() as conn:
+            curseur = conn.execute(
+                "UPDATE jobs SET status = 'finalisation', updated_at = ? "
+                "WHERE id = ? AND status NOT IN ('finalisation', 'termine')",
+                (datetime.now().isoformat(timespec="seconds"), job_id),
+            )
+            return curseur.rowcount == 1
 
     def set_job_status(
         self, job_id: int, status: str, *, error: str | None = None
@@ -320,18 +575,21 @@ class Database:
         transcript: str,
         speakers: dict[str, str],
         technical_terms: list[str],
+        uncertain: list[dict[str, Any]] | None = None,
         cost_usd: float,
     ) -> None:
         with self.connect() as conn:
             conn.execute(
                 "UPDATE jobs SET status = 'termine', title = ?, transcript = ?, "
-                "speaker_map_json = ?, technical_terms_json = ?, cloud_cost_usd = ?, "
+                "speaker_map_json = ?, technical_terms_json = ?, "
+                "uncertain_json = ?, cloud_cost_usd = ?, "
                 "error_message = NULL, updated_at = ? WHERE id = ?",
                 (
                     title,
                     transcript,
                     json.dumps(speakers, ensure_ascii=False),
                     json.dumps(technical_terms, ensure_ascii=False),
+                    json.dumps(uncertain or [], ensure_ascii=False),
                     float(cost_usd),
                     datetime.now().isoformat(timespec="seconds"),
                     job_id,
@@ -447,6 +705,26 @@ class Database:
                 ),
             )
 
+    def update_job_context_json(self, job_id: int, contexte: dict[str, Any]) -> None:
+        """Le contexte retenu pour cette réunion, après coup.
+
+        Recoller un autre dossier Odoo change le contexte : le garder
+        permet de relancer un enrichissement sans redemander Odoo."""
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET context_json = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(contexte, ensure_ascii=False),
+                 datetime.now().isoformat(timespec="seconds"), job_id),
+            )
+
+    def set_uncertain(self, job_id: int, passages: list[dict[str, Any]]) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET uncertain_json = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(passages or [], ensure_ascii=False),
+                 datetime.now().isoformat(timespec="seconds"), job_id),
+            )
+
     def update_job_context(
         self,
         job_id: int,
@@ -502,11 +780,33 @@ class Database:
                 "SELECT f.job_id, f.start_second, f.speaker, f.text, "
                 "       j.title, j.filename "
                 "FROM segments_fts f JOIN jobs j ON j.id = f.job_id "
+                # Une réunion à la corbeille ne doit plus ressortir ;
+                # une archive, si — c'est tout l'intérêt d'archiver
+                # plutôt que de jeter.
                 "WHERE segments_fts MATCH ? AND j.owner_id = ? "
+                "  AND j.deleted_at IS NULL "
                 "ORDER BY rank LIMIT ?",
                 (match, owner_id, limit),
             ).fetchall()
             return [dict(r) for r in rows]
+
+    def set_odoo_link(
+        self, job_id: int, *, model: str, record_id: int, message_id: int | None
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET odoo_model = ?, odoo_record_id = ?, "
+                "odoo_message_id = ?, odoo_published_at = ?, updated_at = ? "
+                "WHERE id = ?",
+                (
+                    model,
+                    record_id,
+                    message_id,
+                    datetime.now().isoformat(timespec="seconds") if message_id else None,
+                    datetime.now().isoformat(timespec="seconds"),
+                    job_id,
+                ),
+            )
 
     # -- jetons d'API ---------------------------------------------------
 
@@ -524,6 +824,107 @@ class Database:
                 (owner_id, (name or "").strip() or "sans nom", _digest(secret)),
             )
             return int(cursor.lastrowid), secret
+
+    # -- enrôlement d'appareil --------------------------------------------
+
+    # Alphabet sans O/0/I/1 : le code se lit à voix haute et se recopie
+    # depuis une fenêtre d'application.
+    ALPHABET_CODE = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+    def ouvrir_enrolement(
+        self, appareil: str, *, minutes: int = 15
+    ) -> tuple[str, str, str]:
+        """Ouvre une demande et rend (code appareil, code humain, échéance).
+
+        Le code appareil est un secret que seule l'app connaît ; le code
+        humain s'affiche pour être reconnu dans le navigateur. Les deux
+        expirent vite : une demande oubliée ne doit pas rester ouverte.
+        """
+        code_appareil = "ekd_" + secrets.token_urlsafe(32)
+        with self.connect() as conn:
+            for _ in range(10):
+                code_humain = "-".join(
+                    "".join(secrets.choice(self.ALPHABET_CODE) for _ in range(4))
+                    for _ in range(2)
+                )
+                if not conn.execute(
+                    "SELECT 1 FROM enrolements WHERE code_humain = ?", (code_humain,)
+                ).fetchone():
+                    break
+            else:  # pragma: no cover - 32^8 collisions d'affilée
+                raise RuntimeError("Impossible de tirer un code d'enrôlement libre.")
+            echeance = (datetime.now() + timedelta(minutes=minutes)).isoformat(
+                timespec="seconds"
+            )
+            conn.execute(
+                "INSERT INTO enrolements (appareil, code_appareil_sha, code_humain, "
+                "expires_at) VALUES (?, ?, ?, ?)",
+                ((appareil or "").strip()[:120] or "appareil inconnu",
+                 _digest(code_appareil), code_humain, echeance),
+            )
+        return code_appareil, code_humain, echeance
+
+    def enrolement_par_code_humain(self, code: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            ligne = conn.execute(
+                "SELECT * FROM enrolements WHERE code_humain = ?",
+                ((code or "").strip().upper(),),
+            ).fetchone()
+        return dict(ligne) if ligne else None
+
+    def approuver_enrolement(self, code: str, owner_id: int) -> bool:
+        """Valide une demande. Faux si elle est inconnue, expirée ou déjà
+        traitée — dans les trois cas, l'appareil doit recommencer."""
+        demande = self.enrolement_par_code_humain(code)
+        if not demande or demande["statut"] != "en_attente":
+            return False
+        if demande["expires_at"] < datetime.now().isoformat(timespec="seconds"):
+            return False
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE enrolements SET statut = 'approuve', owner_id = ? WHERE id = ?",
+                (owner_id, demande["id"]),
+            )
+        return True
+
+    def reclamer_enrolement(self, code_appareil: str) -> dict[str, Any]:
+        """L'appareil vient chercher son jeton.
+
+        Rend ``{"statut": ...}`` et, une seule fois, le jeton. La demande
+        est close dans la foulée : un code appareil rejoué ne redonne
+        jamais un second jeton.
+        """
+        with self.connect() as conn:
+            ligne = conn.execute(
+                "SELECT * FROM enrolements WHERE code_appareil_sha = ?",
+                (_digest(code_appareil),),
+            ).fetchone()
+        if ligne is None:
+            return {"statut": "inconnu"}
+        demande = dict(ligne)
+        if demande["statut"] != "approuve":
+            if demande["expires_at"] < datetime.now().isoformat(timespec="seconds"):
+                return {"statut": "expire"}
+            return {"statut": demande["statut"]}
+        token_id, secret = self.create_api_token(
+            int(demande["owner_id"]), f"appareil — {demande['appareil']}"
+        )
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE enrolements SET statut = 'consomme' WHERE id = ?",
+                (demande["id"],),
+            )
+        return {"statut": "approuve", "token": secret, "token_id": token_id,
+                "email": self.email_for_user(int(demande["owner_id"]))}
+
+    def purger_enrolements(self) -> int:
+        """Les demandes mortes ne servent plus qu'à encombrer."""
+        with self.connect() as conn:
+            curseur = conn.execute(
+                "DELETE FROM enrolements WHERE statut = 'consomme' OR expires_at < ?",
+                (datetime.now().isoformat(timespec="seconds"),),
+            )
+            return curseur.rowcount or 0
 
     def owner_for_api_token(self, secret: str) -> int | None:
         """Propriétaire d'un jeton valide, ou None.

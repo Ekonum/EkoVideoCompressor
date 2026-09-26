@@ -47,6 +47,35 @@ self.onmessage = async (event) => {
     return;
   }
 
+  // Fenêtre isolée, rendue au fil principal plutôt qu'envoyée : la
+  // sonde d'identification tourne avant qu'un traitement existe, donc
+  // avant qu'il y ait une URL où pousser quoi que ce soit.
+  if (event.data.kind === 'window') {
+    try {
+      const { file, start, end, audio } = event.data;
+      const { format, type } = outputFormat(audio);
+      const target = new BufferTarget();
+      const conversion = await Conversion.init({
+        input: new Input({ formats: ALL_FORMATS, source: new BlobSource(file) }),
+        output: new Output({ format, target }),
+        trim: { start, end },
+        video: { discard: true },
+        audio: {
+          codec: audio.codec,
+          numberOfChannels: audio.channels,
+          sampleRate: audio.sample_rate,
+          quality: new Quality({ bitrate: audio.bitrate }),
+        },
+      });
+      await conversion.execute();
+      self.postMessage({ kind: 'window-done', bytes: target.buffer, type },
+                       [target.buffer]);
+    } catch (error) {
+      say({ kind: 'window-error', message: error?.message || String(error) });
+    }
+    return;
+  }
+
   if (event.data.kind === 'compress') {
     await compresser(event.data);
     return;

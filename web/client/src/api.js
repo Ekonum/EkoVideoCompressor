@@ -21,7 +21,12 @@ async function call(method, url, body) {
 }
 
 export const api = {
-  listJobs: () => call('GET', '/api/jobs'),
+  listJobs: (etat = 'actif') => call('GET', `/api/jobs?etat=${etat}`),
+  jeter: (id) => call('DELETE', `/api/jobs/${id}`),
+  archiver: (id) => call('POST', `/api/jobs/${id}/archive`, {}),
+  restaurer: (id) => call('POST', `/api/jobs/${id}/restore`, {}),
+  supprimerDefinitivement: (id) => call('DELETE', `/api/jobs/${id}/definitif`),
+  viderCorbeille: () => call('DELETE', '/api/corbeille'),
   createJob: (payload) => call('POST', '/api/jobs', payload),
   job: (id) => call('GET', `/api/jobs/${id}`),
   detail: (id) => call('GET', `/api/jobs/${id}/detail`),
@@ -34,7 +39,23 @@ export const api = {
   vocabulary: (selected) =>
     call('GET', `/api/vocabulary?selected=${encodeURIComponent(selected.join(','))}`),
   settings: () => call('GET', '/api/settings'),
+  enrolement: (code) => call('GET', `/api/enroll/${encodeURIComponent(code)}`),
+  approuverEnrolement: (code) =>
+    call('POST', `/api/enroll/${encodeURIComponent(code)}/approve`, {}),
+  probe: async (octets, type, moment = '') => {
+    const response = await fetch(`/api/probe?moment=${encodeURIComponent(moment)}`, {
+      method: 'POST', headers: { 'Content-Type': type }, body: octets,
+    });
+    if (!response.ok) throw new Error(await detail(response));
+    return response.json();
+  },
   me: () => call('GET', '/api/me'),
+  reenrichir: (id, dossier = {}) => call('POST', `/api/jobs/${id}/enrich`, dossier),
+  odooStatus: () => call('GET', '/api/me/odoo'),
+  odooSave: (login, apiKey) => call('PUT', '/api/me/odoo', { login, api_key: apiKey }),
+  odooForget: () => call('DELETE', '/api/me/odoo'),
+  odooRecords: (q) => call('GET', `/api/odoo/records?q=${encodeURIComponent(q)}`),
+  odooPublish: (id, payload) => call('POST', `/api/jobs/${id}/odoo/publish`, payload),
   odooMeetings: () => call('GET', '/api/odoo/meetings'),
   odooContext: (model, id) =>
     call('GET', `/api/odoo/context?model=${encodeURIComponent(model)}&record_id=${id}`),

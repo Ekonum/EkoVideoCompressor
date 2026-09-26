@@ -2,19 +2,23 @@
 
 `odoo_client.py` est repris tel quel — il est en stdlib pur et connaît
 déjà le JSON-2, la recherche de réunions, le pack de contexte et
-l'extraction de noms propres. Ce module ne fait que deux choses que le
-moteur macOS n'avait pas à faire : lire les identifiants dans le broker
-plutôt que dans les réglages d'une app, et ne jamais laisser une panne
-Odoo faire échouer une transcription.
+l'extraction de noms propres. Deux partis pris s'y ajoutent.
 
-Ce dernier point est le vrai parti pris : Odoo enrichit, il ne
-conditionne pas. Une réunion doit se transcrire même si le serveur Odoo
-est en maintenance.
+**Tout passe par la clé personnelle.** Pas de clé de service partagée,
+même en lecture : une recherche faite avec un compte commun ignorerait
+les règles d'accès de la personne et lui montrerait des dossiers qui ne
+sont pas les siens. Un seul chemin d'identité, donc, pour lire comme
+pour écrire.
+
+**Odoo enrichit, il ne conditionne pas.** Une réunion doit se
+transcrire même si le serveur Odoo est en maintenance, ou si la personne
+n'a pas encore posé sa clé.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -22,7 +26,6 @@ from odoo_client import (
     OdooConfig,
     OdooError,
     extract_company_name_from_pack,
-    extract_odoo_glossary_candidates,
     fetch_related_context_pack,
     search_meeting_events,
 )
@@ -34,30 +37,44 @@ class OdooUnavailable(RuntimeError):
     """Odoo est injoignable ou mal configuré — message pour l'utilisateur."""
 
 
-class OdooGateway:
-    """Charge les identifiants une fois, puis sert les appels."""
+def _lisible(exc: OdooError, base: str) -> str:
+    """Ramène une erreur Odoo à une phrase qu'on peut afficher.
 
-    def __init__(self, secrets, *, url: str, database: str, login: str) -> None:
-        self._secrets = secrets
+    Sur une base inconnue, Odoo répond par une page HTML entière que
+    `odoo_client` recopie telle quelle : c'est un diagnostic de
+    développeur, pas un message d'interface.
+    """
+    brut = str(exc)
+    if "No database is selected" in brut:
+        return f"La base Odoo « {base} » est introuvable sur ce serveur."
+    texte = " ".join(re.sub(r"<[^>]+>", " ", brut).split())
+    return texte if len(texte) <= 240 else texte[:239] + "…"
+
+
+class OdooGateway:
+    """Accès Odoo **d'une personne**, avec sa propre clé."""
+
+    def __init__(self, *, url: str, database: str, login: str, api_key: str) -> None:
         self._url = url
         self._database = database
         self._login = login
+        self._api_key = api_key
 
     @property
     def configured(self) -> bool:
-        return bool(self._url and self._database and self._login)
+        return bool(self._url and self._database and self._login and self._api_key)
 
     def _config(self) -> OdooConfig:
         if not self.configured:
             raise OdooUnavailable(
-                "Odoo n'est pas configuré (URL, base et identifiant). "
-                "Les suggestions de réunion sont désactivées."
+                "Aucune clé API Odoo personnelle. Ajoute-la dans ton compte "
+                "pour voir tes réunions et tes dossiers."
             )
         return OdooConfig(
             url=self._url,
             database=self._database,
             login=self._login,
-            api_key=self._secrets.get(),
+            api_key=self._api_key,
         )
 
     def meetings(self, *, near: datetime | None = None, window_hours: float = 2.0) -> list[dict]:
@@ -65,12 +82,27 @@ class OdooGateway:
 
         Sert à proposer « c'est sans doute cette réunion-là » au moment
         où l'utilisateur dépose un enregistrement.
+
+        `min_attendees=1` : le filtre d'origine exigeait deux
+        participants pour écarter les créneaux personnels, mais une
+        réunion client dont l'invité n'est pas dans Odoo n'en compte
+        qu'un — et c'est exactement celle qu'on cherche. Le tri revient
+        à l'enquêteur, qui voit les noms.
         """
         moment = near or datetime.now(timezone.utc)
         try:
-            events = search_meeting_events(self._config(), near=moment, window_hours=window_hours)
+            events = search_meeting_events(
+                self._config(), near=moment, window_hours=window_hours,
+                min_attendees=1,
+            )
         except OdooError as exc:
-            raise OdooUnavailable(str(exc)) from exc
+            raise OdooUnavailable(_lisible(exc, self._database)) from exc
+        # Seulement les réunions où la personne est invitée. La clé API
+        # voit tout l'agenda de la société, collègues compris : proposer
+        # « c'est sans doute cette réunion-là » pour un rendez-vous
+        # auquel on n'était pas, c'est du bruit — et pour l'enquêteur,
+        # une fausse piste.
+        moi = self.identite()["partner_id"]
         return [
             {
                 "id": event.get("id"),
@@ -82,7 +114,170 @@ class OdooGateway:
                 "resource_id": event.get("res_id") or 0,
             }
             for event in events
+            if moi in (event.get("partner_ids") or [])
         ]
+
+    # Ce qu'on sait lire, et sous quel nom. L'ordre compte : c'est
+    # l'ordre dans lequel une recherche sans modèle explicite regarde.
+    MODELES = {
+        "crm.lead": ("opportunité", "name"),
+        "sale.order": ("devis / commande", "name"),
+        "project.project": ("projet", "name"),
+        "project.task": ("tâche", "name"),
+    }
+
+    def search_records(
+        self, terme: str, limit: int = 8, modeles: list[str] | None = None
+    ) -> list[dict[str, Any]]:
+        """Cherche un dossier où déposer la transcription.
+
+        Par défaut sur les quatre modèles où une réunion atterrit : une
+        opportunité le plus souvent, mais un chantier en cours vit dans
+        un projet ou une tâche, et un devis signé dans une commande.
+        """
+        requete = (terme or "").strip()
+        if len(requete) < 2:
+            return []
+        cibles = [m for m in (modeles or list(self.MODELES)) if m in self.MODELES]
+        trouves: list[dict[str, Any]] = []
+        for modele in cibles:
+            trouves.extend(self._chercher_un(modele, requete, limit))
+        # Le plus récemment touché d'abord, tous modèles confondus :
+        # une réunion parle presque toujours d'un dossier vivant.
+        trouves.sort(key=lambda l: l["updated"], reverse=True)
+        return trouves[:limit]
+
+    def _chercher_un(self, modele: str, requete: str, limit: int) -> list[dict[str, Any]]:
+        from odoo_client import _json2_call  # client JSON-2 déjà éprouvé
+
+        libelle, champ = self.MODELES[modele]
+        champs = [champ, "write_date"]
+        if modele != "project.project":
+            champs.append("partner_id")
+        try:
+            lignes = _json2_call(
+                self._config(),
+                modele,
+                "search_read",
+                {
+                    "domain": ["|", [champ, "ilike", requete],
+                               ["partner_id.name", "ilike", requete]],
+                    "fields": champs,
+                    "limit": limit,
+                    "order": "write_date desc",
+                },
+            )
+        except OdooError as exc:
+            # Un modèle refusé (droits, module absent) ne doit pas
+            # emporter la recherche entière : les autres répondent.
+            log.info("recherche %s indisponible : %s", modele, exc)
+            return []
+
+        return [
+            {
+                "model": modele,
+                "kind": libelle,
+                "id": l.get("id"),
+                "name": l.get(champ) or "",
+                "partner": (l.get("partner_id") or [None, ""])[1]
+                if isinstance(l.get("partner_id"), list) else "",
+                "updated": (l.get("write_date") or "")[:10],
+            }
+            for l in (lignes or [])
+        ]
+
+    def resume_dossier(self, modele: str, record_id: int) -> dict[str, Any]:
+        """De quoi vérifier qu'un dossier est bien celui dont on parle.
+
+        Court exprès : la sonde doit pouvoir en lire plusieurs sans que
+        le coût de la vérification dépasse celui de l'erreur qu'elle
+        évite. Le pack complet viendra après, pour le seul dossier
+        retenu.
+        """
+        if modele not in self.MODELES:
+            raise OdooUnavailable(f"Modèle inconnu : {modele}.")
+        from odoo_client import _json2_call
+
+        _, champ = self.MODELES[modele]
+        champs = [champ, "write_date"]
+        if modele != "project.project":
+            champs.append("partner_id")
+        try:
+            lignes = _json2_call(
+                self._config(), modele, "read",
+                {"ids": [int(record_id)], "fields": champs},
+            )
+            messages = _json2_call(
+                self._config(), "mail.message", "search_read",
+                {
+                    "domain": [["model", "=", modele], ["res_id", "=", int(record_id)]],
+                    "fields": ["date", "author_id", "body"],
+                    "limit": 3,
+                    "order": "date desc",
+                },
+            )
+        except OdooError as exc:
+            raise OdooUnavailable(_lisible(exc, self._database)) from exc
+        if not lignes:
+            raise OdooUnavailable(f"Dossier {modele} {record_id} introuvable.")
+
+        from odoo_client import _html_to_text
+
+        ligne = lignes[0]
+        return {
+            "model": modele,
+            "id": ligne.get("id"),
+            "name": ligne.get(champ) or "",
+            "partner": (ligne.get("partner_id") or [None, ""])[1]
+            if isinstance(ligne.get("partner_id"), list) else "",
+            "updated": (ligne.get("write_date") or "")[:10],
+            "chatter": [
+                {
+                    "date": (m.get("date") or "")[:10],
+                    "author": (m.get("author_id") or [None, ""])[1]
+                    if isinstance(m.get("author_id"), list) else "",
+                    "extrait": _html_to_text(m.get("body") or "")[:300],
+                }
+                for m in (messages or [])
+            ],
+        }
+
+    def identite(self) -> dict[str, int]:
+        """Qui est cette personne dans Odoo — utilisateur et partenaire.
+
+        Le ping et l'activité s'adressent à quelqu'un : sans cette
+        correspondance, on ne saurait pas à qui.
+        """
+        from odoo_client import _json2_call
+
+        try:
+            lignes = _json2_call(
+                self._config(), "res.users", "search_read",
+                {"domain": [["login", "=", self._login]],
+                 "fields": ["partner_id"], "limit": 1},
+            )
+        except OdooError as exc:
+            raise OdooUnavailable(_lisible(exc, self._database)) from exc
+        if not lignes:
+            raise OdooUnavailable(
+                f"Aucun utilisateur Odoo pour {self._login} sur cette base."
+            )
+        partenaire = lignes[0].get("partner_id") or [0, ""]
+        return {
+            "user_id": int(lignes[0].get("id") or 0),
+            "partner_id": int(partenaire[0] if isinstance(partenaire, list) else 0),
+        }
+
+    def chatter(self):
+        """Client d'écriture dans le chatter, sous la même identité."""
+        from .chatter import OdooChatter
+
+        if not self.configured:
+            raise OdooUnavailable(
+                "Aucune clé API Odoo personnelle. La note doit porter ton "
+                "identité : ajoute ta clé dans ton compte."
+            )
+        return OdooChatter(self._url, self._api_key)
 
     def context_pack(self, model: str, record_id: int) -> dict[str, Any]:
         """Pack de contexte prêt pour le prompt, et ce qu'on en tire.
@@ -93,9 +288,12 @@ class OdooGateway:
         try:
             pack = fetch_related_context_pack(self._config(), model, record_id)
         except OdooError as exc:
-            raise OdooUnavailable(str(exc)) from exc
+            raise OdooUnavailable(_lisible(exc, self._database)) from exc
         return {
             "summary": pack.get("summary") or "",
-            "terms": extract_odoo_glossary_candidates(pack) or list(pack.get("terms") or []),
+            # `fetch_related_context_pack` a déjà extrait les termes du
+            # dossier et de ses liés : les recalculer ici ne ferait que
+            # risquer une divergence.
+            "terms": list(pack.get("terms") or []),
             "client_company": extract_company_name_from_pack(pack) or "",
         }

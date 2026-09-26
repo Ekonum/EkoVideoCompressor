@@ -38,10 +38,24 @@ services:
       # Plafond mensuel d'équipe — la clé étant partagée, le budget l'est.
       EKOVIDEO_MONTHLY_BUDGET_USD: "50"
 
-      # Odoo : facultatif. Absent, l'enrichissement se tait simplement.
-      EKOVIDEO_ODOO_URL: "${EKOVIDEO_ODOO_URL:-}"
-      EKOVIDEO_ODOO_DB: "${EKOVIDEO_ODOO_DB:-}"
-      EKOVIDEO_ODOO_LOGIN: "${EKOVIDEO_ODOO_LOGIN:-}"
+      # Odoo. **Tout passe par la clé personnelle de chacun**, lecture
+      # comprise : une recherche faite sous un compte commun ignorerait
+      # les règles d'accès de la personne et lui montrerait des dossiers
+      # qui ne sont pas les siens. Aucune clé de service ici — seulement
+      # l'adresse du serveur et la base.
+      EKOVIDEO_ODOO_URL: "https://www.ekonum.fr"
+      EKOVIDEO_ODOO_DB: "${EKOVIDEO_ODOO_DB:-ekonum}"
+
+      # Chiffre les clés API Odoo personnelles au repos. Absente, le
+      # serveur refuse d'en enregistrer une : stocker en clair « en
+      # attendant » est le genre de provisoire qui reste.
+      EKOVIDEO_SECRET_KEY: "${EKOVIDEO_SECRET_KEY:?clé de chiffrement requise}"
+
+      # Enrôlement des Mac : l'app locale propose de transférer sa
+      # bibliothèque. Suppose que Cloudflare Access laisse passer les
+      # trois chemins machine (voir web/docs/ENROLEMENT.md) — nos jetons
+      # y font office de serrure.
+      EKOVIDEO_ENROLEMENT: "1"
 
       EKOVIDEO_WEB_STATE: "/data"
 
