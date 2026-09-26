@@ -220,6 +220,11 @@ def import_payloads(db_path: Path) -> Iterator[dict]:
                 "technical_terms": json.loads(job["technical_terms_json"] or "[]"),
                 "cost_usd": float(job["cloud_cost_usd"] or 0),
                 "segments": segments,
+                # When the meeting took place, not when it was processed:
+                # without it, a transferred library sorts by transfer day.
+                "meeting_date": (
+                    job["meeting_date"] if "meeting_date" in job.keys() else ""
+                ) or "",
             }
     finally:
         source.close()
