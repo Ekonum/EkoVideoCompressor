@@ -68,7 +68,7 @@ def _library(root: Path, jobs: list[dict]) -> Path:
             custom_title TEXT, cloud_model TEXT, transcription_model TEXT,
             speaker_map_json TEXT, technical_terms_json TEXT,
             cloud_cost_usd REAL, transcript_path TEXT,
-            enhanced_transcript_path TEXT, review_path TEXT
+            enhanced_transcript_path TEXT, review_path TEXT, meeting_date TEXT
         );
         CREATE TABLE transcription_segments (
             id INTEGER PRIMARY KEY, job_id INTEGER, start_time REAL,
@@ -80,11 +80,11 @@ def _library(root: Path, jobs: list[dict]) -> Path:
         conn.execute(
             "INSERT INTO jobs (id, source_path, created_at, custom_title, "
             "cloud_model, speaker_map_json, technical_terms_json, cloud_cost_usd, "
-            "transcript_path, review_path) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "transcript_path, review_path, meeting_date) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (job["id"], job.get("source", f"/tmp/reunion{job['id']}.mov"),
              job.get("created_at", "2026-09-04 11:54:50"), job.get("title", ""),
              "gemini-3.8-flash", "{}", "[]", 0.36,
-             job.get("transcript_path"), job.get("review_path")),
+             job.get("transcript_path"), job.get("review_path"), job.get("meeting_date")),
         )
         for i, text in enumerate(job.get("segments", [])):
             conn.execute(
@@ -148,7 +148,8 @@ class PushTest(unittest.TestCase):
         review.write_text("2 passages douteux", encoding="utf-8")
         self.db = _library(self.root, [
             {"id": 1, "title": "Acritec - Revue", "transcript_path": str(transcript),
-             "review_path": str(review), "segments": ["on migre", "vers Odoo"]},
+             "review_path": str(review), "segments": ["on migre", "vers Odoo"],
+             "meeting_date": "2026-09-04T07:00:00Z"},
             {"id": 2, "title": "Compression seule"},  # nothing to hand over
             {"id": 3, "title": "PassPassion", "segments": ["démo VoIP"]},
         ])
@@ -166,6 +167,12 @@ class PushTest(unittest.TestCase):
         acritec = next(import_payloads(self.db))
         self.assertIn("Odoo 19", acritec["transcript"])
         self.assertNotIn("douteux", acritec["transcript"])
+
+    def test_the_meeting_date_travels_with_the_transfer(self):
+        """Otherwise a transferred library sorts by the day of transfer."""
+        payloads = list(import_payloads(self.db))
+        self.assertEqual(payloads[0]["meeting_date"], "2026-09-04T07:00:00Z")
+        self.assertEqual(payloads[1]["meeting_date"], "")
 
     def test_the_library_is_opened_read_only(self):
         before = self.db.read_bytes()
