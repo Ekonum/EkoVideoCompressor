@@ -40,18 +40,22 @@ eux d'arbitrer.
 
 ## Mettre en service le stockage Drive — prévu le week-end du 26-27 septembre
 
-Le code est prêt et dort (`EKOVIDEO_VIDEO_ITEM` / `EKOVIDEO_VIDEO_DOSSIER`
-vides). Reste à créer, côté Google :
+Le code est prêt et dort (`EKOVIDEO_GCP_FOURNISSEUR` / `EKOVIDEO_GCP_COMPTE` /
+`EKOVIDEO_VIDEO_DOSSIER` vides). **Aucune clé JSON** : le serveur signe
+lui-même un jeton avec une clé née dans son volume (`app/identite.py`), que
+la fédération d'identité de Google échange contre le compte de service.
+Tout le côté Google tient dans `bin/provisionner_gcp.sh`, dans le projet
+GCP propre à transcript :
 
-1. le compte de service « transcript-stockage » et sa clé JSON (API Drive
-   activée ; lever `iam.disableServiceAccountKeyCreation` si elle bloque) ;
-2. le Drive partagé « transcript — stockage », le compte de service en
-   Gestionnaire, **puis retirer les humains** — c'est ce qui le rend invisible ;
-3. l'élément de coffre « Ekonum - Google transcript (compte de service) »,
-   champ « Clé JSON », lisible par l'application serveur « transcript ».
+1. `gcloud auth login --enable-gdrive-access` — le seul geste humain ;
+2. récupérer le JWKS du serveur (`python -m web.app.identite` dans le
+   conteneur), puis lancer le script : API, compte de service sans clé,
+   pool et fournisseur, droit d'emprunt, Drive partagé ;
+3. poser les trois variables qu'il affiche dans le stack, faire un premier
+   vrai envoi, puis relancer avec `--retirer-humains`.
 
-Puis : poser les deux variables dans le stack, et faire un premier vrai envoi
-— le client Drive n'a été éprouvé que contre un Drive simulé.
+**Rotation** : supprimer `/data/identite-google.pem`, relancer
+`python -m web.app.identite` et le script — il remet le JWKS à jour.
 
 ## Migrer les vidéos existantes du Drive vers ce stockage
 

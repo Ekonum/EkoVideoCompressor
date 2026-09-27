@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -33,7 +32,6 @@ log = logging.getLogger("ekovideo.web")
 
 UA = "transcript-stockage/1.0"
 PORTEE = "https://www.googleapis.com/auth/drive"
-JETON_URL = "https://oauth2.googleapis.com/token"
 ENVOI_URL = "https://www.googleapis.com/upload/drive/v3/files"
 FICHIERS_URL = "https://www.googleapis.com/drive/v3/files"
 
@@ -61,51 +59,19 @@ class DriveStockage:
 
     def __init__(
         self,
-        cle_compte_service: dict[str, Any],
+        jeton: Callable[[], str],
         dossier_id: str,
         *,
         opener: Callable[..., Any] | None = None,
-        horloge: Callable[[], float] = time.time,
     ) -> None:
-        if not cle_compte_service.get("private_key") or not dossier_id:
+        """``jeton`` rend un jeton d'accès Drive valide : c'est
+        ``identite.IdentiteGoogle``, qui le renouvelle seul. Le stockage
+        n'a pas à savoir comment le serveur prouve qui il est."""
+        if jeton is None or not dossier_id:
             raise StockageIndisponible("Stockage vidéo non configuré.")
-        self._cle = cle_compte_service
+        self._jeton_acces = jeton
         self._dossier = dossier_id
         self._ouvrir = opener or (lambda req, timeout=120: urllib.request.urlopen(req, timeout=timeout))
-        self._horloge = horloge
-        self._jeton = ""
-        self._expire = 0.0
-
-    # -- authentification -------------------------------------------------
-
-    def _jeton_acces(self) -> str:
-        """Jeton OAuth du compte de service, renouvelé une minute avant son
-        expiration plutôt qu'à chaque appel."""
-        if self._jeton and self._horloge() < self._expire - 60:
-            return self._jeton
-        import jwt  # PyJWT, déjà présent pour Access
-
-        maintenant = int(self._horloge())
-        assertion = jwt.encode(
-            {
-                "iss": self._cle["client_email"],
-                "scope": PORTEE,
-                "aud": JETON_URL,
-                "iat": maintenant,
-                "exp": maintenant + 3600,
-            },
-            self._cle["private_key"],
-            algorithm="RS256",
-        )
-        corps = urllib.parse.urlencode({
-            "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
-            "assertion": assertion,
-        }).encode()
-        reponse = self._json("POST", JETON_URL, corps=corps,
-                             type_="application/x-www-form-urlencoded", auth=False)
-        self._jeton = reponse["access_token"]
-        self._expire = maintenant + float(reponse.get("expires_in") or 3600)
-        return self._jeton
 
     # -- plomberie HTTP ----------------------------------------------------
 
@@ -124,7 +90,14 @@ class DriveStockage:
         if type_:
             requete.add_header("Content-Type", type_)
         if auth:
-            requete.add_header("Authorization", f"Bearer {self._jeton_acces()}")
+            try:
+                jeton = self._jeton_acces()
+            except RuntimeError as exc:
+                # Un refus d'identité (pool, condition, JWKS périmé) est,
+                # pour qui envoie ou lit une vidéo, un stockage indisponible
+                # — avec le motif de Google, pour qu'on sache quoi réparer.
+                raise StockageIndisponible(str(exc)) from exc
+            requete.add_header("Authorization", f"Bearer {jeton}")
         for cle, valeur in (entetes or {}).items():
             requete.add_header(cle, valeur)
         try:
@@ -138,10 +111,6 @@ class DriveStockage:
             ) from exc
         except urllib.error.URLError as exc:
             raise StockageIndisponible(f"Google Drive injoignable : {exc.reason}.") from exc
-
-    def _json(self, methode: str, url: str, **kwargs: Any) -> dict[str, Any]:
-        with self._requete(methode, url, **kwargs) as reponse:
-            return json.loads(reponse.read().decode("utf-8") or "{}")
 
     # -- l'interface ---------------------------------------------------------
 

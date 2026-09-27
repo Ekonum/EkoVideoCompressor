@@ -71,11 +71,13 @@ class Settings:
     public_url: str
 
     # Stockage des vidéos compressées : un Drive partagé dédié, piloté
-    # par un compte de service dont la clé JSON est dans le coffre.
-    # Sans élément de coffre ou sans dossier, la fonction reste absente
-    # de l'interface — rien ne casse, rien n'est proposé.
-    video_item: str
-    video_field: str
+    # par un compte de service — sans clé JSON : le serveur prouve qui il
+    # est par la fédération d'identité (app/identite.py). Sans
+    # fournisseur, compte ou dossier, la fonction reste absente de
+    # l'interface — rien ne casse, rien n'est proposé.
+    gcp_fournisseur: str
+    gcp_compte: str
+    gcp_cle: Path
     video_dossier: str
 
     # Enrôlement d'appareil : éteint tant que l'équipe n'a pas fini ses
@@ -142,8 +144,10 @@ class Settings:
             odoo_broker_field=os.environ.get("EKOVIDEO_ODOO_BROKER_FIELD", "Clé API"),
             secret_key=os.environ.get("EKOVIDEO_SECRET_KEY", "").strip(),
             monthly_budget_usd=float(os.environ.get("EKOVIDEO_MONTHLY_BUDGET_USD", "50")),
-            video_item=os.environ.get("EKOVIDEO_VIDEO_ITEM", "").strip(),
-            video_field=os.environ.get("EKOVIDEO_VIDEO_FIELD", "Clé JSON").strip(),
+            # projects/<numéro>/locations/global/workloadIdentityPools/<pool>/providers/<fournisseur>
+            gcp_fournisseur=os.environ.get("EKOVIDEO_GCP_FOURNISSEUR", "").strip(),
+            gcp_compte=os.environ.get("EKOVIDEO_GCP_COMPTE", "").strip(),
+            gcp_cle=Path(os.environ.get("EKOVIDEO_GCP_CLE", state / "identite-google.pem")),
             video_dossier=os.environ.get("EKOVIDEO_VIDEO_DOSSIER", "").strip(),
             public_url=os.environ.get(
                 "EKOVIDEO_PUBLIC_URL", "https://transcript.ekonum.fr"

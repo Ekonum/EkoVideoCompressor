@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import app as _app_package  # noqa: F401  (installe la racine du dépôt dans sys.path)
 
 import json
+import shutil
 import tempfile
 
 from fastapi.testclient import TestClient
@@ -52,8 +53,9 @@ def _settings(root: Path, **overrides) -> Settings:
         monthly_budget_usd=50.0,
         corbeille_jours=30,
         public_url="https://transcript.test",
-        video_item="",
-        video_field="Clé JSON",
+        gcp_fournisseur="",
+        gcp_compte="",
+        gcp_cle=Path("/nonexistent/identite-google.pem"),
         video_dossier="",
         enrolement=True,
         liaison_auto="certaine",
@@ -2013,21 +2015,6 @@ class VideoTestCase(_Fixture):
 class DriveStockageHttpTestCase(unittest.TestCase):
     """Le vrai client Drive, doublé au niveau HTTP."""
 
-    CLE = None
-
-    @classmethod
-    def setUpClass(cls):
-        from cryptography.hazmat.primitives import serialization
-        from cryptography.hazmat.primitives.asymmetric import rsa
-
-        privee = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        cls.CLE = {
-            "client_email": "transcript@ekonum.iam.gserviceaccount.com",
-            "private_key": privee.private_bytes(
-                serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
-                serialization.NoEncryption()).decode(),
-        }
-
     def _drive(self, reponses):
         import io
         import urllib.error
@@ -2058,15 +2045,20 @@ class DriveStockageHttpTestCase(unittest.TestCase):
             return Reponse(json.dumps(r.get("json", {})).encode(), r.get("status", 200),
                            r.get("headers", {}))
 
-        return DriveStockage(self.CLE, "dossier-partage", opener=opener), appels
+        jetons = []
+
+        def jeton():
+            jetons.append(1)
+            return "jeton"
+
+        drive = DriveStockage(jeton, "dossier-partage", opener=opener)
+        drive.jetons = jetons
+        return drive, appels
 
     def test_un_morceau_intermediaire_rend_308_sans_erreur(self):
         """Drive répond 308 « continue » : urllib le lève comme une
         erreur, et le prendre pour un échec ferait avorter tout envoi."""
-        drive, appels = self._drive([
-            {"json": {"access_token": "jeton", "expires_in": 3600}},
-            {"status": 308},
-        ])
+        drive, appels = self._drive([{"status": 308}])
         self.assertIsNone(drive.envoyer_morceau("https://session", 0, b"abcd", 10))
         methode, _, entetes = appels[-1]
         self.assertEqual(methode, "PUT")
@@ -2080,30 +2072,143 @@ class DriveStockageHttpTestCase(unittest.TestCase):
                          "fichier-42")
 
     def test_l_ouverture_vise_le_drive_partage(self):
-        drive, appels = self._drive([
-            {"json": {"access_token": "jeton", "expires_in": 3600}},
-            {"headers": {"Location": "https://session-drive"}},
-        ])
+        drive, appels = self._drive([{"headers": {"Location": "https://session-drive"}}])
         self.assertEqual(drive.ouvrir_envoi("transcript-1.mp4", 10), "https://session-drive")
         methode, url, entetes = appels[-1]
         self.assertIn("supportsAllDrives=true", url)
         self.assertEqual(entetes["Authorization"], "Bearer jeton")
 
-    def test_le_jeton_du_compte_de_service_est_reutilise(self):
-        drive, appels = self._drive([
-            {"json": {"access_token": "jeton", "expires_in": 3600}},
-            {"headers": {"Location": "s1"}},
-            {"headers": {"Location": "s2"}},
-        ])
-        drive.ouvrir_envoi("a.mp4", 1)
-        drive.ouvrir_envoi("b.mp4", 1)
-        self.assertEqual(sum("oauth2" in url for _, url, _ in appels), 1)
+    def test_un_refus_d_identite_rend_le_stockage_indisponible(self):
+        """Le motif de Google remonte tel quel : c'est lui qui dit s'il
+        faut redéposer le JWKS ou corriger la condition du pool."""
+        from app.identite import IdentiteIndisponible
+        from app.stockage import DriveStockage, StockageIndisponible
 
-    def test_sans_cle_le_stockage_se_dit_indisponible(self):
+        def refus():
+            raise IdentiteIndisponible("Google a refusé l'identité du serveur (400) : kid inconnu")
+
+        with self.assertRaisesRegex(StockageIndisponible, "kid inconnu"):
+            DriveStockage(refus, "dossier").ouvrir_envoi("a.mp4", 1)
+
+    def test_sans_dossier_le_stockage_se_dit_indisponible(self):
         from app.stockage import DriveStockage, StockageIndisponible
 
         with self.assertRaises(StockageIndisponible):
-            DriveStockage({}, "dossier")
+            DriveStockage(lambda: "jeton", "")
+
+
+class IdentiteGoogleTestCase(unittest.TestCase):
+    """La fédération d'identité, doublée au niveau HTTP."""
+
+    FOURNISSEUR = "projects/123/locations/global/workloadIdentityPools/transcript/providers/vps"
+    COMPTE = "transcript-stockage@transcript-ekonum.iam.gserviceaccount.com"
+
+    def setUp(self):
+        self.dossier = Path(tempfile.mkdtemp())
+        self.chemin = self.dossier / "identite-google.pem"
+        self.addCleanup(shutil.rmtree, self.dossier, ignore_errors=True)
+
+    def _identite(self, reponses, horloge=lambda: 1_000_000.0):
+        import io
+        import urllib.error
+
+        from app.identite import IdentiteGoogle
+
+        appels = []
+
+        class Reponse(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+        def opener(requete, timeout=None):
+            appels.append((requete.full_url, dict(requete.header_items()), requete.data))
+            r = reponses.pop(0)
+            if r.get("status", 200) >= 400:
+                raise urllib.error.HTTPError(requete.full_url, r["status"], "Refus", {},
+                                             io.BytesIO(json.dumps(r["json"]).encode()))
+            return Reponse(json.dumps(r["json"]).encode())
+
+        identite = IdentiteGoogle(
+            chemin_cle=self.chemin, fournisseur=self.FOURNISSEUR, compte=self.COMPTE,
+            emetteur="https://transcript.ekonum.fr/", portee="https://www.googleapis.com/auth/drive",
+            opener=opener, horloge=horloge,
+        )
+        return identite, appels
+
+    def test_le_jeton_signe_est_echange_puis_emprunte_le_compte(self):
+        import urllib.parse
+
+        import jwt
+
+        from app.identite import cle_privee, jwk
+
+        identite, appels = self._identite([
+            {"json": {"access_token": "federe"}},
+            {"json": {"accessToken": "drive", "expireTime": "…"}},
+        ])
+        self.assertEqual(identite(), "drive")
+
+        sts_url, _, corps = appels[0]
+        self.assertEqual(sts_url, "https://sts.googleapis.com/v1/token")
+        formulaire = dict(urllib.parse.parse_qsl(corps.decode()))
+        audience = "//iam.googleapis.com/" + self.FOURNISSEUR
+        self.assertEqual(formulaire["audience"], audience)
+        # Le jeton présenté est vérifiable avec la seule moitié publique —
+        # c'est exactement ce que fera Google avec le JWKS déposé.
+        publique = jwt.PyJWK(jwk(cle_privee(self.chemin))).key
+        revendications = jwt.decode(formulaire["subject_token"], publique, algorithms=["RS256"],
+                                    audience=audience, options={"verify_exp": False,
+                                                                "verify_iat": False})
+        self.assertEqual(revendications["iss"], "https://transcript.ekonum.fr")
+        self.assertEqual(revendications["sub"], "transcript")
+        self.assertEqual(revendications["exp"] - revendications["iat"], 300)
+
+        iam_url, entetes, corps = appels[1]
+        self.assertIn(":generateAccessToken", iam_url)
+        self.assertIn("transcript-stockage%40transcript-ekonum", iam_url)
+        self.assertEqual(entetes["Authorization"], "Bearer federe")
+        self.assertEqual(json.loads(corps)["scope"], ["https://www.googleapis.com/auth/drive"])
+
+    def test_le_jeton_est_reutilise_jusqu_a_une_minute_de_sa_fin(self):
+        instant = [1_000_000.0]
+        identite, appels = self._identite([
+            {"json": {"access_token": "f1"}}, {"json": {"accessToken": "d1"}},
+            {"json": {"access_token": "f2"}}, {"json": {"accessToken": "d2"}},
+        ], horloge=lambda: instant[0])
+        self.assertEqual(identite(), "d1")
+        instant[0] += 3500
+        self.assertEqual(identite(), "d1")
+        self.assertEqual(len(appels), 2)
+        instant[0] += 60
+        self.assertEqual(identite(), "d2")
+
+    def test_le_refus_de_google_dit_pourquoi(self):
+        from app.identite import IdentiteIndisponible
+
+        identite, _ = self._identite([{"status": 400, "json": {
+            "error": "invalid_grant",
+            "error_description": "The audience in ID Token does not match the expected audience.",
+        }}])
+        with self.assertRaisesRegex(IdentiteIndisponible, "(400).*audience"):
+            identite()
+
+    def test_la_cle_nait_privee_et_ne_change_plus(self):
+        from app.identite import cle_privee, jwk
+
+        premiere = jwk(cle_privee(self.chemin))
+        self.assertEqual(self.chemin.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(jwk(cle_privee(self.chemin)), premiere)
+        self.assertNotIn("d", premiere)  # rien de la partie privée dans le JWK
+
+    def test_sans_configuration_l_identite_se_dit_indisponible(self):
+        from app.identite import IdentiteGoogle, IdentiteIndisponible
+
+        with self.assertRaises(IdentiteIndisponible):
+            IdentiteGoogle(chemin_cle=self.chemin, fournisseur="", compte=self.COMPTE,
+                           emetteur="https://transcript.ekonum.fr", portee="p")
 
 
 class CorbeilleTestCase(_Fixture):

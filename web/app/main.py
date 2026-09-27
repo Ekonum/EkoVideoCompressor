@@ -49,7 +49,8 @@ from .coffre import Coffre, CoffreIndisponible
 from .db import Database
 from .odoo import OdooGateway, OdooUnavailable
 from .secrets import GeminiKey, SecretError
-from .stockage import MORCEAU, DriveStockage, StockageIndisponible
+from .identite import IdentiteGoogle
+from .stockage import MORCEAU, PORTEE as PORTEE_DRIVE, DriveStockage, StockageIndisponible
 from .enqueteur import MODELE_ENQUETE, Conclusion, enqueter_confirme
 from .sonde import FENETRE_SECONDES, fournisseur, identifier
 from .settings import Settings
@@ -245,12 +246,6 @@ def create_app(
     )
     access = verifier or AccessVerifier(config.access_team_domain, config.access_aud)
 
-    cle_video = GeminiKey(  # lecteur de coffre générique, malgré son nom
-        url=config.broker_url,
-        token=config.broker_token,
-        item=config.video_item,
-        field=config.video_field,
-    )
     etat_stockage: dict[str, Any] = {}
 
     def stockage():
@@ -261,20 +256,26 @@ def create_app(
         """
         if stockage_factory is not None:
             return stockage_factory()
-        if not (config.video_item and config.video_dossier):
+        if not stockage_configure():
             raise StockageIndisponible("Stockage vidéo non configuré.")
         if "instance" not in etat_stockage:
-            try:
-                cle = json.loads(cle_video.get())
-            except (SecretError, ValueError) as exc:
-                raise StockageIndisponible(
-                    "Clé du compte de service illisible dans le coffre."
-                ) from exc
-            etat_stockage["instance"] = DriveStockage(cle, config.video_dossier)
+            etat_stockage["instance"] = DriveStockage(
+                IdentiteGoogle(
+                    chemin_cle=config.gcp_cle,
+                    fournisseur=config.gcp_fournisseur,
+                    compte=config.gcp_compte,
+                    emetteur=config.public_url,
+                    portee=PORTEE_DRIVE,
+                ),
+                config.video_dossier,
+            )
         return etat_stockage["instance"]
 
+    def stockage_configure() -> bool:
+        return bool(config.gcp_fournisseur and config.gcp_compte and config.video_dossier)
+
     def stockage_disponible() -> bool:
-        return stockage_factory is not None or bool(config.video_item and config.video_dossier)
+        return stockage_factory is not None or stockage_configure()
 
     def effacer(job_id: int) -> None:
         """Supprime une réunion pour de bon, vidéo comprise.
