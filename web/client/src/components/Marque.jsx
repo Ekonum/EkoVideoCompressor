@@ -55,15 +55,21 @@ export function Entete({ vue, surVue }) {
  *  cherche sur un outil d'équipe — surtout un outil qui dépense de
  *  l'argent et où le vocabulaire est partagé.
  */
+/** La session est celle de Cloudflare Access, pas de l'application : se
+ *  déconnecter, c'est la clore là-bas. La visite suivante repasse par la
+ *  page de connexion Google — c'est le « se connecter ». */
+export const DECONNEXION = '/cdn-cgi/access/logout';
+
 function Compte({ moi, surVue, actif }) {
   if (!moi?.email) return <span className="ml-auto" />;
   const initiales = moi.email.slice(0, 2).toUpperCase();
   return (
+    <div className="ml-auto flex items-center gap-1">
     <button
       onClick={() => surVue('compte')}
       title={`Connecté via ${moi.via}`}
       aria-current={actif ? 'page' : undefined}
-      className={`ml-auto flex items-center gap-2.5 rounded-full py-1 pl-3 pr-1 transition-colors ${
+      className={`flex items-center gap-2.5 rounded-full py-1 pl-3 pr-1 transition-colors ${
         actif ? 'bg-clair/15' : 'hover:bg-clair/10'
       }`}
     >
@@ -75,5 +81,13 @@ function Compte({ moi, surVue, actif }) {
         {initiales}
       </span>
     </button>
+    <a
+      href={DECONNEXION}
+      title="Se déconnecter"
+      className="rounded-full px-3 py-1.5 text-[0.8125rem] text-clair/60 transition-colors hover:bg-clair/10 hover:text-clair"
+    >
+      Se déconnecter
+    </a>
+    </div>
   );
 }

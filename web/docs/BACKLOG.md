@@ -75,3 +75,22 @@ transcript.
 Les vidéos rattachées à une réunion déjà transcrite prennent sa place en
 stockage froid ; les autres pourront être transcrites à la demande — jamais
 en masse, pour ne pas payer des transcriptions sans intérêt.
+
+## Un tableau de bord dans « Mon compte »
+
+Un graphe en barres du **nombre de réunions par jour**, filtrable sur 30, 90 et
+365 jours ou depuis le début, avec la possibilité d'y superposer le **coût
+équivalent — en euros** plutôt qu'en dollars.
+
+Les données existent déjà : date de réunion par transcription, et coût réel par
+appel dans `api_usage`. Reste à choisir la source du taux de change (fixé une
+fois par mois suffit : c'est un ordre de grandeur, pas une comptabilité) et à
+suivre la charte des graphiques Ekonum.
+
+## Deux entrées au catalogue du portail
+
+Le portail ne lit qu'un `ekonum.yaml`, à la racine du dépôt. Or ce dépôt porte
+deux logiciels : l'app macOS (`ekovideo-compressor`, PR #138) et la webapp
+(`transcript`, `web/ekonum.yaml`). La question est ouverte dans le contrat du
+portail (§13) — à trancher côté portail, pas ici.
+

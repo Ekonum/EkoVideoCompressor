@@ -10,6 +10,22 @@ RUN npm ci
 COPY web/client/ ./
 RUN npm run build
 
+# ---- Manifeste --------------------------------------------------------
+# Le manifeste du portail Ekonum, converti en JSON et complété ici des
+# champs de build — jamais écrits à la main, ce qui le rend non
+# falsifiable par inadvertance. PyYAML ne sert qu'à cette étape : le
+# serveur, lui, ne fait que servir le fichier obtenu.
+FROM python:3.12-slim AS manifeste
+ARG VERSION=0.0.0-dev
+ARG GIT_SHA=0000000
+ARG BUILT_AT=1970-01-01T00:00:00Z
+RUN pip install --no-cache-dir pyyaml==6.0.2
+COPY web/ekonum.yaml /m/ekonum.yaml
+RUN python -c "import json, os, yaml; \
+d = yaml.safe_load(open('/m/ekonum.yaml', encoding='utf-8')); \
+d.update(version=os.environ['VERSION'], git_sha=os.environ['GIT_SHA'], built_at=os.environ['BUILT_AT']); \
+json.dump(d, open('/m/ekonum-app.json', 'w', encoding='utf-8'), ensure_ascii=False, indent=2)"
+
 # ---- Serveur ----------------------------------------------------------
 FROM python:3.12-slim AS serveur
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -32,6 +48,7 @@ COPY web/app ./web/app
 # là où vivent la base et la configuration.
 COPY web/bin ./web/bin
 COPY --from=client /client/dist ./web/client/dist
+COPY --from=manifeste /m/ekonum-app.json ./web/ekonum-app.json
 
 # Utilisateur non privilégié : rien ici n'a besoin de root.
 RUN useradd --system --uid 10001 ekovideo \

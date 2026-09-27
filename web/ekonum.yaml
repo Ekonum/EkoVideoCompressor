@@ -1,0 +1,57 @@
+# Manifeste Ekonum de la webapp transcript.ekonum.fr — contrat d'application du portail.
+# Spécification : https://github.com/Ekonum/ekonum-portail/blob/main/docs/CONTRAT-APPLICATION.md
+#
+# Ce fichier décrit ce QUI EXISTE, jamais ce qui est prévu : l'API documentée, les journaux
+# JSON structurés, le webhook de déprovisionnement et l'identité portail ne sont pas déclarés,
+# parce qu'ils n'existent pas encore. Le portail signalera ces absences — c'est son rôle.
+#
+# Servi par l'application sur /.well-known/ekonum-app.json, complété au build de version,
+# git_sha et built_at (jamais écrits à la main).
+schema_version: 1
+
+id: transcript
+name: Transcriptions
+description: Transcrire une réunion depuis le navigateur, la rattacher au bon dossier Odoo et l'y déposer.
+kind: application
+owner: robin@ekonum.fr
+data_classification: client       # transcriptions de réunions clients, et clés API Odoo personnelles chiffrées
+lifecycle: active                 # en service sur transcript.ekonum.fr depuis le 16/09/2026
+
+auth:
+  mode: access-jwt                # JWT Access vérifié contre le JWKS (web/app/access.py) ; jetons ekt_ pour les appels machine
+  identity_key: email             # comptes créés depuis l'e-mail du JWT Access (dette de migration, §8)
+
+consumes:
+  odoo:                           # clé API personnelle de chacun (web/app/odoo.py, chatter.py)
+    - crm.lead
+    - sale.order
+    - project.project
+    - project.task
+    - calendar.event
+    - res.partner
+    - res.users
+    - mail.message
+    - mail.activity
+    - discuss.channel
+    - ir.model
+  ekonum_apps:
+    - secret-broker               # clé Gemini (web/app/secrets.py)
+  external:
+    - gemini                      # transcription, sonde et enquête
+    - cloudflare-access           # vérification de l'identité
+
+release_notes: https://github.com/Ekonum/EkoVideoCompressor/releases
+
+environments:
+  production:
+    url: https://transcript.ekonum.fr
+    channel: edge                 # image `preprod`, publiée depuis la branche web : `stable` à la fusion
+    target: vps-prod
+
+state:
+  volumes: [transcript-data]
+  sqlite: [/data/ekovideo.db]     # réunions, vocabulaire, comptes, jetons ; les clés Odoo y sont chiffrées
+
+health:
+  live: /healthz
+  ready: /readyz                  # 503 si la base ou le broker ne répond pas

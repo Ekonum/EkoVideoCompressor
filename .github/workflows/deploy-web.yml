@@ -60,11 +60,29 @@ jobs:
       #
       # Le VPS est en amd64 : une image arm64 serait rejetée par
       # Portainer, et l'erreur n'apparaîtrait qu'au déploiement.
+      # Champs du manifeste Ekonum produits par la chaîne, jamais à la main.
+      # Hors `main`, la version est une pré-version honnête : l'image vient
+      # d'une branche, pas d'une release.
+      - name: Champs de build du manifeste
+        id: build
+        run: |
+          court=$(echo "${GITHUB_SHA}" | cut -c1-7)
+          if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            echo "version=0.0.0+${court}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-edge+${court}" >> "$GITHUB_OUTPUT"
+          fi
+          echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       - name: Construire et publier
         uses: docker/build-push-action@v6
         with:
           context: .
           file: web/Dockerfile
+          build-args: |
+            VERSION=${{ steps.build.outputs.version }}
+            GIT_SHA=${{ github.sha }}
+            BUILT_AT=${{ steps.build.outputs.built_at }}
           platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.tags.outputs.list }}

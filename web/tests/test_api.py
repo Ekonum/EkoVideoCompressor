@@ -393,6 +393,51 @@ class ApiTestCase(_Fixture):
         self.assertEqual(self.client.get(f"/api/jobs/{body['job_id'] + 1}").status_code, 404)
 
 
+class PortailTestCase(_Fixture):
+    """Les trois chemins que le portail Ekonum sonde."""
+
+    def test_readyz_dit_ok_quand_tout_repond(self):
+        vue = self.client.get("/readyz")
+        self.assertEqual(vue.status_code, 200)
+        self.assertEqual(vue.json()["status"], "ok")
+
+    def test_readyz_dit_la_panne_du_broker(self):
+        from app.secrets import SecretError
+
+        class CleEnPanne:
+            def get(self):
+                raise SecretError("broker injoignable")
+
+        app = create_app(self.settings, database=self.db, gemini_key=CleEnPanne())
+        with TestClient(app) as client:
+            vue = client.get("/readyz")
+        self.assertEqual(vue.status_code, 503)
+        self.assertIn("broker", " ".join(vue.json()["problemes"]))
+
+    def test_le_manifeste_absent_hors_image_repond_404(self):
+        import os
+        from unittest import mock
+
+        with mock.patch.dict(os.environ, {"EKOVIDEO_MANIFESTE": str(self.root / "absent.json")}):
+            self.assertEqual(self.client.get("/.well-known/ekonum-app.json").status_code, 404)
+
+    def test_le_manifeste_construit_est_servi_tel_quel(self):
+        import os
+        from unittest import mock
+
+        chemin = self.root / "ekonum-app.json"
+        chemin.write_text(json.dumps({"id": "transcript", "version": "0.0.0-edge+abc1234"}))
+        with mock.patch.dict(os.environ, {"EKOVIDEO_MANIFESTE": str(chemin)}):
+            vue = self.client.get("/.well-known/ekonum-app.json").json()
+        self.assertEqual(vue["id"], "transcript")
+
+    def test_le_manifeste_source_decrit_bien_la_webapp(self):
+        """Garde-fou : l'identifiant du catalogue ne change jamais."""
+        texte = (Path(__file__).resolve().parents[1] / "ekonum.yaml").read_text(encoding="utf-8")
+        self.assertIn("id: transcript", texte)
+        self.assertIn("kind: application", texte)
+
+
 class SettingsTestCase(unittest.TestCase):
     def test_refus_de_demarrer_sans_authentification(self):
         """Un déploiement ne doit pas pouvoir s'ouvrir par inadvertance."""

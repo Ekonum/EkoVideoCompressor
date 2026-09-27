@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
+import { DECONNEXION } from './Marque.jsx';
 import { Bouton, Champ, Erreur } from './Communs.jsx';
 
 /** Mon compte : identité, raccordement Odoo, jetons d'API.
@@ -25,10 +26,18 @@ export function Compte() {
   return (
     <section className="mx-auto max-w-3xl px-6 py-10">
       <h1 className="titre text-[1.5rem] font-semibold">Mon compte</h1>
-      <p className="mt-2 text-fonce/70">
-        {moi?.email}
-        {moi ? <span className="text-fonce/45"> · connecté via {moi.via}</span> : null}
-      </p>
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+        <p className="text-fonce/70">
+          {moi?.email}
+          {moi ? <span className="text-fonce/45"> · connecté via {moi.via}</span> : null}
+        </p>
+        <a
+          href={DECONNEXION}
+          className="rounded-md px-3 py-1.5 text-[0.875rem] text-fonce/70 ring-1 ring-bord hover:bg-white/60 hover:text-fonce"
+        >
+          Se déconnecter
+        </a>
+      </div>
 
       <Erreur>{erreur}</Erreur>
       {note ? <p className="mt-4 text-[0.875rem] text-turquoise-sombre">{note}</p> : null}

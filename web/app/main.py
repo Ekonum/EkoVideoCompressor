@@ -25,7 +25,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi import Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -92,6 +92,9 @@ MAX_CONCURRENT_CHUNKS = 2
 # marge couvre un réglage plus généreux sans jamais approcher les 100 Mo
 # du tunnel.
 MAX_CHUNK_BYTES = 60 * 1024 * 1024
+
+# Écrit par l'étape « manifeste » du Dockerfile, à côté du paquet.
+MANIFESTE_SERVI = Path(__file__).resolve().parent.parent / "ekonum-app.json"
 # Cinq minutes en MP3 64 kbit/s pèsent 2,4 Mo : la marge permet une
 # fenêtre un peu plus large, pas le dépôt d'une réunion entière.
 MAX_SONDE_BYTES = 8 * 1024 * 1024
@@ -385,7 +388,42 @@ def create_app(
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
+        """Vivant : aucune dépendance vérifiée, exprès. Sinon une panne du
+        broker ferait redémarrer un conteneur qui n'y est pour rien."""
         return {"status": "ok"}
+
+    @app.get("/readyz")
+    def readyz():
+        """Utilisable : la base répond, et le broker rend la clé Gemini.
+
+        Sans l'une ou l'autre, on ne peut ni lire la bibliothèque ni
+        transcrire — le portail doit le voir, pas un « ok » de façade.
+        """
+        problemes: list[str] = []
+        try:
+            with db.connect() as conn:
+                conn.execute("SELECT 1").fetchone()
+        except Exception as exc:  # noqa: BLE001 — on rapporte, on ne lève pas
+            problemes.append(f"base : {exc}")
+        try:
+            if not keys.get():
+                problemes.append("broker : clé Gemini vide")
+        except SecretError as exc:
+            problemes.append(f"broker : {exc}")
+        if problemes:
+            return JSONResponse({"status": "indisponible", "problemes": problemes},
+                                status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return {"status": "ok"}
+
+    @app.get("/.well-known/ekonum-app.json")
+    def manifeste_ekonum():
+        """Le manifeste du portail Ekonum, complété au build (version,
+        commit, date). Absent hors image — en développement, en test —,
+        il répond 404 plutôt que d'inventer des champs de build."""
+        chemin = Path(os.environ.get("EKOVIDEO_MANIFESTE", MANIFESTE_SERVI))
+        if not chemin.is_file():
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Manifeste non construit.")
+        return JSONResponse(json.loads(chemin.read_text(encoding="utf-8")))
 
     @app.get("/")
     def index():
