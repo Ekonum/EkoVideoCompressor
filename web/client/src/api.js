@@ -56,6 +56,7 @@ export const api = {
   odooForget: () => call('DELETE', '/api/me/odoo'),
   odooRecords: (q) => call('GET', `/api/odoo/records?q=${encodeURIComponent(q)}`),
   odooPublish: (id, payload) => call('POST', `/api/jobs/${id}/odoo/publish`, payload),
+  enqueteGuidee: (payload) => call('POST', '/api/odoo/enquete', payload),
   odooMeetings: () => call('GET', '/api/odoo/meetings'),
   odooContext: (model, id) =>
     call('GET', `/api/odoo/context?model=${encodeURIComponent(model)}&record_id=${id}`),

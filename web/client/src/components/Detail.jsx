@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { Bouton, Champ, DateHeure, Erreur } from './Communs.jsx';
 import { horodatage, usd, jour, mo } from '../format.js';
@@ -16,15 +16,38 @@ export function Detail({ jobId, surRetour }) {
   const [erreur, setErreur] = useState('');
   const [note, setNote] = useState('');
   const [surlignee, setSurlignee] = useState(null);
+  // Le mot douteux reste marqué dans sa réplique jusqu'au clic suivant :
+  // le temps de le lire, et de le corriger.
+  const [marque, setMarque] = useState(null);
+  const [aCorriger, setACorriger] = useState(null);
 
-  /** Amène la transcription à la réplique qui couvre cet instant. */
-  const allerA = (secondes) => {
+  /** Amène la transcription au mot douteux.
+   *
+   *  L'horodatage du modèle est approximatif — jusqu'à quarante secondes
+   *  d'écart constatées. Le mot lui-même est le vrai repère : on prend
+   *  la réplique qui le contient au plus près de l'instant annoncé, et
+   *  l'instant seul ne sert qu'à défaut.
+   */
+  const allerA = (secondes, terme = '') => {
     const segments = fiche?.segments || [];
-    if (!segments.length || secondes == null) return;
-    let rang = 0;
-    segments.forEach((seg, i) => { if (seg.start_second <= secondes) rang = i; });
+    if (!segments.length) return;
+    let rang = -1;
+    if (terme) {
+      let ecart = Infinity;
+      segments.forEach((seg, i) => {
+        if (!plier(seg.text).includes(plier(terme))) return;
+        const d = secondes == null ? 0 : Math.abs(seg.start_second - secondes);
+        if (d < ecart) { ecart = d; rang = i; }
+      });
+    }
+    if (rang < 0) {
+      if (secondes == null) return;
+      rang = 0;
+      segments.forEach((seg, i) => { if (seg.start_second <= secondes) rang = i; });
+    }
     document.getElementById(`segment-${rang}`)
       ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    setMarque(terme ? { rang, terme } : null);
     setSurlignee(rang);
     setTimeout(() => setSurlignee((r) => (r === rang ? null : r)), 2500);
   };
@@ -86,7 +109,7 @@ export function Detail({ jobId, surRetour }) {
                       {s.speaker ? (
                         <span className="titre mr-2 font-medium text-turquoise-sombre">{s.speaker}</span>
                       ) : null}
-                      {s.text}
+                      {marque?.rang === rang ? surligner(s.text, marque.terme) : s.text}
                     </span>
                   </li>
                 ))}
@@ -97,8 +120,13 @@ export function Detail({ jobId, surRetour }) {
 
         <aside className="space-y-8">
           <Interlocuteurs fiche={fiche} jobId={jobId} surMaj={recharger} surNote={setNote} surErreur={setErreur} />
-          <Termes fiche={fiche} jobId={jobId} surMaj={recharger} surNote={setNote} surErreur={setErreur} />
-          <AVerifier fiche={fiche} surAller={allerA} />
+          <Termes fiche={fiche} jobId={jobId} surMaj={recharger} surNote={setNote} surErreur={setErreur}
+                  aCorriger={aCorriger} />
+          <AVerifier
+            fiche={fiche}
+            surAller={allerA}
+            surCorriger={(mot) => setACorriger({ mot, fois: Date.now() })}
+          />
           <Fenetres jobId={jobId} surNote={setNote} surErreur={setErreur} />
           <Odoo fiche={fiche} jobId={jobId} surMaj={recharger} surNote={setNote} surErreur={setErreur} />
           <Versions versions={fiche.previous_versions} />
@@ -272,6 +300,43 @@ function Copier({ texte, libelle = 'Copier la transcription' }) {
 }
 
 /** « 17:29 » ou « 1:02:03 » → secondes ; null si illisible. */
+/** Minuscules sans accents, caractère par caractère — la longueur est
+ *  gardée, pour que les positions trouvées valent dans le texte d'origine. */
+function plier(texte) {
+  return [...String(texte || '')]
+    .map((c) => c.normalize('NFD').replace(/\p{Mn}/gu, '').toLowerCase().slice(0, 1) || c)
+    .join('');
+}
+
+/** Un mot ou un nom — pas une phrase : c'est ce qu'on peut corriger d'un
+ *  remplacement. */
+function estUnMot(texte) {
+  const t = String(texte || '').trim();
+  return Boolean(t) && t.split(/\s+/).length <= 3;
+}
+
+/** Le texte, le terme cherché marqué partout où il apparaît. */
+function surligner(texte, terme) {
+  const plie = plier(texte);
+  const cible = plier(terme.trim());
+  if (!cible) return texte;
+  const morceaux = [];
+  let depuis = 0;
+  let trouve = plie.indexOf(cible);
+  while (trouve >= 0) {
+    morceaux.push(texte.slice(depuis, trouve));
+    morceaux.push(
+      <mark key={trouve} className="rounded bg-turquoise/50 px-0.5 text-fonce">
+        {texte.slice(trouve, trouve + cible.length)}
+      </mark>,
+    );
+    depuis = trouve + cible.length;
+    trouve = plie.indexOf(cible, depuis);
+  }
+  morceaux.push(texte.slice(depuis));
+  return morceaux;
+}
+
 function lireHorodatage(texte) {
   const parties = String(texte || '').trim().split(':').map(Number);
   if (!parties.length || parties.some((p) => Number.isNaN(p))) return null;
@@ -283,25 +348,36 @@ function lireHorodatage(texte) {
  *  L'app macOS écrivait ça dans un fichier « à vérifier » ; c'est la
  *  liste de ce qu'il faut réécouter, et elle ne vaut que si on la voit.
  */
-function AVerifier({ fiche, surAller }) {
-  const passages = fiche.uncertain || [];
+function AVerifier({ fiche, surAller, surCorriger }) {
+  // Un mot qui n'apparaît plus nulle part a été corrigé — avant que le
+  // serveur ne sache retirer lui-même ce qui est réglé. Une phrase, elle,
+  // peut ne pas être citée mot pour mot : on la garde.
+  const texte = plier(fiche.segments.map((s) => s.text).join('\n'));
+  const passages = (fiche.uncertain || []).filter(
+    (p) => !estUnMot(p.text) || texte.includes(plier(p.text)),
+  );
   if (!passages.length) return null;
   return (
     <div>
       <h2 className="titre text-[1.0625rem] font-medium">À vérifier</h2>
       <p className="mt-1 text-[0.8125rem] text-fonce/55">
         {passages.length} passage{passages.length > 1 ? 's' : ''} dont le modèle
-        doute — un clic amène la transcription au bon endroit.
+        doute — un clic montre le mot dans la transcription et le propose à la
+        correction.
       </p>
       <ul className="mt-2 space-y-2">
         {passages.map((p, i) => {
           const t = lireHorodatage(p.timestamp);
+          const mot = estUnMot(p.text);
           return (
             <li key={i}>
               <button
                 type="button"
-                disabled={t === null}
-                onClick={() => surAller(t)}
+                disabled={t === null && !mot}
+                onClick={() => {
+                  surAller(t, p.text);
+                  if (mot) surCorriger(p.text.trim());
+                }}
                 className="w-full rounded-lg bg-papier p-2.5 text-left transition-colors hover:bg-turquoise/15 disabled:cursor-default disabled:hover:bg-papier"
               >
                 <span className="block text-[0.75rem] tabular-nums text-turquoise-sombre">
@@ -388,9 +464,19 @@ function Interlocuteurs({ fiche, jobId, surMaj, surNote, surErreur }) {
   );
 }
 
-function Termes({ fiche, jobId, surMaj, surNote, surErreur }) {
+function Termes({ fiche, jobId, surMaj, surNote, surErreur, aCorriger }) {
   const [ancien, setAncien] = useState('');
   const [nouveau, setNouveau] = useState('');
+  const champNouveau = useRef(null);
+
+  // Un mot douteux cliqué arrive ici, prêt à corriger : il ne reste qu'à
+  // taper la bonne orthographe.
+  useEffect(() => {
+    if (!aCorriger) return;
+    setAncien(aCorriger.mot);
+    setNouveau('');
+    champNouveau.current?.focus({ preventScroll: true });
+  }, [aCorriger]);
 
   return (
     <div>
@@ -415,6 +501,7 @@ function Termes({ fiche, jobId, surMaj, surNote, surErreur }) {
         />
         <span aria-hidden className="pb-2 text-fonce/40">→</span>
         <Champ
+          ref={champNouveau}
           label="Bonne orthographe"
           placeholder="Acritec"
           value={nouveau}

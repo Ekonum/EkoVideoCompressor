@@ -19,9 +19,10 @@ import html
 import logging
 import os
 import time
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi import Response
@@ -51,7 +52,7 @@ from .odoo import OdooGateway, OdooUnavailable
 from .secrets import GeminiKey, SecretError
 from .identite import IdentiteGoogle
 from .stockage import MORCEAU, PORTEE as PORTEE_DRIVE, DriveStockage, StockageIndisponible
-from .enqueteur import MODELE_ENQUETE, Conclusion, enqueter_confirme
+from .enqueteur import MODELE_ENQUETE, Conclusion, enqueter, enqueter_confirme
 from .sonde import FENETRE_SECONDES, fournisseur, identifier
 from .settings import Settings
 from .terms import replace_term
@@ -199,6 +200,27 @@ class Reenrichissement(BaseModel):
     record_id: int = Field(default=0, ge=0)
 
 
+class Echange(BaseModel):
+    role: Literal["personne", "ia"]
+    texte: str = Field(min_length=1, max_length=2000)
+
+
+class DossierEcarte(BaseModel):
+    model: str = Field(max_length=64)
+    id: int = Field(ge=0)
+    name: str = Field(default="", max_length=300)
+
+
+class EnqueteGuidee(BaseModel):
+    """Relancer l'enquête quand aucune proposition ne convient : la
+    personne explique où chercher, dans une conversation."""
+
+    indices: dict[str, Any] = Field(default_factory=dict)
+    echanges: list[Echange] = Field(min_length=1, max_length=20)
+    ecartes: list[DossierEcarte] = Field(default_factory=list, max_length=20)
+    moment: str = Field(default="", max_length=40)
+
+
 class EnvoiVideo(BaseModel):
     taille: int = Field(gt=0, le=20 * 1024**3)
     type: str = Field(default="video/mp4", max_length=64)
@@ -224,6 +246,22 @@ class FinalizeResponse(BaseModel):
     cost_usd: float
     # Ce qu'il est advenu du dépôt automatique, quand il y en avait un.
     odoo: dict[str, Any] = Field(default_factory=dict)
+
+
+def _pli(texte: str) -> str:
+    """Minuscules sans accents : « Prévelis » et « prevelis » sont le même
+    mot mal entendu."""
+    return "".join(
+        c for c in unicodedata.normalize("NFD", texte.casefold())
+        if unicodedata.category(c) != "Mn"
+    ).strip()
+
+
+def _designe(passage: str, mot: str) -> bool:
+    """Le passage douteux est-il ce mot-là ? Seulement s'il ne contient
+    que lui, à la ponctuation près : une phrase entière qui le cite peut
+    douter d'autre chose."""
+    return bool(mot.strip()) and _pli(passage).strip(" .,;:!?«»\"'") == _pli(mot)
 
 
 def create_app(
@@ -1004,6 +1042,12 @@ def create_app(
                 ],
             )
         db.update_job_context(job_id, technical_terms=terms)
+        # Un mot corrigé n'est plus à vérifier : le laisser dans la liste
+        # ferait relire ce qui est déjà réglé.
+        passages = json.loads(job["uncertain_json"] or "[]")
+        restants = [p for p in passages if not _designe(str(p.get("text") or ""), payload.old)]
+        if len(restants) != len(passages):
+            db.set_uncertain(job_id, restants)
         return {"occurrences": occurrences, "technical_terms": terms}
 
     @app.post("/api/jobs/{job_id}/chunks/{index}/reset", status_code=status.HTTP_200_OK)
@@ -1418,6 +1462,9 @@ def create_app(
 
         return {
             "clues": indices.to_dict(),
+            # Guider la recherche n'a de sens qu'avec une clé Odoo : sans
+            # elle, l'interface ne le propose pas.
+            "odoo": odoo_configure(owner_id),
             "cost_usd": round(indices.usage.cost_usd + enquete.usage.cost_usd, 6),
             "investigation": {
                 **enquete.to_dict(),
@@ -1439,7 +1486,70 @@ def create_app(
             ),
         }
 
-    def _enqueter(owner_id: int, indices, moment: str = "") -> Conclusion:
+    @app.post("/api/odoo/enquete")
+    async def enquete_guidee(
+        demande: EnqueteGuidee, owner_id: int = Depends(current_user)
+    ) -> dict:
+        """Une nouvelle enquête, guidée par ce que dit la personne.
+
+        Pas de seconde enquête de confirmation ici : rien ne se lie sans
+        un clic, puisque c'est la personne qui choisit parmi ce qui
+        revient.
+        """
+        if not demande.echanges or demande.echanges[-1].role != "personne":
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Rien à quoi répondre.")
+        ecartes = [e.model_dump() for e in demande.ecartes]
+        enquete = await asyncio.to_thread(
+            _enqueter,
+            owner_id,
+            demande.indices,
+            demande.moment,
+            echanges=[e.model_dump() for e in demande.echanges],
+            ecartes=ecartes,
+        )
+        db.add_api_usage(
+            job_id=None,
+            provider=fournisseur(MODELE_ENQUETE),
+            model=enquete.usage.model or MODELE_ENQUETE,
+            step="sonde_enquete_guidee",
+            input_tokens=enquete.usage.input_tokens,
+            output_tokens=enquete.usage.output_tokens,
+            cost_usd=enquete.usage.cost_usd,
+        )
+        refuses = {(e["model"], e["id"]) for e in ecartes}
+        vus: set[tuple[str, int]] = set()
+        propositions = []
+        # Le modèle a pu reproposer un refusé malgré la consigne : on ne
+        # le montre pas une seconde fois.
+        for dossier in ([enquete.dossier] if enquete.dossier else []) + enquete.autres:
+            cle = (dossier.get("model"), dossier.get("id"))
+            if cle in refuses or cle in vus:
+                continue
+            vus.add(cle)
+            propositions.append(dossier)
+        return {
+            "reponse": enquete.raison or (
+                "Rien trouvé qui colle." if not propositions else ""
+            ),
+            "candidates": propositions,
+            "trace": enquete.journal,
+            "cost_usd": round(enquete.usage.cost_usd, 6),
+        }
+
+    def odoo_configure(owner_id: int) -> bool:
+        try:
+            return bool(odoo_pour(owner_id).configured)
+        except CoffreIndisponible:
+            return False
+
+    def _enqueter(
+        owner_id: int,
+        indices,
+        moment: str = "",
+        *,
+        echanges: list[dict] | None = None,
+        ecartes: list[dict] | None = None,
+    ) -> Conclusion:
         """Mène l'enquête avec la clé Odoo de la personne, ou renonce.
 
         Odoo enrichit, il ne conditionne pas : sans clé, pas d'enquête,
@@ -1451,9 +1561,10 @@ def create_app(
             return Conclusion(raison="Coffre indisponible.")
         if not passerelle.configured:
             return Conclusion(raison="Aucune clé API Odoo personnelle.")
+        guidee = bool(echanges)
         try:
-            return enqueter_confirme(
-                indices.to_dict(),
+            return (enqueter if guidee else enqueter_confirme)(
+                indices if isinstance(indices, dict) else indices.to_dict(),
                 chercher=lambda terme, modeles: passerelle.search_records(
                     terme, modeles=modeles
                 ),
@@ -1465,6 +1576,7 @@ def create_app(
                     near=_instant(moment), window_hours=3.0
                 ),
                 api_key=keys.get(),
+                **({"echanges": echanges, "ecartes": ecartes} if guidee else {}),
             )
         except (CloudTranscriptionError, SecretError) as exc:
             log.warning("enquête impossible : %s", exc)

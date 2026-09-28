@@ -575,6 +575,23 @@ class LibraryTestCase(_Fixture):
         self.assertEqual(detail["segments"][0]["text"], "chez Acritec")
         self.assertEqual(detail["technical_terms"], ["Acritec", "Odoo"])
 
+    def test_un_mot_corrige_quitte_la_liste_a_verifier(self):
+        """« Prévelis » corrigé en « Prevelit » n'est plus à vérifier ; une
+        phrase qui ne fait que le citer, et les autres doutes, restent."""
+        job_id = self._finished_job()
+        self.db.set_transcript(job_id, "Robin : on parle de Prévelis.")
+        self.db.set_uncertain(job_id, [
+            {"text": "Prévelis", "timestamp": "01:28", "reason": "nom d'entreprise"},
+            {"text": "prevelis.", "timestamp": "02:28", "reason": "idem"},
+            {"text": "Yverif", "timestamp": "02:44", "reason": "autre nom"},
+            {"text": "on a vu Prévelis hier", "timestamp": "03:00", "reason": "phrase confuse"},
+        ])
+        self.client.post(f"/api/jobs/{job_id}/terms/replace",
+                         json={"old": "Prévelis", "new": "Prevelit"})
+        restants = [p["text"] for p in
+                    self.client.get(f"/api/jobs/{job_id}/detail").json()["uncertain"]]
+        self.assertEqual(restants, ["Yverif", "on a vu Prévelis hier"])
+
     def test_la_recherche_plein_texte_traverse_les_traitements(self):
         job_id = self._finished_job()
         self.db.replace_segments(
@@ -913,9 +930,11 @@ class SondeTestCase(_Fixture):
         self.assertTrue(vue["investigation"]["trace"])
         self.assertEqual([c["id"] for c in vue["candidates"]], [364])
         self.assertGreater(self.db.month_spend_usd(), 0.0004)
+        self.assertTrue(vue["odoo"])
 
     def test_sans_cle_odoo_l_enquete_renonce_sans_bruit(self):
         vue = self.client.post("/api/probe", content=b"audio").json()
+        self.assertFalse(vue["odoo"])
         self.assertIsNone(vue["investigation"]["record"])
         self.assertIn("clé API Odoo", vue["investigation"]["reason"])
 
@@ -931,6 +950,72 @@ class SondeTestCase(_Fixture):
             vue = client.post("/api/probe", content=b"audio").json()
         self.assertEqual(vue["candidates"], [])
         self.assertIn("Acritec", vue["clues"]["organisations"])
+
+
+    def test_l_enquete_guidee_suit_la_personne_et_ecarte_les_refuses(self):
+        """Aucune proposition ne convient : la personne explique où
+        chercher. Ses mots et ses refus arrivent au modèle, un refusé ne
+        revient pas, et une seule enquête suffit — c'est elle qui choisit."""
+        from unittest import mock
+
+        from app import enqueteur
+        from app.odoo import OdooGateway
+
+        fiches = {
+            364: {"model": "crm.lead", "id": 364, "name": "Acritec", "partner": "ACRITEC"},
+            512: {"model": "project.project", "id": 512, "name": "Déploiement Acritec",
+                  "partner": "ACRITEC"},
+        }
+
+        class Passerelle(OdooGateway):
+            def __init__(self):
+                super().__init__(url="u", database="d", login="l", api_key="k")
+
+            def search_records(self, terme, limit=8, modeles=None):
+                return list(fiches.values())
+
+            def resume_dossier(self, modele, record_id):
+                return {**fiches[record_id], "chatter": []}
+
+        faux = FauxGemini([
+            _appel("chercher", terme="Acritec", modeles=["project.project"]),
+            _appel("conclure", modele="project.project", record_id=512,
+                   confiance="certaine", raison="C'est le projet de déploiement.",
+                   autres=[{"modele": "crm.lead", "record_id": 364, "raison": "l'opportunité"}]),
+        ])
+        with mock.patch.object(enqueteur, "GeminiClient", faux):
+            with TestClient(self._app_avec_odoo(Passerelle())) as client:
+                vue = client.post("/api/odoo/enquete", json={
+                    "indices": {"organisations": ["Acritec"]},
+                    "echanges": [{"role": "personne",
+                                  "texte": "Cherche plutôt le projet, pas l'opportunité."}],
+                    "ecartes": [{"model": "crm.lead", "id": 364, "name": "Acritec"}],
+                }).json()
+
+        self.assertEqual(vue["reponse"], "C'est le projet de déploiement.")
+        self.assertEqual([c["id"] for c in vue["candidates"]], [512])
+        demande = faux.recus[0][0]["parts"][0]["text"]
+        self.assertIn("Cherche plutôt le projet", demande)
+        self.assertIn("crm.lead 364", demande)
+        # Certaine, mais pas de seconde enquête : les deux tours joués,
+        # rien de plus.
+        self.assertEqual(len(faux.recus), 2)
+        self.assertGreater(self.db.month_spend_usd(), 0)
+
+    def test_l_enquete_guidee_attend_une_question(self):
+        with TestClient(self._app_avec_odoo(None)) as client:
+            reponse = client.post("/api/odoo/enquete", json={
+                "echanges": [{"role": "ia", "texte": "Rien trouvé."}],
+            })
+        self.assertEqual(reponse.status_code, 400)
+
+    def test_sans_cle_odoo_l_enquete_guidee_le_dit(self):
+        vue = self.client.post("/api/odoo/enquete", json={
+            "echanges": [{"role": "personne", "texte": "C'est la mairie."}],
+        }).json()
+        self.assertEqual(vue["candidates"], [])
+        self.assertIn("clé API Odoo", vue["reponse"])
+
 
 
 class FauxGemini:

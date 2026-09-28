@@ -25,7 +25,7 @@ export function sonderDuree(fichier) {
  *  à la vraie transcription. Cinq minutes suffisent, et le fichier ne
  *  quitte jamais la machine — seule cette fenêtre part.
  */
-export function identifier(fichier, { audio, fenetre = 300, duree = 0, moment = '' }) {
+export function identifier(fichier, { audio, fenetre = 300, duree = 0, moment = '', surPhase = () => {} }) {
   // L'heure de la réunion : c'est elle qui permet de la retrouver dans
   // l'agenda, signal bien plus sûr qu'un nom entendu. Celle saisie à la
   // main prime ; à défaut, la date du fichier moins sa durée, puisque le
@@ -40,6 +40,9 @@ export function identifier(fichier, { audio, fenetre = 300, duree = 0, moment = 
     worker.onmessage = async ({ data }) => {
       if (data.kind === 'window-done') {
         worker.terminate();
+        // L'extrait est prêt : le reste — écoute puis enquête dans Odoo —
+        // se passe au serveur, et c'est le plus long.
+        surPhase('recherche');
         try {
           resolve(await api.probe(data.bytes, data.type, instant));
         } catch (error) {

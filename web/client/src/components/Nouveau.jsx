@@ -5,6 +5,7 @@ import { api } from '../api.js';
 import { useCompression } from '../useCompression.js';
 import { archiver, useArchivage } from '../archivage.js';
 import { Apercu } from './Apercu.jsx';
+import { Sonde } from './Sonde.jsx';
 import { usePipeline } from '../usePipeline.js';
 import { duree, mo, usd, horodatage, liste } from '../format.js';
 
@@ -47,6 +48,13 @@ export function Nouveau({ surTermine, surBibliotheque }) {
   const archivage = useArchivage(cibleRef.current?.cle);
   const [sonde, setSonde] = useState(null);
   const [dossier, setDossier] = useState(null);
+  // Une sonde lancée pour un fichier ne doit pas répondre pour le
+  // suivant : on ne garde que la dernière.
+  const sondeCourante = useRef(0);
+  // Ce que le dossier retenu a versé dans le formulaire, pour le
+  // reprendre s'il est retiré ou remplacé — sans toucher à ce que la
+  // personne a saisi elle-même.
+  const apport = useRef({ client: '', termes: [] });
   const [debut, setDebut] = useState(0);
   const [fin, setFin] = useState(0);
   const pipeline = usePipeline();
@@ -100,7 +108,9 @@ export function Nouveau({ surTermine, surBibliotheque }) {
    *  saisie à la main.
    */
   async function ecouter(choisi, total, instant = '') {
-    setSonde({ enCours: true });
+    const numero = ++sondeCourante.current;
+    const actuelle = () => numero === sondeCourante.current;
+    setSonde({ enCours: true, phase: 'extrait', moment: instant });
     try {
       const reglages = await api.settings();
       const vue = await identifier(choisi, {
@@ -108,15 +118,16 @@ export function Nouveau({ surTermine, surBibliotheque }) {
         fenetre: reglages.probe?.window_seconds || 300,
         duree: total,
         moment: instant,
+        surPhase: (phase) => {
+          if (actuelle()) setSonde((s) => (s?.enCours ? { ...s, phase } : s));
+        },
       });
-      setSonde({ ...vue, enCours: false });
+      if (!actuelle()) return;
+      setSonde({ ...vue, enCours: false, moment: instant });
       const retenu = vue.investigation?.record;
-      if (retenu) {
-        setDossier({ ...retenu, auto: Boolean(vue.investigation.auto) });
-        appliquerDossier(retenu);
-      }
+      if (retenu) retenir({ ...retenu, auto: Boolean(vue.investigation.auto) });
     } catch {
-      setSonde(null);
+      if (actuelle()) setSonde(null);
     }
   }
 
@@ -124,8 +135,9 @@ export function Nouveau({ surTermine, surBibliotheque }) {
     const choisi = event.target.files[0] || null;
     setFichier(null);
     setSecondes(0);
+    sondeCourante.current += 1;
     setSonde(null);
-    setDossier(null);
+    retirer();
     if (!choisi) return setLecture('');
     setLecture('Lecture des métadonnées…');
     try {
@@ -164,19 +176,48 @@ export function Nouveau({ surTermine, surBibliotheque }) {
    *  par la sonde : ce qui est déjà saisi n'est jamais écrasé, seulement
    *  complété.
    */
-  /** Charge le contexte Odoo d'un dossier retenu. */
-  async function appliquerDossier(choisi) {
+  /** Reprend ce que le dossier précédent avait versé, et seulement ça :
+   *  une société retapée à la main ou un terme ajouté restent. */
+  function reprendreApport() {
+    const { client: societe, termes } = apport.current;
+    apport.current = { client: '', termes: [] };
+    if (societe) setClient((actuel) => (actuel === societe ? '' : actuel));
+    if (termes.length) {
+      setGlossaire((actuel) => liste(actuel).filter((t) => !termes.includes(t)).join(', '));
+    }
+    setContexteOdoo('');
+  }
+
+  /** Retient un dossier et charge son contexte Odoo. */
+  async function retenir(choisi) {
+    reprendreApport();
+    setDossier(choisi);
     try {
       const pack = await api.odooContext(choisi.model, choisi.id);
-      appliquerContexte({
-        client: pack.client_company,
-        termes: pack.terms,
-        resume: pack.summary,
+      const societe = pack.client_company || '';
+      const termes = pack.terms || [];
+      setClient((actuel) => {
+        if (actuel || !societe) return actuel;
+        apport.current.client = societe;
+        return societe;
       });
+      setGlossaire((actuel) => {
+        const deja = liste(actuel);
+        const nouveaux = termes.filter((t) => !deja.includes(t));
+        apport.current.termes = nouveaux;
+        return [...deja, ...nouveaux].join(', ');
+      });
+      if (pack.summary) setContexteOdoo(pack.summary);
     } catch {
       // Le contexte est un bonus : son échec ne doit pas empêcher de
       // retenir le dossier.
     }
+  }
+
+  /** Aucun dossier : ni dépôt à la fin, ni contexte qui en venait. */
+  function retirer() {
+    setDossier(null);
+    reprendreApport();
   }
 
   function appliquerContexte({ client: societe, termes, resume, invites }) {
@@ -287,11 +328,25 @@ export function Nouveau({ surTermine, surBibliotheque }) {
           <Sonde
             etat={sonde}
             retenu={dossier}
-            surChoix={(choisi) => {
-              // Choisir un dossier, c'est le valider : la transcription y
-              // sera déposée à la fin, sauf à décocher la case plus bas.
-              setDossier({ ...choisi, auto: true });
-              appliquerDossier(choisi);
+            // Choisir un dossier, c'est le valider : la transcription y
+            // sera déposée à la fin, sauf à décocher la case plus bas.
+            surChoix={(choisi) => retenir({ ...choisi, auto: true })}
+            surRetrait={retirer}
+            surAjout={(trouve) => {
+              // Trouvé en guidant la recherche : il rejoint la liste,
+              // retenu, pour qu'on voie d'où il vient et qu'on puisse
+              // encore revenir aux autres.
+              const ajoute = { ...trouve, reason: trouve.reason || 'trouvé en guidant la recherche' };
+              setSonde((s) => ({
+                ...s,
+                candidates: [
+                  ...(s?.candidates || []).filter(
+                    (d) => !(d.id === ajoute.id && d.model === ajoute.model),
+                  ),
+                  ajoute,
+                ],
+              }));
+              retenir({ ...ajoute, auto: true });
             }}
           />
           <Reunions
@@ -350,7 +405,7 @@ export function Nouveau({ surTermine, surBibliotheque }) {
               <button
                 type="button"
                 disabled={enCours}
-                onClick={() => setDossier(null)}
+                onClick={retirer}
                 className="text-[0.8125rem] text-fonce/55 hover:text-fonce"
               >
                 retirer
@@ -430,7 +485,11 @@ export function Nouveau({ surTermine, surBibliotheque }) {
         <Compression compression={compression} />
 
         {pipeline.fenetres.length > 0 ? (
-          <Avancement fenetres={pipeline.fenetres} message={pipeline.message} />
+          <Avancement
+            numero={mode === 'compresser' ? 3 : 4}
+            fenetres={pipeline.fenetres}
+            message={pipeline.message}
+          />
         ) : null}
 
         {pipeline.etat === 'traitement' ? (
@@ -454,6 +513,8 @@ export function Nouveau({ surTermine, surBibliotheque }) {
                   setDossier(null); setClient(''); setParticipants(''); setGlossaire('');
                   setContexteOdoo(''); setDateReunion(''); setDebut(0); setFin(0);
                   cibleRef.current = null;
+                  sondeCourante.current += 1;
+                  apport.current = { client: '', termes: [] };
                   if (champFichier.current) champFichier.current.value = '';
                   window.scrollTo({ top: 0, behavior: 'smooth' });
                 }}
@@ -484,12 +545,14 @@ const LIBELLES = {
  *  trois heures, savoir *laquelle* patine est la seule information qui
  *  aide — c'est aussi elle qu'on pourra relancer seule.
  */
-function Avancement({ fenetres, message }) {
+function Avancement({ numero, fenetres, message }) {
   const finies = fenetres.filter((f) => f.etat === 'terminee').length;
   return (
     <div>
       <div className="flex items-baseline justify-between">
-        <h2 className="titre text-[1.0625rem] font-medium">3. Avancement</h2>
+        {/* Le contexte est masqué en simple compression : la numérotation suit
+            ce qui est affiché, sans doublon ni trou. */}
+        <h2 className="titre text-[1.0625rem] font-medium">{numero}. Avancement</h2>
         <span className="text-[0.875rem] text-fonce/60">
           {finies} / {fenetres.length} fenêtres
         </span>
@@ -559,133 +622,6 @@ function Suggestions({ choisis, surAjout }) {
           {t.term}
         </button>
       ))}
-    </div>
-  );
-}
-
-/** Ce que la sonde a entendu, et les dossiers que ça désigne.
- *
- *  Un seul point d'arrêt dans le flux, et il est ici : lier une
- *  transcription au mauvais dossier la dépose chez un autre client,
- *  visible par toute l'équipe. Le reste peut tourner seul ; ce choix-là
- *  se valide d'un clic.
- */
-function Sonde({ etat, retenu, surChoix }) {
-  if (!etat) return null;
-  if (etat.enCours) {
-    return (
-      <p className="mt-4 text-[0.875rem] text-fonce/55">
-        Écoute des premières minutes pour reconnaître le sujet…
-      </p>
-    );
-  }
-
-  const indices = etat.clues || {};
-  const enquete = etat.investigation || {};
-  const entendu = [...(indices.organisations || []), ...(indices.personnes || [])];
-  if (!entendu.length && !(etat.candidates || []).length) return null;
-
-  const CERTITUDE = {
-    certaine: 'Liaison certaine',
-    probable: 'Liaison probable',
-    incertaine: 'Liaison incertaine',
-  };
-
-  return (
-    <div className="verre mt-4 rounded-xl p-4">
-      <p className="titre text-[0.9375rem] font-medium">Ce qu'on a entendu</p>
-      {indices.resume ? (
-        <p className="mt-1 text-[0.8125rem] text-fonce/70">{indices.resume}</p>
-      ) : null}
-      {entendu.length ? (
-        <ul className="mt-2 flex flex-wrap gap-1.5">
-          {entendu.map((terme) => (
-            <li key={terme}
-                className="rounded-full bg-papier px-2 py-0.5 text-[0.75rem] text-fonce/70">
-              {terme}
-            </li>
-          ))}
-        </ul>
-      ) : null}
-
-      {enquete.reason && !enquete.record ? (
-        <p className="mt-3 text-[0.8125rem] text-fonce/55">
-          Aucun dossier proposé : {enquete.reason}
-        </p>
-      ) : null}
-
-      {(etat.candidates || []).length ? (
-        // Un bloc à part, sur fond clair : c'est une décision à prendre,
-        // pas une information de plus. Chaque dossier est une carte avec
-        // son bouton, et celui qui sera utilisé se voit d'un coup d'œil.
-        <div className="mt-4 rounded-lg border border-turquoise/40 bg-white/80 p-3">
-          <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <p className="titre text-[0.9375rem] font-medium">Dossier Odoo de cette réunion</p>
-            {enquete.record ? (
-              <span className="rounded-full bg-turquoise/20 px-2 py-0.5 text-[0.75rem] font-medium text-turquoise-sombre">
-                {CERTITUDE[enquete.confidence] || 'Proposé'}
-              </span>
-            ) : null}
-          </div>
-          <p className="mt-1 text-[0.8125rem] text-fonce/60">
-            {enquete.record
-              ? enquete.reason
-              : 'Aucun n’est certain : choisis celui qui convient, son contexte guidera la transcription.'}
-          </p>
-          <ul className="mt-3 space-y-2">
-            {etat.candidates.map((dossier) => {
-              const choisi = retenu && retenu.id === dossier.id && retenu.model === dossier.model;
-              return (
-                <li
-                  key={`${dossier.model}-${dossier.id}`}
-                  className={`flex items-center gap-3 rounded-lg border p-2.5 ${
-                    choisi ? 'border-turquoise-sombre bg-turquoise/10' : 'border-bord bg-white'
-                  }`}
-                >
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[0.875rem]">
-                      <span className="titre font-medium">{dossier.name}</span>
-                      {dossier.partner ? <span className="text-fonce/55"> · {dossier.partner}</span> : null}
-                    </p>
-                    <p className="text-[0.75rem] text-fonce/50">
-                      {[dossier.kind, dossier.reason,
-                        dossier.matched ? `trouvé sur « ${dossier.matched} »` : '',
-                        dossier.updated ? `modifié le ${dossier.updated}` : '']
-                        .filter(Boolean).join(' · ')}
-                    </p>
-                  </div>
-                  {choisi ? (
-                    <span className="shrink-0 text-[0.8125rem] font-medium text-turquoise-sombre">
-                      ✓ utilisé
-                    </span>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => surChoix(dossier)}
-                      className="shrink-0 rounded-md bg-fonce px-3 py-1.5 text-[0.8125rem] text-clair hover:bg-fonce-doux"
-                    >
-                      Utiliser
-                    </button>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      ) : null}
-
-      {(enquete.trace || []).length ? (
-        <details className="mt-3">
-          <summary className="cursor-pointer text-[0.75rem] text-fonce/45">
-            Comment on est arrivé là
-          </summary>
-          <ol className="mt-1 space-y-0.5 text-[0.75rem] text-fonce/55">
-            {enquete.trace.map((ligne, i) => (
-              <li key={i}>· {ligne}</li>
-            ))}
-          </ol>
-        </details>
-      ) : null}
     </div>
   );
 }

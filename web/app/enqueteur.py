@@ -224,35 +224,25 @@ def enqueter(
     model_id: str = MODELE_ENQUETE,
     tours_max: int = TOURS_MAX,
     opener: Callable[..., Any] | None = None,
+    echanges: list[dict[str, str]] | None = None,
+    ecartes: list[dict[str, Any]] | None = None,
 ) -> Conclusion:
     """Mène l'enquête et rend une conclusion.
 
     `chercher` et `lire` sont injectés : ils portent la clé Odoo *de la
     personne*, et l'enquêteur ne voit jamais rien qu'elle ne verrait
     pas elle-même.
+
+    `echanges` et `ecartes` servent quand la personne reprend la main :
+    ce qu'elle a dit pour guider la recherche, et les dossiers déjà
+    proposés qu'elle a refusés.
     """
     client = GeminiClient(api_key, opener=opener)
     usage = CloudUsage()
     journal: list[str] = []
     memoire: dict[str, Any] = {}
     contents: list[dict] = [
-        {
-            "role": "user",
-            "parts": [
-                {
-                    "text": (
-                        "Voici ce qu'on a entendu au début de la réunion :\n"
-                        f"- sociétés : {', '.join(indices.get('organisations') or []) or '—'}\n"
-                        f"- personnes : {', '.join(indices.get('personnes') or []) or '—'}\n"
-                        f"- sujets : {', '.join(indices.get('sujets') or []) or '—'}\n"
-                        f"- autres orthographes possibles : "
-                        f"{', '.join(indices.get('variantes') or []) or '—'}\n"
-                        f"- résumé : {indices.get('resume') or '—'}\n\n"
-                        "Quel dossier Odoo ?"
-                    )
-                }
-            ],
-        }
+        {"role": "user", "parts": [{"text": _demande(indices, echanges, ecartes)}]}
     ]
 
     for tour in range(tours_max):
@@ -307,6 +297,46 @@ def enqueter(
         journal=journal,
         usage=usage,
     )
+
+
+def _demande(
+    indices: dict[str, Any],
+    echanges: list[dict[str, str]] | None = None,
+    ecartes: list[dict[str, Any]] | None = None,
+) -> str:
+    """Le premier message : les indices, puis, si la personne a repris la
+    main, ce qu'elle a dit et ce qu'elle a déjà refusé."""
+    texte = (
+        "Voici ce qu'on a entendu au début de la réunion :\n"
+        f"- sociétés : {', '.join(indices.get('organisations') or []) or '—'}\n"
+        f"- personnes : {', '.join(indices.get('personnes') or []) or '—'}\n"
+        f"- sujets : {', '.join(indices.get('sujets') or []) or '—'}\n"
+        f"- autres orthographes possibles : "
+        f"{', '.join(indices.get('variantes') or []) or '—'}\n"
+        f"- résumé : {indices.get('resume') or '—'}\n"
+    )
+    if ecartes:
+        texte += (
+            "\nDéjà proposés et **refusés** par la personne — ne les propose "
+            "plus :\n" + "\n".join(
+                f"- {e.get('model', '')} {e.get('id', '')} « {e.get('name', '')} »"
+                for e in ecartes
+            ) + "\n"
+        )
+    if echanges:
+        # La personne connaît ses dossiers mieux que les indices : ce
+        # qu'elle dit prime sur ce qu'on a entendu.
+        texte += "\nLa personne t'a guidé — ses indications priment sur les indices :\n"
+        texte += "\n".join(
+            f"{'Personne' if e.get('role') == 'personne' else 'Toi'} : {e.get('texte', '')}"
+            for e in echanges
+        ) + "\n"
+        texte += (
+            "\nDans `raison`, réponds-lui directement, en une ou deux phrases : "
+            "ce que tu as trouvé, ou pourquoi rien ne colle. Cite dans `autres` "
+            "tout dossier plausible : c'est elle qui choisira.\n"
+        )
+    return texte + "\nQuel dossier Odoo ?"
 
 
 def enqueter_confirme(
