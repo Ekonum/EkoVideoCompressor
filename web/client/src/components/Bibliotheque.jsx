@@ -140,7 +140,7 @@ export function Bibliotheque({ surOuvrir }) {
         <div className="w-full sm:w-80">
           <Champ
             ref={champRecherche}
-            label={`Rechercher dans les transcriptions · ${MOD} F`}
+            label="Rechercher dans les transcriptions"
             placeholder="un mot, un nom, une décision…"
             value={recherche}
             onChange={(e) => setRecherche(e.target.value)}
@@ -219,7 +219,7 @@ export function Bibliotheque({ surOuvrir }) {
             <thead className="border-b border-bord">
               <tr>
                 {colonne('title', 'Réunion')}
-                {colonne('quand', 'Date')}
+                {colonne('quand', 'Date', 'whitespace-nowrap')}
                 {colonne('duration_seconds', 'Durée')}
                 {colonne('status', 'État')}
                 {colonne('cost_usd', 'Coût', 'text-right')}
@@ -242,16 +242,20 @@ export function Bibliotheque({ surOuvrir }) {
                 >
                   <td className="px-4 py-3">
                     <span className="titre font-medium">{job.title || job.filename}</span>
-                    {job.has_versions ? (
-                      <span className="ml-2 inline-block whitespace-nowrap rounded px-1.5 py-0.5 text-[0.75rem] font-medium text-violet ring-1 ring-violet/35">
-                        version antérieure
+                    {/* Sur la ligne du fichier plutôt qu'à la suite du titre :
+                        derrière un titre long, l'étiquette passait seule à la
+                        ligne et flottait. */}
+                    {job.title || job.has_versions ? (
+                      <span className="block text-[0.8125rem] text-fonce/45">
+                        {job.title ? job.filename : null}
+                        {job.title && job.has_versions ? ' · ' : null}
+                        {job.has_versions ? (
+                          <span className="whitespace-nowrap text-violet">version antérieure</span>
+                        ) : null}
                       </span>
                     ) : null}
-                    {job.title ? (
-                      <span className="block text-[0.8125rem] text-fonce/45">{job.filename}</span>
-                    ) : null}
                   </td>
-                  <td className="px-4 py-3 text-fonce/70">{jour(job.quand)}</td>
+                  <td className="whitespace-nowrap px-4 py-3 text-fonce/70">{jour(job.quand)}</td>
                   <td className="px-4 py-3 tabular-nums text-fonce/70">{duree(job.duration_seconds)}</td>
                   <td className="px-4 py-3">
                     <Etat valeur={job.status} />
