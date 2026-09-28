@@ -4,6 +4,13 @@ on:
   push:
     branches:
       - main
+    # Une poussée qui ne touche que la webapp ne concerne pas l'app macOS :
+    # inutile de mobiliser un runner macOS pour conclure « pas de release ».
+    paths-ignore:
+      - 'web/**'
+      - 'ekonum.yaml'
+      - '.github/workflows/deploy-web.yml'
+      - '.github/workflows/build-web.yml'
   workflow_dispatch:
 
 concurrency:

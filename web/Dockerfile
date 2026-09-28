@@ -20,7 +20,7 @@ ARG VERSION=0.0.0-dev
 ARG GIT_SHA=0000000
 ARG BUILT_AT=1970-01-01T00:00:00Z
 RUN pip install --no-cache-dir pyyaml==6.0.2
-COPY web/ekonum.yaml /m/ekonum.yaml
+COPY ekonum.yaml /m/ekonum.yaml
 RUN python -c "import json, os, yaml; \
 d = yaml.safe_load(open('/m/ekonum.yaml', encoding='utf-8')); \
 d.update(version=os.environ['VERSION'], git_sha=os.environ['GIT_SHA'], built_at=os.environ['BUILT_AT']); \

@@ -13,12 +13,14 @@ on:
     branches: [main]
     paths:
       - 'web/**'
+      - 'ekonum.yaml'
       - 'cloud_transcription.py'
       - 'odoo_client.py'
       - '.github/workflows/deploy-web.yml'
   pull_request:
     paths:
       - 'web/**'
+      - 'ekonum.yaml'
       - 'cloud_transcription.py'
       - 'odoo_client.py'
   workflow_dispatch:

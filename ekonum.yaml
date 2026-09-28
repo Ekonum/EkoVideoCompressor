@@ -1,6 +1,9 @@
 # Manifeste Ekonum de la webapp transcript.ekonum.fr — contrat d'application du portail.
 # Spécification : https://github.com/Ekonum/ekonum-portail/blob/main/docs/CONTRAT-APPLICATION.md
 #
+# Entrée principale du dépôt. L'application macOS, qu'elle remplace, a la sienne dans
+# macos/ekonum.yaml.
+#
 # Ce fichier décrit ce QUI EXISTE, jamais ce qui est prévu : l'API documentée, les journaux
 # JSON structurés, le webhook de déprovisionnement et l'identité portail ne sont pas déclarés,
 # parce qu'ils n'existent pas encore. Le portail signalera ces absences — c'est son rôle.
@@ -45,7 +48,7 @@ release_notes: https://github.com/Ekonum/EkoVideoCompressor/releases
 environments:
   production:
     url: https://transcript.ekonum.fr
-    channel: edge                 # image `preprod`, publiée depuis la branche web : `stable` à la fusion
+    channel: stable               # image `latest`, publiée depuis main
     target: vps-prod
 
 state:
