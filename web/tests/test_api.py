@@ -2100,7 +2100,7 @@ class DriveStockageHttpTestCase(unittest.TestCase):
 class IdentiteGoogleTestCase(unittest.TestCase):
     """La fédération d'identité, doublée au niveau HTTP."""
 
-    FOURNISSEUR = "projects/123/locations/global/workloadIdentityPools/transcript/providers/vps"
+    FOURNISSEUR = "projects/123/locations/global/workloadIdentityPools/transcript/providers/serveur"
     COMPTE = "transcript-stockage@transcript-ekonum.iam.gserviceaccount.com"
 
     def setUp(self):

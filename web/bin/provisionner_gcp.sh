@@ -10,7 +10,7 @@
 # Ce que ça crée, et rien d'autre :
 #   - les API IAM, IAM Credentials, STS et Drive dans le projet ;
 #   - le compte de service transcript-stockage, sans aucune clé ;
-#   - le pool « transcript » et son fournisseur OIDC « vps », qui ne croit
+#   - le pool « transcript » et son fournisseur OIDC « serveur », qui ne croit
 #     que les jetons signés par la clé du serveur (JWKS déposé ici, jamais
 #     récupéré sur le réseau) et dont le sujet vaut « transcript » ;
 #   - le droit, pour ce seul sujet, d'emprunter ce seul compte ;
@@ -27,7 +27,7 @@ RETIRER_HUMAINS="${3:-}"
 EMETTEUR="https://transcript.ekonum.fr"
 SUJET="transcript"
 POOL="transcript"
-FOURNISSEUR="vps"
+FOURNISSEUR="serveur"
 COMPTE_NOM="transcript-stockage"
 COMPTE="${COMPTE_NOM}@${PROJET}.iam.gserviceaccount.com"
 DRIVE_NOM="transcript — stockage"
@@ -82,6 +82,11 @@ g iam service-accounts add-iam-policy-binding "$COMPTE" \
 
 etape "Drive partagé « ${DRIVE_NOM} »"
 JETON="$(gcloud auth print-access-token)"
+if ! curl -fsS --data-urlencode "access_token=${JETON}" https://oauth2.googleapis.com/tokeninfo | grep -q 'auth/drive'; then
+  echo "La session gcloud n'a pas l'accès Drive. Relancer :" >&2
+  echo "  gcloud auth login --enable-gdrive-access --force" >&2
+  exit 1
+fi
 drive() { curl -fsS -H "Authorization: Bearer ${JETON}" -H "Content-Type: application/json" "$@"; }
 DRIVE_ID="$(drive "https://www.googleapis.com/drive/v3/drives?pageSize=100&fields=drives(id,name)" \
   | python3 -c 'import json,sys; n=sys.argv[1]; print(next((d["id"] for d in json.load(sys.stdin).get("drives",[]) if d["name"]==n),""))' "$DRIVE_NOM")"
