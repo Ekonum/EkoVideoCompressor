@@ -434,10 +434,15 @@ class PortailTestCase(_Fixture):
         self.assertEqual(vue["id"], "transcript")
 
     def test_le_manifeste_source_decrit_bien_la_webapp(self):
-        """Garde-fou : l'identifiant du catalogue ne change jamais."""
-        texte = (Path(__file__).resolve().parents[1] / "ekonum.yaml").read_text(encoding="utf-8")
+        """Garde-fou : l'identifiant du catalogue ne change jamais, et
+        l'entrée macOS du même dépôt pointe vers lui comme remplaçant."""
+        depot = Path(__file__).resolve().parents[2]
+        texte = (depot / "ekonum.yaml").read_text(encoding="utf-8")
         self.assertIn("id: transcript", texte)
         self.assertIn("kind: application", texte)
+        macos = (depot / "macos" / "ekonum.yaml").read_text(encoding="utf-8")
+        self.assertIn("lifecycle: deprecated", macos)
+        self.assertIn("replaced_by: transcript", macos)
 
 
 class SettingsTestCase(unittest.TestCase):
