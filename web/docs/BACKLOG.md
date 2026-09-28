@@ -38,25 +38,6 @@ réunion Acritec du 4 septembre transcrite deux fois. Pas de choix de modèle
 exposé aux utilisateurs : ils ne connaissent pas ces noms, et ce n'est pas à
 eux d'arbitrer.
 
-## Mettre en service le stockage Drive — prévu le week-end du 26-27 septembre
-
-Le code est prêt et dort (`EKOVIDEO_GCP_FOURNISSEUR` / `EKOVIDEO_GCP_COMPTE` /
-`EKOVIDEO_VIDEO_DOSSIER` vides). **Aucune clé JSON** : le serveur signe
-lui-même un jeton avec une clé née dans son volume (`app/identite.py`), que
-la fédération d'identité de Google échange contre le compte de service.
-Tout le côté Google tient dans `bin/provisionner_gcp.sh`, dans le projet
-GCP propre à transcript :
-
-1. `gcloud auth login --enable-gdrive-access` — le seul geste humain ;
-2. récupérer le JWKS du serveur (`python -m web.app.identite` dans le
-   conteneur), puis lancer le script : API, compte de service sans clé,
-   pool et fournisseur, droit d'emprunt, Drive partagé ;
-3. poser les trois variables qu'il affiche dans le stack, faire un premier
-   vrai envoi, puis relancer avec `--retirer-humains`.
-
-**Rotation** : supprimer `/data/identite-google.pem`, relancer
-`python -m web.app.identite` et le script — il remet le JWKS à jour.
-
 ## Migrer les vidéos existantes du Drive vers ce stockage
 
 **Pourquoi** : le Drive de l'équipe déborde de vidéos de réunions (plus d'une

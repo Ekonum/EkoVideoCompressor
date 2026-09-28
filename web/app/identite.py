@@ -20,7 +20,7 @@ compte de service, lui-même membre d'*un* Drive partagé.
 
 **La rotation est un geste d'administration**, pas un déploiement :
 supprimer le fichier, relancer ``python -m app.identite``, redéposer le
-JWKS dans le fournisseur (voir docs/STOCKAGE-VIDEO.md).
+JWKS dans le fournisseur (voir web/docs/STOCKAGE-VIDEO.md).
 """
 
 from __future__ import annotations
