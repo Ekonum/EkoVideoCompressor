@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { Bouton, Champ, Etat, Erreur, Vide } from './Communs.jsx';
 import { duree, usd, jour, horodatage } from '../format.js';
-import { ALT, MOD, useRaccourcis } from '../raccourcis.js';
+import { MOD, useRaccourcis } from '../raccourcis.js';
 import { surlignerMots } from '../surlignage.jsx';
 
 /** La bibliothèque : une table, pas une grille de cartes.
@@ -214,13 +214,7 @@ export function Bibliotheque({ surOuvrir }) {
           </Vide>
         )
       ) : (
-        <>
-        <p className="mt-6 h-4 text-right text-[0.75rem] text-fonce/40">
-          {jobs.length > 1 && !choisis.size
-            ? `${ALT}-clic pour sélectionner plusieurs réunions · Maj-clic pour une plage`
-            : ''}
-        </p>
-        <div className="verre mt-1 overflow-x-auto rounded-xl">
+        <div className="verre mt-6 overflow-x-auto rounded-xl">
           <table className="w-full min-w-[46rem] border-collapse">
             <thead className="border-b border-bord">
               <tr>
@@ -292,7 +286,6 @@ export function Bibliotheque({ surOuvrir }) {
             </tbody>
           </table>
         </div>
-        </>
       )}
       {choisis.size && !resultats ? (
         <Selection

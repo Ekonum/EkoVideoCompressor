@@ -42,6 +42,7 @@ export default function App() {
       <Entete
         vue={vue}
         surVue={(cible) => { setOuvert(null); setVue(cible); }}
+        surAide={() => setAide(true)}
       />
       <main>
         {enrolement ? (
