@@ -1,11 +1,15 @@
 import { useEffect } from 'react';
-import { MOD } from '../raccourcis.js';
+import { ALT, MOD } from '../raccourcis.js';
 
 const RACCOURCIS = [
   ['Bibliothèque', [
     [[MOD, 'F'], 'Rechercher dans les transcriptions'],
     [['/'], 'Rechercher dans les transcriptions'],
     [['N'], 'Nouvelle transcription'],
+    [[ALT, 'clic'], 'Sélectionner plusieurs réunions'],
+    [['Maj', 'clic'], 'Sélectionner une plage'],
+    [[MOD, 'A'], 'Tout sélectionner'],
+    [['Échap'], 'Annuler la sélection'],
   ]],
   ['Transcription ouverte', [
     [[MOD, 'F'], 'Chercher dans la transcription'],

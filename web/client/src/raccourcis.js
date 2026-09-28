@@ -10,6 +10,7 @@ import { useEffect, useRef } from 'react';
 
 export const MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.userAgent);
 export const MOD = MAC ? '⌘' : 'Ctrl';
+export const ALT = MAC ? '⌥' : 'Alt';
 
 function enSaisie(cible) {
   if (!cible) return false;

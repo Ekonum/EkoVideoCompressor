@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { Bouton, Champ, Etat, Erreur, Vide } from './Communs.jsx';
 import { duree, usd, jour, horodatage } from '../format.js';
-import { MOD, useRaccourcis } from '../raccourcis.js';
+import { ALT, MOD, useRaccourcis } from '../raccourcis.js';
 
 /** La bibliothèque : une table, pas une grille de cartes.
  *
@@ -19,8 +19,14 @@ export function Bibliotheque({ surOuvrir }) {
   const [retention, setRetention] = useState(30);
   const champRecherche = useRef(null);
 
+  // Sélection multiple : ⌥-clic (ou ⌘/Ctrl-clic) ajoute ou retire une
+  // ligne, Maj-clic prend toute la plage depuis la dernière touchée. Tant
+  // qu'il y a une sélection, un simple clic la complète au lieu d'ouvrir.
+  const [choisis, setChoisis] = useState(() => new Set());
+  const ancre = useRef(null);
+
   const chercher = () => { champRecherche.current?.focus(); champRecherche.current?.select(); };
-  useRaccourcis({ 'mod+f': chercher, '/': chercher });
+  const vider = () => { setChoisis(new Set()); ancre.current = null; };
 
   const recharger = useCallback(() => {
     api.listJobs(etat).then(setJobs).catch((e) => setErreur(e.message));
@@ -55,6 +61,17 @@ export function Bibliotheque({ surOuvrir }) {
     return () => clearTimeout(attente);
   }, [recherche]);
 
+  useEffect(() => { vider(); }, [etat]);
+  // Une réunion sortie de la liste (jetée, archivée) sort de la sélection.
+  useEffect(() => {
+    if (!jobs) return;
+    setChoisis((c) => {
+      const presents = new Set(jobs.map((j) => j.job_id));
+      const reste = new Set([...c].filter((id) => presents.has(id)));
+      return reste.size === c.size ? c : reste;
+    });
+  }, [jobs]);
+
   const triees = useMemo(() => {
     if (!jobs) return [];
     // La date qui compte est celle de la réunion ; à défaut, celle du dépôt.
@@ -67,6 +84,41 @@ export function Bibliotheque({ surOuvrir }) {
     });
     return copie;
   }, [jobs, tri]);
+
+  useRaccourcis({
+    'mod+f': chercher,
+    '/': chercher,
+    'mod+a': (e) => {
+      // Dans un champ, ⌘A sélectionne le texte, comme partout.
+      if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return false;
+      if (resultats || !triees.length) return false;
+      setChoisis(new Set(triees.map((j) => j.job_id)));
+      return undefined;
+    },
+    escape: () => (choisis.size ? vider() : false),
+  });
+
+  const cliquerLigne = (evenement, id) => {
+    const ordre = triees.map((j) => j.job_id);
+    if (evenement.shiftKey) {
+      const depart = ordre.indexOf(ancre.current);
+      const arrivee = ordre.indexOf(id);
+      const [de, a] = depart < 0 ? [arrivee, arrivee] : [Math.min(depart, arrivee), Math.max(depart, arrivee)];
+      setChoisis((c) => new Set([...c, ...ordre.slice(de, a + 1)]));
+      if (depart < 0) ancre.current = id;
+      return;
+    }
+    if (evenement.altKey || evenement.metaKey || evenement.ctrlKey || choisis.size) {
+      setChoisis((c) => {
+        const suite = new Set(c);
+        if (suite.has(id)) suite.delete(id); else suite.add(id);
+        return suite;
+      });
+      ancre.current = id;
+      return;
+    }
+    surOuvrir(id);
+  };
 
   const colonne = (champ, libelle, classe = '') => (
     <th className={`px-4 py-2 text-left text-[0.8125rem] font-medium text-fonce/60 ${classe}`}>
@@ -161,7 +213,13 @@ export function Bibliotheque({ surOuvrir }) {
           </Vide>
         )
       ) : (
-        <div className="verre mt-6 overflow-x-auto rounded-xl">
+        <>
+        <p className="mt-6 h-4 text-right text-[0.75rem] text-fonce/40">
+          {jobs.length > 1 && !choisis.size
+            ? `${ALT}-clic pour sélectionner plusieurs réunions · Maj-clic pour une plage`
+            : ''}
+        </p>
+        <div className="verre mt-1 overflow-x-auto rounded-xl">
           <table className="w-full min-w-[46rem] border-collapse">
             <thead className="border-b border-bord">
               <tr>
@@ -177,8 +235,15 @@ export function Bibliotheque({ surOuvrir }) {
               {triees.map((job) => (
                 <tr
                   key={job.job_id}
-                  onClick={() => surOuvrir(job.job_id)}
-                  className="cursor-pointer border-b border-bord/50 last:border-0 transition-colors hover:bg-white/45"
+                  onClick={(e) => cliquerLigne(e, job.job_id)}
+                  // Maj-clic et ⌥-clic sélectionneraient aussi du texte.
+                  onMouseDown={(e) => { if (e.shiftKey || e.altKey) e.preventDefault(); }}
+                  aria-selected={choisis.has(job.job_id)}
+                  className={`cursor-pointer border-b border-bord/50 last:border-0 transition-colors ${
+                    choisis.has(job.job_id)
+                      ? 'bg-turquoise/25 shadow-[inset_3px_0_0_#14A87B] hover:bg-turquoise/30'
+                      : 'hover:bg-white/45'
+                  }`}
                 >
                   <td className="px-4 py-3">
                     <span className="titre font-medium">{job.title || job.filename}</span>
@@ -226,8 +291,125 @@ export function Bibliotheque({ surOuvrir }) {
             </tbody>
           </table>
         </div>
+        </>
       )}
+      {choisis.size && !resultats ? (
+        <Selection
+          jobs={triees.filter((j) => choisis.has(j.job_id))}
+          etat={etat}
+          total={triees.length}
+          surTout={() => setChoisis(new Set(triees.map((j) => j.job_id)))}
+          surVider={vider}
+          surFait={recharger}
+          surErreur={setErreur}
+        />
+      ) : null}
     </section>
+  );
+}
+
+/** Ce qu'on peut faire d'une sélection.
+ *
+ *  Une barre flottante, qui n'apparaît qu'avec la sélection : les mêmes
+ *  gestes que sur une ligne, appliqués à toutes. Les réunions partent
+ *  une à une, et l'avancement se voit.
+ */
+function Selection({ jobs, etat, total, surTout, surVider, surFait, surErreur }) {
+  const [cours, setCours] = useState(null); // { libelle, fait, total }
+  const [bilan, setBilan] = useState('');
+
+  const appliquer = async (libelle, action, cibles = jobs) => {
+    setBilan('');
+    const echecs = [];
+    setCours({ libelle, fait: 0, total: cibles.length });
+    for (const [rang, job] of cibles.entries()) {
+      try { await action(job.job_id); } catch (e) { echecs.push(e.message); }
+      setCours({ libelle, fait: rang + 1, total: cibles.length });
+    }
+    setCours(null);
+    if (echecs.length) surErreur(`${echecs.length} réunion(s) en échec : ${echecs[0]}`);
+    surFait();
+    return cibles.length - echecs.length;
+  };
+
+  const n = jobs.length;
+  const pluriel = n > 1 ? 's' : '';
+  const terminees = jobs.filter((j) => j.status === 'termine');
+
+  const bouton = (libelle, surClic, titre, danger = false) => (
+    <button
+      type="button"
+      title={titre}
+      disabled={Boolean(cours)}
+      onClick={surClic}
+      className={`rounded-md px-2.5 py-1 text-[0.8125rem] transition-colors hover:bg-white/10 disabled:opacity-40 ${
+        danger ? 'text-[#ffb4ab]' : 'text-clair'
+      }`}
+    >
+      {libelle}
+    </button>
+  );
+
+  return (
+    <div
+      role="toolbar"
+      aria-label="Actions sur la sélection"
+      className="fixed inset-x-0 bottom-6 z-40 mx-auto flex w-fit max-w-[calc(100vw-2rem)] flex-wrap items-center gap-1 rounded-xl bg-fonce px-3 py-2 text-clair shadow-2xl"
+    >
+      <span className="px-2 text-[0.8125rem] tabular-nums text-clair/70">
+        {cours
+          ? `${cours.libelle} ${cours.fait}/${cours.total}…`
+          : bilan || `${n} sélectionnée${pluriel}`}
+      </span>
+      <span className="mx-1 h-4 w-px bg-clair/20" />
+      {etat === 'actif' ? (
+        <>
+          {bouton('Archiver', () => appliquer('Archivage', api.archiver), 'Sortir de la bibliothèque, sans perdre')}
+          {bouton('Jeter', () => appliquer('Mise à la corbeille', api.jeter), 'Mettre à la corbeille — récupérable')}
+          {bouton(
+            'Refaire titre et noms',
+            async () => {
+              const faites = await appliquer('Relecture', (id) => api.reenrichir(id), terminees);
+              setBilan(`${faites} relue${faites > 1 ? 's' : ''}`);
+            },
+            terminees.length < n
+              ? `Relit le texte déjà transcrit — seules les ${terminees.length} réunion(s) terminées sont concernées.`
+              : 'Relit le texte déjà transcrit pour refaire titre, noms et corrections — moins d’un centime chacune.',
+          )}
+        </>
+      ) : null}
+      {etat === 'archive' ? (
+        <>
+          {bouton('Restaurer', () => appliquer('Restauration', api.restaurer), 'Remettre dans la bibliothèque')}
+          {bouton('Jeter', () => appliquer('Mise à la corbeille', api.jeter), 'Mettre à la corbeille — récupérable')}
+        </>
+      ) : null}
+      {etat === 'corbeille' ? (
+        <>
+          {bouton('Restaurer', () => appliquer('Restauration', api.restaurer), 'Remettre dans la bibliothèque')}
+          {bouton(
+            'Supprimer définitivement',
+            () => {
+              if (!window.confirm(`Supprimer définitivement ${n} réunion${pluriel} ? Rien ne sera récupérable.`)) return;
+              appliquer('Suppression', api.supprimerDefinitivement);
+            },
+            'Irréversible',
+            true,
+          )}
+        </>
+      ) : null}
+      <span className="mx-1 h-4 w-px bg-clair/20" />
+      {n < total ? bouton(`Tout (${total})`, surTout, `Tout sélectionner (${MOD} A)`) : null}
+      <button
+        type="button"
+        onClick={surVider}
+        aria-label="Annuler la sélection"
+        title="Annuler la sélection (Échap)"
+        className="rounded-md px-2 text-[1.125rem] leading-none text-clair/60 hover:bg-white/10 hover:text-clair"
+      >
+        ×
+      </button>
+    </div>
   );
 }
 
