@@ -1,0 +1,8 @@
+# Le serveur reste volontairement maigre : le VPS partagé tourne avec
+# mem_limit 256m. FastAPI + uvicorn pour le multipart/SSE/tâches de fond,
+# PyJWT pour vérifier le jeton Cloudflare Access. Tout le reste
+# (transcription, coûts, découpage) vient de cloud_transcription.py,
+# qui est en stdlib pur.
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pyjwt[crypto]==2.10.1

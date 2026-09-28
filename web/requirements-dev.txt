@@ -1,0 +1,3 @@
+-r requirements.txt
+# TestClient de Starlette
+httpx==0.28.1

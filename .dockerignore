@@ -1,0 +1,21 @@
+# L'image ne prend que le serveur, le client construit et le moteur
+# partagé. Tout le reste — l'app macOS, la pile ML locale, les modèles —
+# n'a rien à y faire et pèserait des gigaoctets.
+.git
+.github
+macos/
+tests/
+transcription_eval/
+spike/
+dist/
+build/
+bin/
+node_modules/
+web/client/node_modules/
+web/client/dist/
+web/state/
+*.spec
+*.icns
+*.png
+__pycache__/
+*.pyc

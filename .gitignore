@@ -14,6 +14,12 @@ build/
 *.spec
 !video_compactor.spec
 !ekovideo_engine.spec
-bin/
+/bin/
 RELEASE_NOTES.md
 _build_version.py
+
+# État local du serveur web (base + fenêtres en transit)
+web/state/
+state/
+web/client/node_modules/
+web/client/dist/

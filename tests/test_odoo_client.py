@@ -722,6 +722,75 @@ class ExtractOdooGlossaryCandidatesTest(unittest.TestCase):
             self.assertNotIn(stopword, terms)
         self.assertIn("Robin", terms)
 
+    def test_drops_sentence_openers_seen_lowercase_elsewhere(self):
+        primary = {
+            "model": "crm.lead", "id": 1, "display_name": "", "raw": {},
+            "body": (
+                "Voici le point Peppol. Je relance David. "
+                "Ok pour la suite, je te rappelle voici pourquoi."
+            ),
+            "chatter": [],
+        }
+        terms = extract_odoo_glossary_candidates(primary, [])
+        for bruit in ("Voici", "Je", "Ok"):
+            self.assertNotIn(bruit, terms)
+        self.assertIn("Peppol", terms)
+        self.assertIn("David", terms)
+
+    def test_drops_common_words_even_in_a_short_text(self):
+        """Un compte-rendu court ne contient pas forcément la variante
+        minuscule : la liste de mots courants prend le relais."""
+        primary = {
+            "model": "crm.lead", "id": 1, "display_name": "", "raw": {},
+            "body": "Synthèse. Plusieurs sujets. L'objectif : Chorus Pro.",
+            "chatter": [],
+        }
+        terms = extract_odoo_glossary_candidates(primary, [])
+        for bruit in ("Synthèse", "Plusieurs", "L'objectif"):
+            self.assertNotIn(bruit, terms)
+        self.assertIn("Chorus Pro", terms)
+
+    def test_never_spans_a_line_break(self):
+        primary = {
+            "model": "crm.lead", "id": 1, "display_name": "", "raw": {},
+            "body": "Acritec\nCompte-rendu de la réunion",
+            "chatter": [],
+        }
+        terms = extract_odoo_glossary_candidates(primary, [])
+        self.assertIn("Acritec", terms)
+        self.assertFalse([t for t in terms if "\n" in t])
+
+    def test_keeps_a_structural_name_written_lowercase_elsewhere(self):
+        primary = {
+            "model": "crm.lead", "id": 1, "display_name": "Ivérif",
+            "raw": {"partner_id": [9, "Ivérif"]},
+            "body": "le produit ivérif part en production",
+            "chatter": [],
+        }
+        self.assertIn("Ivérif", extract_odoo_glossary_candidates(primary, []))
+
+    def test_strips_a_leading_common_word_instead_of_dropping_the_name(self):
+        primary = {
+            "model": "crm.lead", "id": 1, "display_name": "", "raw": {},
+            "body": "C'était HeyGen. Après HeyGen, on a vu Côté Acritec.",
+            "chatter": [],
+        }
+        terms = extract_odoo_glossary_candidates(primary, [])
+        self.assertIn("HeyGen", terms)
+        self.assertIn("Acritec", terms)
+        self.assertFalse([t for t in terms if t.startswith(("C'", "Après", "Côté"))])
+
+    def test_keeps_an_elided_article_that_belongs_to_the_name(self):
+        """« L'objectif » est une élision, « L'Oréal » un nom."""
+        primary = {
+            "model": "crm.lead", "id": 1, "display_name": "", "raw": {},
+            "body": "L'Oréal nous répond. L'objectif reste le même.",
+            "chatter": [],
+        }
+        terms = extract_odoo_glossary_candidates(primary, [])
+        self.assertIn("L'Oréal", terms)
+        self.assertNotIn("L'objectif", terms)
+
     def test_caps_at_max_terms(self):
         body = " ".join(f"Personne{i}" for i in range(200))
         primary = {
