@@ -5,6 +5,7 @@ import { horodatage, usd, jour, mo } from '../format.js';
 import { useArchivage } from '../archivage.js';
 import { AvancementArchivage } from './Nouveau.jsx';
 import { MOD, useRaccourcis } from '../raccourcis.js';
+import { plier, surligner } from '../surlignage.jsx';
 
 /** Fiche d'une transcription : la lire, la corriger, la relancer.
  *
@@ -389,53 +390,11 @@ function Copier({ texte, libelle = 'Copier la transcription' }) {
   );
 }
 
-/** « 17:29 » ou « 1:02:03 » → secondes ; null si illisible. */
-/** Minuscules sans accents, caractère par caractère — la longueur est
- *  gardée, pour que les positions trouvées valent dans le texte d'origine. */
-function plier(texte) {
-  return [...String(texte || '')]
-    .map((c) => c.normalize('NFD').replace(/\p{Mn}/gu, '').toLowerCase().slice(0, 1) || c)
-    .join('');
-}
-
 /** Un mot ou un nom — pas une phrase : c'est ce qu'on peut corriger d'un
  *  remplacement. */
 function estUnMot(texte) {
   const t = String(texte || '').trim();
   return Boolean(t) && t.split(/\s+/).length <= 3;
-}
-
-/** Le texte, le terme cherché marqué partout où il apparaît.
- *
- *  `actif` désigne l'occurrence courante d'une recherche (les autres
- *  restent pâles) ; sans lui, toutes sont marquées franchement. */
-function surligner(texte, terme, actif) {
-  const plie = plier(texte);
-  const cible = plier(terme.trim());
-  if (!cible) return texte;
-  const morceaux = [];
-  let depuis = 0;
-  let k = 0;
-  let trouve = plie.indexOf(cible);
-  while (trouve >= 0) {
-    morceaux.push(texte.slice(depuis, trouve));
-    const franc = actif === undefined || actif === k;
-    morceaux.push(
-      <mark
-        key={trouve}
-        className={`rounded px-0.5 text-fonce ${
-          franc ? 'bg-turquoise/60 ring-1 ring-turquoise-sombre' : 'bg-turquoise/20'
-        }`}
-      >
-        {texte.slice(trouve, trouve + cible.length)}
-      </mark>,
-    );
-    depuis = trouve + cible.length;
-    trouve = plie.indexOf(cible, depuis);
-    k += 1;
-  }
-  morceaux.push(texte.slice(depuis));
-  return morceaux;
 }
 
 /** Toutes les occurrences d'un terme : la réplique, et le rang dans la
@@ -457,6 +416,7 @@ function occurrencesDe(segments, terme) {
   return liste;
 }
 
+/** « 17:29 » ou « 1:02:03 » → secondes ; null si illisible. */
 function lireHorodatage(texte) {
   const parties = String(texte || '').trim().split(':').map(Number);
   if (!parties.length || parties.some((p) => Number.isNaN(p))) return null;

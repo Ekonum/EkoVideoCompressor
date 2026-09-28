@@ -3,6 +3,7 @@ import { api } from '../api.js';
 import { Bouton, Champ, Etat, Erreur, Vide } from './Communs.jsx';
 import { duree, usd, jour, horodatage } from '../format.js';
 import { ALT, MOD, useRaccourcis } from '../raccourcis.js';
+import { surlignerMots } from '../surlignage.jsx';
 
 /** La bibliothèque : une table, pas une grille de cartes.
  *
@@ -195,7 +196,7 @@ export function Bibliotheque({ surOuvrir }) {
       <Erreur>{erreur}</Erreur>
 
       {resultats ? (
-        <Resultats resultats={resultats} surOuvrir={(id) => surOuvrir(id, recherche.trim())} />
+        <Resultats resultats={resultats} requete={recherche} surOuvrir={(id) => surOuvrir(id, recherche.trim())} />
       ) : jobs === null ? (
         <p className="py-16 text-center text-fonce/50">Chargement…</p>
       ) : jobs.length === 0 ? (
@@ -466,7 +467,7 @@ function Actions({ job, etat, surFait, surErreur }) {
   return bouton('Restaurer', api.restaurer, 'Remettre dans la bibliothèque');
 }
 
-function Resultats({ resultats, surOuvrir }) {
+function Resultats({ resultats, requete, surOuvrir }) {
   if (resultats.length === 0) {
     return <Vide titre="Rien trouvé">Aucun passage ne contient ces mots.</Vide>;
   }
@@ -482,7 +483,7 @@ function Resultats({ resultats, surOuvrir }) {
               {hit.title || hit.filename} · {horodatage(hit.start_second)}
               {hit.speaker ? ` · ${hit.speaker}` : ''}
             </span>
-            <span className="mt-0.5 block">{hit.text}</span>
+            <span className="mt-0.5 block">{surlignerMots(hit.text, requete)}</span>
           </button>
         </li>
       ))}
