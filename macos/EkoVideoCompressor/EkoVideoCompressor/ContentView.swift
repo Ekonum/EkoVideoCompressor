@@ -2472,6 +2472,7 @@ struct LibraryView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            TranscriptSyncBanner()
             libraryHeader
             Divider()
             if library.isLoading && library.rows.isEmpty {

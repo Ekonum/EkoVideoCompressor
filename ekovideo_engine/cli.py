@@ -266,6 +266,13 @@ def build_parser() -> argparse.ArgumentParser:
     logs = sub.add_parser("export-logs")
     logs.add_argument("--output", default="")
 
+    # Hand-over to transcript.ekonum.fr. Secrets (device code, token)
+    # come from the environment, never from argv: `ps` would show them.
+    for name in ("transcript-enroll-start", "transcript-enroll-poll", "transcript-push"):
+        cmd = sub.add_parser(name)
+        cmd.add_argument("--server", default="")
+    sub.choices["transcript-enroll-start"].add_argument("--device-name", default="")
+
     # PR AT — managed-venv dependency freshness.
     deps_check_parser = sub.add_parser("deps-check")
     deps_check_parser.add_argument(
@@ -280,6 +287,58 @@ def build_parser() -> argparse.ArgumentParser:
         "(manual action); otherwise only enforce version floors",
     )
     return parser
+
+
+def _transcript_command(args: argparse.Namespace) -> int:
+    """Enrol this Mac on transcript.ekonum.fr, or push the library there.
+
+    One-shot commands print a single JSON object; the push streams
+    progress events like a job does, so the Swift shell can show a bar.
+    """
+    import os
+    import socket as _socket
+
+    from .paths import library_db_path
+    from .transcript_sync import (
+        DEFAULT_SERVER,
+        TranscriptSyncError,
+        open_enrolment,
+        poll_enrolment,
+        push_library,
+    )
+
+    server = (args.server or os.environ.get("TRANSCRIPT_SERVER") or DEFAULT_SERVER).strip()
+    try:
+        if args.command == "transcript-enroll-start":
+            name = args.device_name or _socket.gethostname().removesuffix(".local")
+            _print_json({"ok": True, **open_enrolment(server, name)})
+            return 0
+        if args.command == "transcript-enroll-poll":
+            answer = poll_enrolment(server, os.environ.get("TRANSCRIPT_DEVICE_CODE", ""))
+            _print_json({"ok": True, **answer})
+            return 0
+
+        def progress(done: int, total: int, label: str) -> None:
+            stdout_event_sink(ProgressEvent(
+                "transcript-push",
+                round(100 * done / total, 1) if total else 100,
+                f"{done}/{total} — {label}",
+            ))
+
+        summary = push_library(
+            server,
+            os.environ.get("TRANSCRIPT_TOKEN", ""),
+            library_db_path(),
+            on_progress=progress,
+        )
+        stdout_event_sink(DoneEvent(summary))
+        return 0
+    except TranscriptSyncError as exc:
+        if args.command == "transcript-push":
+            stdout_event_sink(ErrorEvent(str(exc), code=exc.code))
+        else:
+            _print_json({"ok": False, "error": str(exc), "code": exc.code})
+        return 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -557,6 +616,11 @@ def main(argv: list[str] | None = None) -> int:
             except CloudTranscriptionError as exc:
                 _print_json({"ok": False, "error": str(exc), "code": exc.code})
                 return 1
+
+        if args.command in (
+            "transcript-enroll-start", "transcript-enroll-poll", "transcript-push"
+        ):
+            return _transcript_command(args)
 
         if args.command == "usage-summary":
             from datetime import datetime as _dt

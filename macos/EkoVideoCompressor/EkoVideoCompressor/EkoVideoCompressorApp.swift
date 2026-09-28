@@ -13,6 +13,7 @@ struct EkoVideoCompressorApp: App {
     @StateObject private var pyannote = PyannoteStatusStore()
     @StateObject private var deps = DepsStore()
     @StateObject private var cloudUsage = CloudUsageStore()
+    @StateObject private var transcriptSync = TranscriptSyncStore()
 
     init() {
         let args = CommandLine.arguments
@@ -36,6 +37,7 @@ struct EkoVideoCompressorApp: App {
                 .environmentObject(pyannote)
                 .environmentObject(deps)
                 .environmentObject(cloudUsage)
+                .environmentObject(transcriptSync)
                 .frame(minWidth: 1180, minHeight: 760)
                 .onAppear {
                     updater.setSettings(settings)
@@ -57,6 +59,14 @@ struct EkoVideoCompressorApp: App {
         .windowStyle(.titleBar)
         .commands {
             CommandGroup(replacing: .newItem) {}
+            // Always reachable, even after « Plus tard » put the banner
+            // away: the transfer can be repeated to send new meetings.
+            CommandGroup(after: .importExport) {
+                Button("Transférer vers transcript.ekonum.fr…") {
+                    transcriptSync.start()
+                }
+                .disabled(transcriptSync.isBusy)
+            }
         }
     }
 }

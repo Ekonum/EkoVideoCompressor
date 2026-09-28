@@ -403,6 +403,21 @@ def provider_for_model(model_id: str) -> str:
     return cloud_model_entry(model_id).get("provider", "gemini")
 
 
+# `promptFeedback.blockReason` de Gemini. SAFETY, PROHIBITED_CONTENT et
+# BLOCKLIST sont des décisions sur le contenu : elles ne changeront pas
+# d'un essai à l'autre. OTHER — et l'absence de raison — sont le
+# fourre-tout d'une génération qui n'a simplement pas abouti.
+# Tranches de téléversement. 8 Mo tient un aller-retour court sur une
+# liaison médiocre, là où une fenêtre entière de 30 min (~14 Mo en MP3
+# 64 kbps) expose l'envoi complet à la moindre coupure.
+_UPLOAD_SLICE_BYTES = 8 * 1024 * 1024
+_UPLOAD_RETRY_BACKOFF_SECONDS = (2, 5, 10)
+
+_CONTENT_BLOCK_REASONS = frozenset(
+    {"SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "IMAGE_SAFETY"}
+)
+
+
 class CloudTranscriptionError(RuntimeError):
     """Raised on any cloud failure, with a French user-facing message.
 
@@ -879,7 +894,12 @@ def parse_cloud_response(
         block = ((payload.get("promptFeedback") or {}).get("blockReason") or "").strip()
         detail = f" (raison : {block})" if block else ""
         raise CloudTranscriptionError(
-            "Gemini n'a renvoyé aucune transcription" + detail + "."
+            "Gemini n'a renvoyé aucune transcription" + detail + ".",
+            # Même famille que la réponse vide et le JSON tronqué
+            # ci-dessous : une génération qui n'a pas eu lieu mérite un
+            # nouvel essai. Seul un refus de contenu est définitif —
+            # réessayer ne ferait que repayer le même refus.
+            retryable=block.upper() not in _CONTENT_BLOCK_REASONS,
         )
     parts = ((candidates[0].get("content") or {}).get("parts")) or []
     text = "".join(str(part.get("text") or "") for part in parts).strip()
@@ -954,7 +974,12 @@ def parse_cloud_response(
         )
     if not result.segments:
         raise CloudTranscriptionError(
-            "Gemini a répondu mais sans aucun segment exploitable."
+            "Gemini a répondu mais sans aucun segment exploitable.",
+            # Un JSON valide avec zéro segment est le même raté de
+            # génération qu'une réponse vide. Le cas légitime — une
+            # fenêtre réellement silencieuse — coûte quelques centimes
+            # de réessais, contre une relance manuelle sinon.
+            retryable=True,
         )
 
     meta = payload.get("usageMetadata") or {}
@@ -1175,6 +1200,24 @@ def merge_chunk_results(chunks: list[CloudChunkResult]) -> CloudChunkResult:
 # ---------------------------------------------------------------------------
 
 
+def _read_response(response: Any, label: str) -> bytes:
+    """Lit le corps d'une réponse en classant les incidents réseau.
+
+    La lecture a lieu après la sortie de ``_open`` : une coupure ou une
+    lenteur ici remonterait sinon en ``OSError`` nue, non marquée
+    transitoire, donc sans réessai — l'angle mort exact d'une mauvaise
+    connexion.
+    """
+    try:
+        return response.read()
+    except OSError as exc:
+        raise CloudTranscriptionError(
+            f"Connexion interrompue en lisant la réponse {label} : {exc}. "
+            "Vérifiez la connexion internet.",
+            code="cloud_network",
+        ) from exc
+
+
 def _ssl_context() -> ssl.SSLContext:
     if certifi is not None:
         return ssl.create_default_context(cafile=certifi.where())
@@ -1268,6 +1311,17 @@ class GeminiClient:
                 "Vérifiez la connexion internet.",
                 code="cloud_network",
             ) from exc
+        except OSError as exc:
+            # urllib n'emballe dans URLError que l'échec de connexion ;
+            # une coupure ou une lenteur pendant la lecture de la réponse
+            # remonte en TimeoutError/OSError nue. Sans ce cas, elle
+            # sortait non classée et ne déclenchait aucun réessai — le
+            # symptôme même d'une mauvaise connexion.
+            raise CloudTranscriptionError(
+                f"Connexion interrompue avec l'API Gemini : {exc}. "
+                "Vérifiez la connexion internet.",
+                code="cloud_network",
+            ) from exc
 
     def _json_request(
         self,
@@ -1284,7 +1338,7 @@ class GeminiClient:
         for key, value in (headers or {}).items():
             request.add_header(key, value)
         with self._open(request) as response:
-            raw = response.read().decode("utf-8", errors="replace")
+            raw = _read_response(response, "Gemini").decode("utf-8", errors="replace")
             response_headers = {k.lower(): v for k, v in response.headers.items()}
         body: dict = {}
         if raw.strip():
@@ -1340,26 +1394,92 @@ class GeminiClient:
             raise CloudTranscriptionError(
                 "L'API Gemini n'a pas renvoyé d'URL de téléversement."
             )
-        request = urllib.request.Request(
-            upload_url, data=file_path.read_bytes(), method="POST"
-        )
-        request.add_header("X-Goog-Upload-Offset", "0")
-        request.add_header("X-Goog-Upload-Command", "upload, finalize")
-        request.add_header("Content-Type", mime)
-        with self._open(request) as response:
-            raw = response.read().decode("utf-8", errors="replace")
-        try:
-            body = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise CloudTranscriptionError(
-                f"Téléversement Gemini : réponse illisible : {exc}"
-            ) from exc
+        body = self._push_upload(upload_url, file_path.read_bytes(), mime)
         file_info = body.get("file") or {}
         if not file_info.get("uri"):
             raise CloudTranscriptionError(
                 "Téléversement Gemini incomplet (pas d'URI de fichier)."
             )
         return file_info
+
+    def _upload_offset(self, upload_url: str, *, fallback: int) -> int:
+        """Demande à Google ce qu'il a réellement reçu.
+
+        C'est tout l'intérêt du protocole résumable : après une coupure,
+        on reprend où le fil s'est rompu au lieu de tout renvoyer.
+        """
+        request = urllib.request.Request(upload_url, data=b"", method="POST")
+        request.add_header("X-Goog-Upload-Command", "query")
+        try:
+            with self._open(request) as response:
+                _read_response(response, "Gemini")
+                received = response.headers.get("x-goog-upload-size-received")
+        except CloudTranscriptionError:
+            # La requête d'état a échoué elle aussi : on repart de ce
+            # qu'on croit avoir envoyé, ce qui reste mieux que zéro.
+            return fallback
+        try:
+            return max(int(received), 0)
+        except (TypeError, ValueError):
+            return fallback
+
+    def _push_upload(
+        self,
+        upload_url: str,
+        data: bytes,
+        mime: str,
+        *,
+        sleeper: Callable[[float], None] | None = None,
+    ) -> dict:
+        """Envoie le fichier par tranches, en reprenant après une coupure.
+
+        Le téléversement est l'étape la plus exposée à une connexion
+        capricieuse : c'est la seule qui pousse plusieurs mégaoctets. La
+        version précédente postait le fichier entier en un bloc et
+        abandonnait la fenêtre entière au premier hoquet réseau.
+        """
+        import time as _time
+
+        sleep = sleeper or _time.sleep
+        total = len(data)
+        offset = 0
+        attempts = 0
+        raw = ""
+
+        while offset < total:
+            end = min(offset + _UPLOAD_SLICE_BYTES, total)
+            last = end >= total
+            request = urllib.request.Request(
+                upload_url, data=data[offset:end], method="POST"
+            )
+            request.add_header("X-Goog-Upload-Offset", str(offset))
+            request.add_header(
+                "X-Goog-Upload-Command", "upload, finalize" if last else "upload"
+            )
+            request.add_header("Content-Type", mime)
+            try:
+                with self._open(request) as response:
+                    raw = _read_response(response, "Gemini").decode(
+                        "utf-8", errors="replace"
+                    )
+            except CloudTranscriptionError as exc:
+                if exc.code != "cloud_network" or attempts >= len(
+                    _UPLOAD_RETRY_BACKOFF_SECONDS
+                ):
+                    raise
+                sleep(_UPLOAD_RETRY_BACKOFF_SECONDS[attempts])
+                attempts += 1
+                offset = self._upload_offset(upload_url, fallback=offset)
+                continue
+            attempts = 0
+            offset = end
+
+        try:
+            return json.loads(raw) if raw.strip() else {}
+        except json.JSONDecodeError as exc:
+            raise CloudTranscriptionError(
+                f"Téléversement Gemini : réponse illisible : {exc}"
+            ) from exc
 
     def wait_until_active(
         self,
@@ -1379,7 +1499,10 @@ class GeminiClient:
             if polls >= max_polls:
                 raise CloudTranscriptionError(
                     "Le fichier audio est resté trop longtemps en cours de "
-                    "traitement côté Gemini. Réessayez."
+                    "traitement côté Gemini.",
+                    # Ne pas dire « Réessayez » à l'utilisateur pour une
+                    # chose que le moteur sait faire lui-même.
+                    retryable=True,
                 )
             sleep(poll_seconds)
             polls += 1
@@ -1389,7 +1512,10 @@ class GeminiClient:
             )
         if str(info.get("state") or "").upper() == "FAILED":
             raise CloudTranscriptionError(
-                "Gemini n'a pas pu ingérer le fichier audio (état FAILED)."
+                "Gemini n'a pas pu ingérer le fichier audio (état FAILED).",
+                # Souvent un téléversement abîmé en route plutôt qu'un
+                # fichier fautif : le renvoyer suffit généralement.
+                retryable=True,
             )
         return info
 
@@ -1779,6 +1905,13 @@ class CloudProvider:
                 "Vérifiez la connexion internet.",
                 code="cloud_network",
             ) from exc
+        except OSError as exc:
+            # Même angle mort que côté Gemini : voir le commentaire là-bas.
+            raise CloudTranscriptionError(
+                f"Connexion interrompue avec l'API {self.provider_label} : {exc}. "
+                "Vérifiez la connexion internet.",
+                code="cloud_network",
+            ) from exc
 
     def _request(
         self,
@@ -1792,7 +1925,7 @@ class CloudProvider:
         for key, value in (headers or {}).items():
             request.add_header(key, value)
         with self._open(request) as response:
-            raw = response.read()
+            raw = _read_response(response, self.provider_label)
             resp_headers = {k.lower(): v for k, v in response.headers.items()}
         return raw, resp_headers
 
