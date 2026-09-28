@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { Bouton, Champ, Etat, Erreur, Vide } from './Communs.jsx';
 import { duree, usd, jour, horodatage } from '../format.js';
+import { MOD, useRaccourcis } from '../raccourcis.js';
 
 /** La bibliothèque : une table, pas une grille de cartes.
  *
@@ -16,6 +17,10 @@ export function Bibliotheque({ surOuvrir }) {
   const [resultats, setResultats] = useState(null);
   const [etat, setEtat] = useState('actif');
   const [retention, setRetention] = useState(30);
+  const champRecherche = useRef(null);
+
+  const chercher = () => { champRecherche.current?.focus(); champRecherche.current?.select(); };
+  useRaccourcis({ 'mod+f': chercher, '/': chercher });
 
   const recharger = useCallback(() => {
     api.listJobs(etat).then(setJobs).catch((e) => setErreur(e.message));
@@ -81,7 +86,8 @@ export function Bibliotheque({ surOuvrir }) {
         <h1 className="titre text-[1.5rem] font-semibold">Bibliothèque</h1>
         <div className="w-full sm:w-80">
           <Champ
-            label="Rechercher dans les transcriptions"
+            ref={champRecherche}
+            label={`Rechercher dans les transcriptions · ${MOD} F`}
             placeholder="un mot, un nom, une décision…"
             value={recherche}
             onChange={(e) => setRecherche(e.target.value)}
@@ -137,7 +143,7 @@ export function Bibliotheque({ surOuvrir }) {
       <Erreur>{erreur}</Erreur>
 
       {resultats ? (
-        <Resultats resultats={resultats} surOuvrir={surOuvrir} />
+        <Resultats resultats={resultats} surOuvrir={(id) => surOuvrir(id, recherche.trim())} />
       ) : jobs === null ? (
         <p className="py-16 text-center text-fonce/50">Chargement…</p>
       ) : jobs.length === 0 ? (
@@ -177,7 +183,7 @@ export function Bibliotheque({ surOuvrir }) {
                   <td className="px-4 py-3">
                     <span className="titre font-medium">{job.title || job.filename}</span>
                     {job.has_versions ? (
-                      <span className="ml-2 rounded px-1.5 py-0.5 text-[0.75rem] font-medium text-violet ring-1 ring-violet/35">
+                      <span className="ml-2 inline-block whitespace-nowrap rounded px-1.5 py-0.5 text-[0.75rem] font-medium text-violet ring-1 ring-violet/35">
                         version antérieure
                       </span>
                     ) : null}

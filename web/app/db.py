@@ -693,6 +693,14 @@ class Database:
                 "speaker_map_json": job.get("speaker_map_json"),
                 "technical_terms_json": job.get("technical_terms_json"),
                 "cloud_cost_usd": job.get("cloud_cost_usd") or 0.0,
+                # Les répliques horodatées : sans elles, une version se lit
+                # mais ne se restaure qu'à condition d'avoir la même forme
+                # que le texte en place.
+                "segments": [
+                    {"start": s["start_second"], "end": s["end_second"],
+                     "speaker": s["speaker"], "text": s["text"]}
+                    for s in self.segments_for_job(job_id)
+                ],
             },
         )
         with self.connect() as conn:
@@ -704,6 +712,66 @@ class Database:
                     job_id,
                 ),
             )
+
+    @staticmethod
+    def repliques_de_version(
+        version: dict[str, Any], en_place: list[dict[str, Any]]
+    ) -> list[dict[str, Any]] | None:
+        """Les répliques d'une version, ou ``None`` si elles sont perdues.
+
+        Les versions d'avant n'ont gardé que le texte « Nom : réplique ».
+        Une relecture ne change que les noms et les mots, pas le découpage :
+        quand le texte a autant de lignes que la transcription en place a
+        de répliques, les horodatages en place lui vont.
+        """
+        if version.get("segments"):
+            return list(version["segments"])
+        lignes = [l for l in (version.get("transcript") or "").splitlines() if l.strip()]
+        if not lignes or len(lignes) != len(en_place):
+            return None
+        repliques = []
+        for ligne, seg in zip(lignes, en_place):
+            nom, separateur, texte = ligne.partition(" : ")
+            if not separateur:
+                nom, texte = "", ligne
+            repliques.append({"start": seg["start_second"], "end": seg["end_second"],
+                              "speaker": nom.strip(), "text": texte.strip()})
+        return repliques
+
+    def restaurer_version(self, job_id: int, rang: int) -> dict[str, Any]:
+        """Remet une version en place. Celle qu'elle remplace rejoint
+        l'historique : revenir en arrière se défait de la même façon."""
+        job = self.get_job(job_id)
+        versions = json.loads((job or {}).get("previous_versions_json") or "[]")
+        if not job or not 0 <= rang < len(versions):
+            raise KeyError(rang)
+        version = versions[rang]
+        repliques = self.repliques_de_version(version, self.segments_for_job(job_id))
+        if repliques is None:
+            raise ValueError("Cette version n'a gardé que son texte.")
+        self.archive_current_version(job_id)
+        # La version restaurée quitte l'historique : elle est en place, la
+        # garder aussi dans la liste la montrerait deux fois.
+        versions = json.loads(self.get_job(job_id).get("previous_versions_json") or "[]")
+        del versions[rang + 1]
+        maintenant = datetime.now().isoformat(timespec="seconds")
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE jobs SET title = ?, transcript = ?, speaker_map_json = ?, "
+                "technical_terms_json = ?, previous_versions_json = ?, updated_at = ? "
+                "WHERE id = ?",
+                (
+                    version.get("title") or "",
+                    version.get("transcript") or "",
+                    version.get("speaker_map_json") or "{}",
+                    version.get("technical_terms_json") or "[]",
+                    json.dumps(versions, ensure_ascii=False),
+                    maintenant,
+                    job_id,
+                ),
+            )
+        self.replace_segments(job_id, repliques)
+        return version
 
     def update_job_context_json(self, job_id: int, contexte: dict[str, Any]) -> None:
         """Le contexte retenu pour cette réunion, après coup.

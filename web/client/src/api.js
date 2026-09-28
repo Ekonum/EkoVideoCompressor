@@ -34,6 +34,7 @@ export const api = {
   patch: (id, payload) => call('PATCH', `/api/jobs/${id}`, payload),
   replaceTerm: (id, old, next) =>
     call('POST', `/api/jobs/${id}/terms/replace`, { old, new: next }),
+  restaurerVersion: (id, rang) => call('POST', `/api/jobs/${id}/versions/${rang}/restore`, {}),
   resetChunk: (id, index) => call('POST', `/api/jobs/${id}/chunks/${index}/reset`, {}),
   search: (q) => call('GET', `/api/search?q=${encodeURIComponent(q)}`),
   vocabulary: (selected) =>

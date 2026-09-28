@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { Bouton, Champ, DateHeure, Erreur } from './Communs.jsx';
 import { horodatage, usd, jour, mo } from '../format.js';
 import { useArchivage } from '../archivage.js';
 import { AvancementArchivage } from './Nouveau.jsx';
+import { MOD, useRaccourcis } from '../raccourcis.js';
 
 /** Fiche d'une transcription : la lire, la corriger, la relancer.
  *
@@ -11,7 +12,7 @@ import { AvancementArchivage } from './Nouveau.jsx';
  *  fenêtre modale : corriger un nom d'interlocuteur se fait en le
  *  lisant, pas de mémoire.
  */
-export function Detail({ jobId, surRetour }) {
+export function Detail({ jobId, recherche = '', surRetour }) {
   const [fiche, setFiche] = useState(null);
   const [erreur, setErreur] = useState('');
   const [note, setNote] = useState('');
@@ -47,10 +48,51 @@ export function Detail({ jobId, surRetour }) {
     }
     document.getElementById(`segment-${rang}`)
       ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    setTrouver(null);
     setMarque(terme ? { rang, terme } : null);
     setSurlignee(rang);
     setTimeout(() => setSurlignee((r) => (r === rang ? null : r)), 2500);
   };
+
+  // Chercher dans la transcription : ouverte d'office quand on arrive
+  // d'une recherche de la bibliothèque, pour voir tout de suite où.
+  const [trouver, setTrouver] = useState(recherche ? { terme: recherche, courant: 0 } : null);
+  const champTrouver = useRef(null);
+  const occurrences = useMemo(
+    () => (trouver?.terme ? occurrencesDe(fiche?.segments || [], trouver.terme) : []),
+    [fiche, trouver?.terme],
+  );
+  const actuelle = occurrences.length ? occurrences[trouver.courant % occurrences.length] : null;
+
+  useEffect(() => {
+    if (!actuelle) return;
+    document.getElementById(`segment-${actuelle.rang}`)
+      ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [actuelle?.rang, actuelle?.k]);
+
+  const ouvrirTrouver = () => {
+    setTrouver((t) => t || { terme: '', courant: 0 });
+    setTimeout(() => { champTrouver.current?.focus(); champTrouver.current?.select(); }, 0);
+  };
+  const avancer = (pas) => setTrouver((t) => (t && occurrences.length
+    ? { ...t, courant: (t.courant + pas + occurrences.length) % occurrences.length }
+    : t));
+
+  useRaccourcis({
+    'mod+f': () => { if (!fiche?.segments?.length) return false; ouvrirTrouver(); },
+    'mod+g': () => (trouver ? avancer(1) : false),
+    'shift+mod+g': () => (trouver ? avancer(-1) : false),
+    escape: (e) => {
+      // Une fenêtre ouverte (aide, confirmation) se ferme d'abord.
+      if (document.querySelector('[role="dialog"]')) return false;
+      if (trouver) { setTrouver(null); return undefined; }
+      // Dans un champ, Échap rend la main sans quitter : on ne perd pas
+      // une correction en cours sur une touche.
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) { e.target.blur(); return undefined; }
+      surRetour();
+      return undefined;
+    },
+  });
 
   const recharger = () => api.detail(jobId).then(setFiche).catch((e) => setErreur(e.message));
   useEffect(() => { recharger(); }, [jobId]);
@@ -84,11 +126,51 @@ export function Detail({ jobId, surRetour }) {
           <div className="flex items-center justify-between gap-3">
             <h2 className="titre text-[1.0625rem] font-medium">Transcription</h2>
             <div className="flex flex-wrap gap-2">
+              {fiche.segments.length ? (
+                <button
+                  type="button"
+                  onClick={ouvrirTrouver}
+                  title={`Chercher dans la transcription (${MOD} F)`}
+                  className="rounded-md px-3 py-1.5 text-[0.8125rem] text-fonce/70 ring-1 ring-bord transition-colors hover:bg-white/60 hover:text-fonce"
+                >
+                  Chercher
+                </button>
+              ) : null}
               <Relecture fiche={fiche} jobId={jobId} surMaj={recharger} surNote={setNote} surErreur={setErreur} />
               <Copier texte={fiche.transcript} />
             </div>
           </div>
           <Video jobId={jobId} video={fiche.video} surMaj={recharger} />
+          {trouver ? (
+            <div className="mt-3 flex items-center gap-2 rounded-lg border border-bord bg-white px-3 py-1.5">
+              <input
+                ref={champTrouver}
+                autoFocus={!recherche}
+                value={trouver.terme}
+                onChange={(e) => setTrouver({ terme: e.target.value, courant: 0 })}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') { e.preventDefault(); avancer(e.shiftKey ? -1 : 1); }
+                }}
+                placeholder="Chercher dans la transcription"
+                aria-label="Chercher dans la transcription"
+                className="min-w-0 flex-1 bg-transparent text-[0.875rem] outline-none placeholder:text-fonce/35"
+              />
+              <span className="shrink-0 text-[0.8125rem] tabular-nums text-fonce/50">
+                {trouver.terme.trim()
+                  ? occurrences.length ? `${(trouver.courant % occurrences.length) + 1} / ${occurrences.length}` : 'aucune'
+                  : ''}
+              </span>
+              <button type="button" onClick={() => avancer(-1)} disabled={!occurrences.length}
+                      aria-label="Occurrence précédente" title="Précédente (Maj+Entrée)"
+                      className="rounded px-1.5 text-fonce/55 hover:bg-papier hover:text-fonce disabled:opacity-30">↑</button>
+              <button type="button" onClick={() => avancer(1)} disabled={!occurrences.length}
+                      aria-label="Occurrence suivante" title="Suivante (Entrée)"
+                      className="rounded px-1.5 text-fonce/55 hover:bg-papier hover:text-fonce disabled:opacity-30">↓</button>
+              <button type="button" onClick={() => setTrouver(null)} aria-label="Fermer la recherche"
+                      title="Fermer (Échap)"
+                      className="rounded px-1.5 text-[1.125rem] leading-none text-fonce/45 hover:bg-papier hover:text-fonce">×</button>
+            </div>
+          ) : null}
           <div className="verre mt-3 max-h-[34rem] overflow-y-auto rounded-xl">
             {fiche.segments.length === 0 ? (
               <p className="px-4 py-6 text-fonce/50">Pas encore de segment.</p>
@@ -109,13 +191,22 @@ export function Detail({ jobId, surRetour }) {
                       {s.speaker ? (
                         <span className="titre mr-2 font-medium text-turquoise-sombre">{s.speaker}</span>
                       ) : null}
-                      {marque?.rang === rang ? surligner(s.text, marque.terme) : s.text}
+                      {trouver?.terme.trim()
+                        ? surligner(s.text, trouver.terme, actuelle?.rang === rang ? actuelle.k : -1)
+                        : marque?.rang === rang ? surligner(s.text, marque.terme) : s.text}
                     </span>
                   </li>
                 ))}
               </ol>
             )}
           </div>
+          <Versions
+            versions={fiche.previous_versions}
+            jobId={jobId}
+            surMaj={recharger}
+            surNote={setNote}
+            surErreur={setErreur}
+          />
         </div>
 
         <aside className="space-y-8">
@@ -129,7 +220,6 @@ export function Detail({ jobId, surRetour }) {
           />
           <Fenetres jobId={jobId} surNote={setNote} surErreur={setErreur} />
           <Odoo fiche={fiche} jobId={jobId} surMaj={recharger} surNote={setNote} surErreur={setErreur} />
-          <Versions versions={fiche.previous_versions} />
         </aside>
       </div>
     </section>
@@ -315,26 +405,56 @@ function estUnMot(texte) {
   return Boolean(t) && t.split(/\s+/).length <= 3;
 }
 
-/** Le texte, le terme cherché marqué partout où il apparaît. */
-function surligner(texte, terme) {
+/** Le texte, le terme cherché marqué partout où il apparaît.
+ *
+ *  `actif` désigne l'occurrence courante d'une recherche (les autres
+ *  restent pâles) ; sans lui, toutes sont marquées franchement. */
+function surligner(texte, terme, actif) {
   const plie = plier(texte);
   const cible = plier(terme.trim());
   if (!cible) return texte;
   const morceaux = [];
   let depuis = 0;
+  let k = 0;
   let trouve = plie.indexOf(cible);
   while (trouve >= 0) {
     morceaux.push(texte.slice(depuis, trouve));
+    const franc = actif === undefined || actif === k;
     morceaux.push(
-      <mark key={trouve} className="rounded bg-turquoise/50 px-0.5 text-fonce">
+      <mark
+        key={trouve}
+        className={`rounded px-0.5 text-fonce ${
+          franc ? 'bg-turquoise/60 ring-1 ring-turquoise-sombre' : 'bg-turquoise/20'
+        }`}
+      >
         {texte.slice(trouve, trouve + cible.length)}
       </mark>,
     );
     depuis = trouve + cible.length;
     trouve = plie.indexOf(cible, depuis);
+    k += 1;
   }
   morceaux.push(texte.slice(depuis));
   return morceaux;
+}
+
+/** Toutes les occurrences d'un terme : la réplique, et le rang dans la
+ *  réplique — une même phrase peut le dire deux fois. */
+function occurrencesDe(segments, terme) {
+  const cible = plier(terme.trim());
+  if (!cible) return [];
+  const liste = [];
+  segments.forEach((seg, rang) => {
+    const plie = plier(seg.text);
+    let k = 0;
+    let trouve = plie.indexOf(cible);
+    while (trouve >= 0) {
+      liste.push({ rang, k });
+      k += 1;
+      trouve = plie.indexOf(cible, trouve + cible.length);
+    }
+  });
+  return liste;
 }
 
 function lireHorodatage(texte) {
@@ -581,38 +701,96 @@ function Fenetres({ jobId, surNote, surErreur }) {
  *  l'écraser. Encore faut-il pouvoir la lire : chacune se déplie sur son
  *  texte complet, qu'on peut copier pour reprendre un passage.
  */
-function Versions({ versions }) {
+/** Les versions antérieures, sous la transcription.
+ *
+ *  Discrètes : une ligne repliée, qu'on ouvre au besoin. Chaque relance
+ *  ou relecture en empile une ; on peut la lire, la copier, ou y revenir
+ *  — et revenir en arrière se défait de la même façon, la version en
+ *  place rejoignant l'historique.
+ */
+function Versions({ versions, jobId, surMaj, surNote, surErreur }) {
+  const [ouvert, setOuvert] = useState(false);
+  const [lue, setLue] = useState(null);
+  const [aConfirmer, setAConfirmer] = useState(null);
+  const [occupe, setOccupe] = useState(false);
   if (!versions?.length) return null;
+
+  const revenir = async (rang) => {
+    setOccupe(true);
+    try {
+      await api.restaurerVersion(jobId, rang);
+      surNote(`Version du ${jour(versions[rang].archived_at)} remise en place — celle d'avant est dans l'historique.`);
+      setAConfirmer(null);
+      setLue(null);
+      surMaj();
+    } catch (e) { surErreur(e.message); }
+    finally { setOccupe(false); }
+  };
+
   return (
-    <div>
-      <h2 className="titre text-[1.0625rem] font-medium">Versions précédentes</h2>
-      <p className="mt-1 text-[0.8125rem] text-fonce/55">
-        Gardées à chaque relance ou relecture : rien n'est perdu.
-      </p>
-      <ul className="mt-3 space-y-2">
-        {versions.map((v, rang) => (
-          <li key={rang}>
-            <details className="verre group rounded-lg px-3 py-2">
-              <summary className="flex cursor-pointer list-none items-center justify-between gap-2">
-                <span className="min-w-0">
-                  <span className="block text-[0.75rem] text-fonce/50">
-                    {jour(v.archived_at)}
-                  </span>
-                  <span className="block truncate text-[0.875rem]">{v.title || 'Sans titre'}</span>
+    <div className="mt-3">
+      <button
+        type="button"
+        onClick={() => setOuvert((o) => !o)}
+        aria-expanded={ouvert}
+        className="text-[0.8125rem] text-fonce/50 hover:text-fonce"
+      >
+        {ouvert ? '▾' : '▸'} {versions.length} version{versions.length > 1 ? 's' : ''} antérieure{versions.length > 1 ? 's' : ''}
+      </button>
+      {ouvert ? (
+        <ul className="mt-2 space-y-1.5">
+          {versions.map((v, rang) => (
+            <li key={v.archived_at + rang} className="rounded-lg bg-white/50 px-3 py-2">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span className="text-[0.75rem] tabular-nums text-fonce/50">{jour(v.archived_at)}</span>
+                <span className="min-w-0 flex-1 truncate text-[0.875rem]">{v.title || 'Sans titre'}</span>
+                <span className="flex shrink-0 gap-3 text-[0.8125rem]">
+                  <button type="button" onClick={() => setLue(lue === rang ? null : rang)}
+                          className="text-violet hover:underline">
+                    {lue === rang ? 'replier' : 'lire'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!v.restaurable}
+                    onClick={() => setAConfirmer(rang)}
+                    title={v.restaurable
+                      ? 'Remettre cette version en place'
+                      : 'Seul le texte de cette version a été gardé : copie-le si besoin.'}
+                    className="text-fonce/60 hover:text-fonce hover:underline disabled:cursor-not-allowed disabled:text-fonce/30 disabled:no-underline"
+                  >
+                    y revenir
+                  </button>
                 </span>
-                <span className="shrink-0 text-[0.75rem] text-violet group-open:hidden">lire</span>
-                <span className="hidden shrink-0 text-[0.75rem] text-fonce/50 group-open:inline">replier</span>
-              </summary>
-              <div className="mt-2 max-h-72 overflow-y-auto whitespace-pre-wrap rounded-md bg-white/70 p-2 text-[0.8125rem] leading-relaxed text-fonce/80">
-                {v.transcript || 'Texte non conservé pour cette version.'}
               </div>
-              <div className="mt-2 flex justify-end">
-                <Copier texte={v.transcript} libelle="Copier cette version" />
-              </div>
-            </details>
-          </li>
-        ))}
-      </ul>
+              {aConfirmer === rang ? (
+                <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md bg-papier px-3 py-2 text-[0.8125rem]">
+                  <span className="flex-1 text-fonce/70">
+                    Remettre cette version en place ? La version actuelle sera gardée dans l'historique.
+                  </span>
+                  <button type="button" disabled={occupe} onClick={() => revenir(rang)}
+                          className="rounded-md bg-fonce px-3 py-1 text-clair hover:bg-fonce-doux disabled:opacity-50">
+                    {occupe ? 'Restauration…' : 'Y revenir'}
+                  </button>
+                  <button type="button" onClick={() => setAConfirmer(null)}
+                          className="px-2 py-1 text-fonce/55 hover:text-fonce">
+                    Annuler
+                  </button>
+                </div>
+              ) : null}
+              {lue === rang ? (
+                <>
+                  <div className="mt-2 max-h-72 overflow-y-auto whitespace-pre-wrap rounded-md bg-white/80 p-2 text-[0.8125rem] leading-relaxed text-fonce/80">
+                    {v.transcript || 'Texte non conservé pour cette version.'}
+                  </div>
+                  <div className="mt-2 flex justify-end">
+                    <Copier texte={v.transcript} libelle="Copier cette version" />
+                  </div>
+                </>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </div>
   );
 }

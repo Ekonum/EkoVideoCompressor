@@ -592,6 +592,63 @@ class LibraryTestCase(_Fixture):
                     self.client.get(f"/api/jobs/{job_id}/detail").json()["uncertain"]]
         self.assertEqual(restants, ["Yverif", "on a vu Prévelis hier"])
 
+    def _avec_texte(self, job_id, titre, lignes):
+        self.db.update_job_context(job_id, title=titre)
+        self.db.set_transcript(job_id, "\n".join(f"{n} : {t}" for n, t in lignes))
+        self.db.replace_segments(job_id, [
+            {"start": i * 10, "end": i * 10 + 9, "speaker": n, "text": t}
+            for i, (n, t) in enumerate(lignes)
+        ])
+
+    def test_revenir_a_une_version_se_defait_de_la_meme_facon(self):
+        job_id = self._finished_job()
+        self._avec_texte(job_id, "Avant", [("Robin", "chez Acritek"), ("Lùka", "oui")])
+        self.db.archive_current_version(job_id)
+        self._avec_texte(job_id, "Après", [("Robin", "chez Acritec"), ("Ophélie", "oui")])
+
+        versions = self.client.get(f"/api/jobs/{job_id}/detail").json()["previous_versions"]
+        self.assertEqual([v["title"] for v in versions], ["Avant"])
+        self.assertTrue(versions[0]["restaurable"])
+        self.assertNotIn("segments", versions[0])  # le poids reste au serveur
+
+        self.assertEqual(
+            self.client.post(f"/api/jobs/{job_id}/versions/0/restore").status_code, 200)
+        detail = self.client.get(f"/api/jobs/{job_id}/detail").json()
+        self.assertEqual(detail["title"], "Avant")
+        self.assertEqual([s["text"] for s in detail["segments"]], ["chez Acritek", "oui"])
+        self.assertEqual(detail["segments"][1]["speaker"], "Lùka")
+        # La version remplacée est dans l'historique, la restaurée n'y est plus.
+        self.assertEqual([v["title"] for v in detail["previous_versions"]], ["Après"])
+        # Et la recherche voit le texte remis en place.
+        self.assertEqual(len(self.client.get("/api/search", params={"q": "Acritek"}).json()), 1)
+
+    def test_une_ancienne_version_reprend_les_horodatages_si_la_forme_colle(self):
+        """Les versions d'avant n'ont gardé que le texte ; une relecture ne
+        change pas le découpage, donc les horodatages en place lui vont."""
+        job_id = self._finished_job()
+        self._avec_texte(job_id, "Relu", [("Robin", "chez Acritec"), ("Lùka", "oui")])
+        ancienne = {"archived_at": "2026-09-20T10:00:00", "title": "Brut",
+                    "transcript": "Intervenant 1 : chez Acritek\nIntervenant 2 : oui"}
+        trop_courte = {"archived_at": "2026-09-19T10:00:00", "title": "Autre découpage",
+                       "transcript": "Intervenant 1 : tout d'un bloc"}
+        with self.db.connect() as conn:
+            conn.execute("UPDATE jobs SET previous_versions_json = ? WHERE id = ?",
+                         (json.dumps([ancienne, trop_courte]), job_id))
+
+        versions = self.client.get(f"/api/jobs/{job_id}/detail").json()["previous_versions"]
+        self.assertEqual([v["restaurable"] for v in versions], [True, False])
+        self.assertEqual(
+            self.client.post(f"/api/jobs/{job_id}/versions/1/restore").status_code, 409)
+        self.client.post(f"/api/jobs/{job_id}/versions/0/restore")
+        segments = self.client.get(f"/api/jobs/{job_id}/detail").json()["segments"]
+        self.assertEqual([(s["start_second"], s["speaker"]) for s in segments],
+                         [(0.0, "Intervenant 1"), (10.0, "Intervenant 2")])
+
+    def test_une_version_inconnue_est_introuvable(self):
+        job_id = self._finished_job()
+        self.assertEqual(
+            self.client.post(f"/api/jobs/{job_id}/versions/3/restore").status_code, 404)
+
     def test_la_recherche_plein_texte_traverse_les_traitements(self):
         job_id = self._finished_job()
         self.db.replace_segments(

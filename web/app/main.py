@@ -962,6 +962,7 @@ def create_app(
     @app.get("/api/jobs/{job_id}/detail")
     def job_detail(job_id: int, owner_id: int = Depends(current_user)) -> dict:
         job = owned_job(job_id, owner_id)
+        segments = db.segments_for_job(job_id)
         return {
             "job_id": job_id,
             "filename": job["filename"],
@@ -986,8 +987,17 @@ def create_app(
                 "deposee_le": job["video_uploaded_at"],
                 "lectures": job["video_lectures"] or 0,
             },
-            "segments": db.segments_for_job(job_id),
-            "previous_versions": json.loads(job["previous_versions_json"] or "[]"),
+            "segments": segments,
+            # Les répliques des versions restent au serveur : elles pèsent,
+            # et l'écran n'a besoin que du texte et de savoir si on peut
+            # revenir à la version.
+            "previous_versions": [
+                {
+                    **{k: v for k, v in version.items() if k != "segments"},
+                    "restaurable": db.repliques_de_version(version, segments) is not None,
+                }
+                for version in json.loads(job["previous_versions_json"] or "[]")
+            ],
             "odoo": {
                 "depot": json.loads(job["odoo_depot_json"] or "{}"),
                 "model": job["odoo_model"],
@@ -1049,6 +1059,21 @@ def create_app(
         if len(restants) != len(passages):
             db.set_uncertain(job_id, restants)
         return {"occurrences": occurrences, "technical_terms": terms}
+
+    @app.post("/api/jobs/{job_id}/versions/{rang}/restore")
+    def restaurer_version(
+        job_id: int, rang: int, owner_id: int = Depends(current_user)
+    ) -> dict:
+        """Revenir à une version antérieure — la version en place rejoint
+        l'historique, donc le retour en arrière se défait lui aussi."""
+        owned_job(job_id, owner_id)
+        try:
+            version = db.restaurer_version(job_id, rang)
+        except KeyError as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Version inconnue.") from exc
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        return {"title": version.get("title") or ""}
 
     @app.post("/api/jobs/{job_id}/chunks/{index}/reset", status_code=status.HTTP_200_OK)
     def reset_chunk(
