@@ -94,6 +94,23 @@ class FakeResult:
         )
 
 
+class _Client(TestClient):
+    """Attend, après chaque requête, que les tâches de fond du serveur
+    soient finies. Le serveur répond 202 avant de transcrire une fenêtre
+    — Cloudflare coupe vers 100 s — et les tests décrivent ce qu'on voit
+    une fois le travail fait, pas l'instant d'après l'envoi."""
+
+    def request(self, *args, **kwargs):
+        import time as _time
+
+        reponse = super().request(*args, **kwargs)
+        taches = getattr(self.app.state, "tasks", None)
+        limite = _time.monotonic() + 10
+        while taches and _time.monotonic() < limite:
+            _time.sleep(0.005)
+        return reponse
+
+
 class _Fixture(unittest.TestCase):
     """Montage commun : serveur en mode développement, fournisseur doublé."""
 
@@ -121,11 +138,33 @@ class _Fixture(unittest.TestCase):
                 url="", token="", item="", field="", static_key="cle-de-test"
             ),
         )
-        self.client = TestClient(self.app)
+        self.client = self._client_pour(self.app)
+
+    def _client_pour(self, app) -> "_Client":
+        """Un client ouvert pour toute la durée du test : sans cela, chaque
+        requête a sa propre boucle, fermée à sa fin, et les transcriptions
+        lancées en tâche de fond meurent avec elle — sauf sur une machine
+        assez rapide pour finir avant. C'était vrai en local, pas sur la CI."""
+        client = _Client(app)
+        client.__enter__()
+        self.addCleanup(client.__exit__, None, None, None)
+        return client
 
     def tearDown(self) -> None:
         transcription.transcribe_chunk = self._real
         self._tmp.cleanup()
+
+    def _attendre_termine(self, job_id: int, secondes: float = 10.0) -> dict:
+        """La réunion finit seule, en tâche de fond : on l'attend plutôt
+        que de parier sur le temps qu'elle prend."""
+        import time as _time
+
+        limite = _time.monotonic() + secondes
+        while True:
+            vue = self.client.get(f"/api/jobs/{job_id}").json()
+            if vue["status"] in {"termine", "erreur"} or _time.monotonic() > limite:
+                return vue
+            _time.sleep(0.02)
 
     # -- création ------------------------------------------------------
 
@@ -156,11 +195,7 @@ class ApiTestCase(_Fixture):
         for fenetre in body["chunks"]:
             self.client.put(f"/api/jobs/{body['job_id']}/chunks/{fenetre['index']}",
                             content=b"audio")
-        for _ in range(200):
-            vue = self.client.get(f"/api/jobs/{body['job_id']}").json()
-            if vue["status"] == "termine":
-                break
-            _time.sleep(0.01)
+        vue = self._attendre_termine(body["job_id"])
         self.assertEqual(vue["status"], "termine")
         fiche = self.client.get(f"/api/jobs/{body['job_id']}/detail").json()
         self.assertTrue(fiche["transcript"])
@@ -525,7 +560,7 @@ class LibraryTestCase(_Fixture):
             self.client.put(
                 f"/api/jobs/{job_id}/chunks/{chunk['index']}", content=b"audio"
             )
-        self.client.post(f"/api/jobs/{job_id}/finalize")
+        self.assertEqual(self._attendre_termine(job_id)["status"], "termine")
         return job_id
 
     def test_la_liste_ne_montre_que_ses_propres_traitements(self):
@@ -2066,7 +2101,7 @@ class VideoTestCase(_Fixture):
             gemini_key=GeminiKey(url="", token="", item="", field="", static_key="k"),
             stockage_factory=lambda: self.drive,
         )
-        self.client = TestClient(self.app)
+        self.client = self._client_pour(self.app)
 
     def _reunion(self) -> int:
         return self.client.post("/api/jobs/import", json={
