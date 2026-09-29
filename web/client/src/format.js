@@ -1,5 +1,9 @@
 export const mo = (bytes) => `${(bytes / 1048576).toFixed(1)} Mo`;
 
+/** Mo sous le gigaoctet, Go au-delà : un inventaire de Drive parle vite en Go. */
+export const fileSize = (bytes) =>
+  bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} Go` : `${Math.max(1, Math.round(bytes / 1048576))} Mo`;
+
 export const duree = (secondes) => {
   const t = Math.round(secondes || 0);
   const h = Math.floor(t / 3600);

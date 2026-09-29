@@ -58,6 +58,13 @@ export const api = {
   odooRecords: (q) => call('GET', `/api/odoo/records?q=${encodeURIComponent(q)}`),
   odooPublish: (id, payload) => call('POST', `/api/jobs/${id}/odoo/publish`, payload),
   enqueteGuidee: (payload) => call('POST', '/api/odoo/investigate', payload),
+  googleStatus: () => call('GET', '/api/google'),
+  googleDisconnect: () => call('DELETE', '/api/google'),
+  recoveryState: () => call('GET', '/api/recovery'),
+  recoveryDismiss: () => call('POST', '/api/recovery/dismiss', {}),
+  driveInventory: () => call('GET', '/api/recovery/drive'),
+  driveImport: (fileId, trashOriginal) =>
+    call('POST', `/api/recovery/drive/${encodeURIComponent(fileId)}`, { trash_original: trashOriginal }),
   odooMeetings: () => call('GET', '/api/odoo/meetings'),
   odooContext: (model, id) =>
     call('GET', `/api/odoo/context?model=${encodeURIComponent(model)}&record_id=${id}`),

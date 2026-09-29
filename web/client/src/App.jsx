@@ -6,10 +6,13 @@ import { Detail } from './components/Detail.jsx';
 import { Compte } from './components/Compte.jsx';
 import { Enroler } from './components/Enroler.jsx';
 import { Aide } from './components/Aide.jsx';
+import { Recovery } from './components/Recovery.jsx';
 import { useRaccourcis } from './raccourcis.js';
 
 export default function App() {
-  const [vue, setVue] = useState('bibliotheque');
+  const [vue, setVue] = useState(
+    () => (new URLSearchParams(window.location.search).get('recovery') ? 'recuperation' : 'bibliotheque'),
+  );
   const [ouvert, setOuvert] = useState(null);
   // Le mot cherché dans la bibliothèque suit la réunion ouverte : on la
   // découvre déjà surlignée là où il apparaît.
@@ -21,6 +24,13 @@ export default function App() {
   const [enrolement, setEnrolement] = useState(
     () => new URLSearchParams(window.location.search).get('code') || null,
   );
+  // Le retour de Google après la connexion du Drive : il ramène à la
+  // récupération, avec ce qui s'est passé, puis l'URL redevient « / ».
+  const [connexionGoogle] = useState(() => {
+    const valeur = new URLSearchParams(window.location.search).get('recovery');
+    if (valeur) window.history.replaceState({}, '', '/');
+    return valeur;
+  });
 
   useRaccourcis({
     n: () => { setOuvert(null); setVue('nouveau'); },
@@ -51,6 +61,8 @@ export default function App() {
           <Detail key={ouvert} jobId={ouvert} recherche={cherche} surRetour={() => setOuvert(null)} />
         ) : vue === 'compte' ? (
           <Compte />
+        ) : vue === 'recuperation' ? (
+          <Recovery connection={connexionGoogle} onOpen={ouvrir} />
         ) : vue === 'nouveau' ? (
           <Nouveau
             surTermine={(id) => { setVue('bibliotheque'); ouvrir(id); }}

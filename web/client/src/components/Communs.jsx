@@ -45,6 +45,7 @@ const ETATS = {
   finalisation: ['Fusion…', 'bg-turquoise/20 text-turquoise-sombre'],
   termine: ['Terminé', 'bg-turquoise text-fonce'],
   erreur: ['Erreur', 'bg-[#b3261e]/12 text-[#8c1d18]'],
+  recovered: ['Récupérée', 'bg-violet/10 text-violet'],
 };
 
 export function Etat({ valeur }) {

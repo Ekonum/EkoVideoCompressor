@@ -65,7 +65,19 @@ export const DECONNEXION = '/cdn-cgi/access/logout';
  *  en permanence. */
 function Compte({ moi, surVue, surAide, actif }) {
   const [ouvert, setOuvert] = useState(false);
+  // L'invitation à récupérer son historique : une fois, près du compte,
+  // jusqu'à ce qu'on la suive ou qu'on l'écarte. Ensuite, le menu.
+  const [invitation, setInvitation] = useState(false);
   const cadre = useRef(null);
+
+  useEffect(() => {
+    api.recoveryState().then((etat) => setInvitation(Boolean(etat.prompt))).catch(() => {});
+  }, []);
+
+  const ecarterInvitation = () => {
+    setInvitation(false);
+    api.recoveryDismiss().catch(() => {});
+  };
 
   useEffect(() => {
     if (!ouvert) return undefined;
@@ -104,6 +116,31 @@ function Compte({ moi, surVue, surAide, actif }) {
           {initiales}
         </span>
       </button>
+      {invitation && !ouvert ? (
+        <div className="absolute right-0 top-full z-30 mt-3 w-80 rounded-xl bg-white p-4 text-fonce shadow-2xl ring-1 ring-bord">
+          <span aria-hidden className="absolute -top-1.5 right-4 h-3 w-3 rotate-45 bg-white ring-1 ring-bord [clip-path:polygon(0_0,100%_0,0_100%)]" />
+          <p className="titre text-[0.9375rem] font-medium">Retrouver tes anciens enregistrements</p>
+          <p className="mt-1 text-[0.8125rem] leading-relaxed text-fonce/65">
+            Des réunions enregistrées avant transcript dorment peut-être dans ton
+            Drive. On peut les retrouver et les ranger ici, à leur date — et faire
+            le ménage derrière.
+          </p>
+          <div className="mt-3 flex items-center justify-end gap-2">
+            <button type="button" onClick={ecarterInvitation}
+                    className="rounded-md px-3 py-1.5 text-[0.8125rem] text-fonce/55 hover:text-fonce">
+              Plus tard
+            </button>
+            <button
+              type="button"
+              onClick={() => { ecarterInvitation(); surVue('recuperation'); }}
+              className="rounded-md bg-fonce px-3 py-1.5 text-[0.8125rem] text-clair hover:bg-fonce-doux"
+            >
+              Voir ce qu’on trouve
+            </button>
+          </div>
+          <p className="mt-2 text-[0.75rem] text-fonce/40">Toujours accessible depuis ce menu.</p>
+        </div>
+      ) : null}
       {ouvert ? (
         <div
           role="menu"
@@ -112,6 +149,9 @@ function Compte({ moi, surVue, surAide, actif }) {
           <p className="truncate px-3 pb-1.5 pt-1 text-[0.75rem] text-fonce/45">{moi.email}</p>
           <button type="button" role="menuitem" onClick={choisir(() => surVue('compte'))} className={entree}>
             Réglages
+          </button>
+          <button type="button" role="menuitem" onClick={choisir(() => surVue('recuperation'))} className={entree}>
+            Récupérer mon historique
           </button>
           <button type="button" role="menuitem" onClick={choisir(surAide)}
                   className={`${entree} flex items-center justify-between`}>
