@@ -51,6 +51,7 @@ from .db import Database
 from .odoo import OdooGateway, OdooUnavailable
 from .secrets import GeminiKey, SecretError
 from .identite import IdentiteGoogle
+from .recovery import register_recovery_routes
 from .stockage import MORCEAU, PORTEE as PORTEE_DRIVE, DriveStockage, StockageIndisponible
 from .enqueteur import MODELE_ENQUETE, Conclusion, enqueter, enqueter_confirme
 from .sonde import FENETRE_SECONDES, fournisseur, identifier
@@ -272,6 +273,7 @@ def create_app(
     verifier: AccessVerifier | None = None,
     odoo_factory=None,
     stockage_factory=None,
+    google_opener=None,
 ) -> FastAPI:
     config = settings or Settings.from_env()
     db = database or Database(config.db_path)
@@ -1684,6 +1686,24 @@ def create_app(
             return passerelle.context_pack(model, record_id)
         except OdooUnavailable as exc:
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+    google_secret = GeminiKey(  # lecteur de coffre générique, malgré son nom
+        url=config.broker_url,
+        token=config.broker_token,
+        item=config.google_secret_item,
+        field=config.google_secret_field,
+    )
+    register_recovery_routes(
+        app,
+        db=db,
+        config=config,
+        coffre=coffre,
+        current_user=current_user,
+        human_user=human_user,
+        storage=stockage,
+        google_secret=google_secret.get,
+        oauth_opener=google_opener,
+    )
 
     @app.get("/api/settings")
     def settings_view(owner_id: int = Depends(current_user)) -> dict:

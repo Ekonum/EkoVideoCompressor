@@ -80,6 +80,14 @@ class Settings:
     gcp_cle: Path
     video_dossier: str
 
+    # Connexion Google de chacun, pour récupérer ses anciens enregistrements
+    # dans son Drive. L'identifiant du client n'est pas un secret ; le secret
+    # du client est lu au coffre.
+    google_client_id: str
+    google_domain: str
+    google_secret_item: str
+    google_secret_field: str
+
     # Enrôlement d'appareil : éteint tant que l'équipe n'a pas fini ses
     # essais. L'allumer suppose aussi d'ouvrir un chemin dans Cloudflare
     # Access — aujourd'hui l'API est protégée deux fois, et une app
@@ -149,6 +157,12 @@ class Settings:
             gcp_compte=os.environ.get("EKOVIDEO_GCP_COMPTE", "").strip(),
             gcp_cle=Path(os.environ.get("EKOVIDEO_GCP_CLE", state / "identite-google.pem")),
             video_dossier=os.environ.get("EKOVIDEO_VIDEO_DOSSIER", "").strip(),
+            google_client_id=os.environ.get("EKOVIDEO_GOOGLE_CLIENT_ID", "").strip(),
+            google_domain=os.environ.get("EKOVIDEO_GOOGLE_DOMAIN", "ekonum.fr").strip(),
+            google_secret_item=os.environ.get(
+                "EKOVIDEO_GOOGLE_SECRET_ITEM", "Ekonum - Google transcript OAuth"
+            ).strip(),
+            google_secret_field=os.environ.get("EKOVIDEO_GOOGLE_SECRET_FIELD", "Secret").strip(),
             public_url=os.environ.get(
                 "EKOVIDEO_PUBLIC_URL", "https://transcript.ekonum.fr"
             ).strip(),

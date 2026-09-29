@@ -149,6 +149,44 @@ CREATE TABLE IF NOT EXISTS vocabulary_pairs (
 -- et des déclencheurs sur un DELETE massif coûteraient plus qu'ils ne
 -- rapportent. Les colonnes UNINDEXED évitent qu'un identifiant de job
 -- ressorte comme un résultat de recherche.
+-- Connexion Google de chacun, pour retrouver ses anciens enregistrements
+-- dans son Drive. Le jeton de rafraîchissement est chiffré comme les clés
+-- Odoo : il agit au nom de son propriétaire.
+CREATE TABLE IF NOT EXISTS google_accounts (
+    user_id           INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    email             TEXT NOT NULL,
+    refresh_token_enc TEXT NOT NULL,
+    scope             TEXT NOT NULL DEFAULT '',
+    connected_at      TEXT NOT NULL
+);
+
+-- Une connexion OAuth en cours : l'état lie le retour de Google à la
+-- personne qui l'a demandé, le vérificateur PKCE à cette demande-là.
+CREATE TABLE IF NOT EXISTS oauth_states (
+    state      TEXT PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    verifier   TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+-- D'où vient chaque enregistrement récupéré. Commune à toute l'équipe :
+-- un fichier du Drive partagé récupéré par l'un ne se récupère pas une
+-- seconde fois par l'autre.
+CREATE TABLE IF NOT EXISTS recovered_sources (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    source              TEXT NOT NULL,
+    external_id         TEXT NOT NULL,
+    checksum            TEXT,
+    size_bytes          INTEGER,
+    name                TEXT,
+    job_id              INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
+    user_id             INTEGER NOT NULL REFERENCES users(id),
+    recovered_at        TEXT NOT NULL,
+    original_trashed_at TEXT,
+    UNIQUE (source, external_id)
+);
+CREATE INDEX IF NOT EXISTS idx_recovered_checksum ON recovered_sources (checksum);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS segments_fts USING fts5(
     text,
     job_id       UNINDEXED,
@@ -180,6 +218,9 @@ class Database:
         for colonne, ddl in (
             ("odoo_login", "TEXT"),
             ("odoo_key_chiffree", "TEXT"),
+            # L'invitation à récupérer son historique ne revient pas une
+            # fois écartée.
+            ("recovery_dismissed_at", "TEXT"),
         ):
             self._ensure_column(conn, "users", colonne, ddl)
 
@@ -857,6 +898,115 @@ class Database:
                 (match, owner_id, limit),
             ).fetchall()
             return [dict(r) for r in rows]
+
+    # -- Google account and history recovery ----------------------------
+
+    def save_google_account(self, user_id: int, email: str, refresh_token_enc: str, scope: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT INTO google_accounts (user_id, email, refresh_token_enc, scope, connected_at) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET email = excluded.email, "
+                "refresh_token_enc = excluded.refresh_token_enc, scope = excluded.scope, "
+                "connected_at = excluded.connected_at",
+                (user_id, email, refresh_token_enc, scope, datetime.now().isoformat(timespec="seconds")),
+            )
+
+    def google_account(self, user_id: int) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM google_accounts WHERE user_id = ?", (user_id,)).fetchone()
+        return dict(row) if row else None
+
+    def delete_google_account(self, user_id: int) -> None:
+        with self.connect() as conn:
+            conn.execute("DELETE FROM google_accounts WHERE user_id = ?", (user_id,))
+
+    def save_oauth_state(self, state: str, user_id: int, verifier: str) -> None:
+        maintenant = datetime.now()
+        with self.connect() as conn:
+            # Les demandes abandonnées ne s'accumulent pas.
+            conn.execute(
+                "DELETE FROM oauth_states WHERE created_at < ?",
+                ((maintenant - timedelta(minutes=15)).isoformat(timespec="seconds"),),
+            )
+            conn.execute(
+                "INSERT INTO oauth_states (state, user_id, verifier, created_at) VALUES (?, ?, ?, ?)",
+                (state, user_id, verifier, maintenant.isoformat(timespec="seconds")),
+            )
+
+    def pop_oauth_state(self, state: str, user_id: int) -> str | None:
+        """Le vérificateur d'une demande en cours, consommé : un état ne sert
+        qu'une fois, et seulement à celui qui l'a demandé, dans le quart
+        d'heure."""
+        limite = (datetime.now() - timedelta(minutes=15)).isoformat(timespec="seconds")
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT verifier FROM oauth_states WHERE state = ? AND user_id = ? AND created_at >= ?",
+                (state, user_id, limite),
+            ).fetchone()
+            conn.execute("DELETE FROM oauth_states WHERE state = ?", (state,))
+        return row["verifier"] if row else None
+
+    def dismiss_recovery(self, user_id: int) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE users SET recovery_dismissed_at = ? WHERE id = ?",
+                (datetime.now().isoformat(timespec="seconds"), user_id),
+            )
+
+    def recovery_dismissed(self, user_id: int) -> bool:
+        with self.connect() as conn:
+            row = conn.execute("SELECT recovery_dismissed_at FROM users WHERE id = ?", (user_id,)).fetchone()
+        return bool(row and row["recovery_dismissed_at"])
+
+    def recovered_sources(self, source: str) -> dict[str, dict[str, Any]]:
+        """Ce qui a déjà été récupéré depuis une source, par identifiant
+        externe, avec l'adresse de qui l'a fait."""
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT r.*, u.email AS user_email FROM recovered_sources r "
+                "JOIN users u ON u.id = r.user_id WHERE r.source = ?",
+                (source,),
+            ).fetchall()
+        return {row["external_id"]: dict(row) for row in rows}
+
+    def recovered_checksums(self) -> dict[str, dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT r.*, u.email AS user_email FROM recovered_sources r "
+                "JOIN users u ON u.id = r.user_id WHERE r.checksum IS NOT NULL",
+            ).fetchall()
+        return {row["checksum"]: dict(row) for row in rows}
+
+    def record_recovered(
+        self, *, source: str, external_id: str, checksum: str | None, size_bytes: int | None,
+        name: str, job_id: int | None, user_id: int,
+    ) -> int:
+        with self.connect() as conn:
+            cur = conn.execute(
+                "INSERT INTO recovered_sources (source, external_id, checksum, size_bytes, name, job_id, "
+                "user_id, recovered_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (source, external_id, checksum, size_bytes, name, job_id, user_id,
+                 datetime.now().isoformat(timespec="seconds")),
+            )
+            return int(cur.lastrowid)
+
+    def mark_original_trashed(self, source: str, external_id: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE recovered_sources SET original_trashed_at = ? WHERE source = ? AND external_id = ?",
+                (datetime.now().isoformat(timespec="seconds"), source, external_id),
+            )
+
+    def library_fingerprints(self) -> list[dict[str, Any]]:
+        """Nom de fichier, durée et date de toutes les réunions, tous comptes
+        confondus : de quoi reconnaître un enregistrement déjà transcrit
+        sous un autre chemin (l'app macOS, un envoi à la main)."""
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT id, owner_id, filename, duration_seconds, video_bytes, "
+                "COALESCE(meeting_date, created_at) AS quand FROM jobs"
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def set_odoo_link(
         self, job_id: int, *, model: str, record_id: int, message_id: int | None
