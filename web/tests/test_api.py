@@ -61,6 +61,7 @@ def _settings(root: Path, **overrides) -> Settings:
         google_domain="ekonum.fr",
         google_secret_item="",
         google_secret_field="Secret",
+        recovery_users=frozenset(),
         enrolement=True,
         liaison_auto="certaine",
         sonde_ignore=frozenset({"odoo", "ekonum"}),

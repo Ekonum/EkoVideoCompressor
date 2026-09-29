@@ -1701,7 +1701,7 @@ def create_app(
         current_user=current_user,
         human_user=human_user,
         storage=stockage,
-        google_secret=google_secret.get,
+        google_secret=lambda: google_secret.get(),
         oauth_opener=google_opener,
     )
 

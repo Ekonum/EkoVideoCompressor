@@ -170,7 +170,8 @@ class RecoveryApiTestCase(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         root = Path(self._tmp.name)
-        self.settings = _settings(root, google_client_id="client-id", gcp_compte=self.COMPTE)
+        self.settings = _settings(root, google_client_id="client-id", gcp_compte=self.COMPTE,
+                                  recovery_users=frozenset({"robin@ekonum.fr"}))
         self.db = Database(self.settings.db_path)
         self.google = FauxGoogle()
         self.stockage = StockageAvecCopie(self.google, self.COMPTE)
@@ -260,6 +261,32 @@ class RecoveryApiTestCase(unittest.TestCase):
         self.assertTrue(self.client.get("/api/recovery").json()["prompt"])
         self.client.post("/api/recovery/dismiss")
         self.assertFalse(self.client.get("/api/recovery").json()["prompt"])
+
+    def test_fermee_a_qui_n_est_pas_dans_la_liste(self):
+        """On l'éprouve avant de l'ouvrir : hors liste, ni invitation, ni
+        route."""
+        autre = create_app(
+            _settings(Path(self._tmp.name), google_client_id="client-id", dev_user_email="luka@ekonum.fr",
+                      recovery_users=frozenset({"robin@ekonum.fr"})),
+            database=self.db,
+            gemini_key=GeminiKey(url="", token="", item="", field="", static_key="k"),
+            stockage_factory=lambda: self.stockage, google_opener=self.google,
+        )
+        with _Client(autre) as client:
+            self.assertEqual(client.get("/api/recovery").json(), {"enabled": False, "prompt": False})
+            self.assertEqual(client.get("/api/recovery/drive").status_code, 404)
+            self.assertEqual(client.get("/api/google/connect", follow_redirects=False).status_code, 404)
+
+    def test_sans_secret_lisible_pas_d_invitation(self):
+        import app.secrets as secrets_module
+
+        def absent(self_):
+            raise secrets_module.SecretError("élément absent")
+
+        secrets_module.GeminiKey.get = absent
+        etat = self.client.get("/api/recovery").json()
+        self.assertFalse(etat["google"]["available"])
+        self.assertFalse(etat["prompt"])
 
     def test_se_deconnecter_revoque_chez_google(self):
         self._connecter()

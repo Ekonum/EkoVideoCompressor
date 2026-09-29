@@ -88,6 +88,10 @@ class Settings:
     google_secret_item: str
     google_secret_field: str
 
+    # Qui voit la récupération d'historique : des adresses, ou « * » pour
+    # toute l'équipe. Vide par défaut — on l'éprouve avant de l'ouvrir.
+    recovery_users: frozenset[str]
+
     # Enrôlement d'appareil : éteint tant que l'équipe n'a pas fini ses
     # essais. L'allumer suppose aussi d'ouvrir un chemin dans Cloudflare
     # Access — aujourd'hui l'API est protégée deux fois, et une app
@@ -163,6 +167,11 @@ class Settings:
                 "EKOVIDEO_GOOGLE_SECRET_ITEM", "Ekonum - Google transcript OAuth"
             ).strip(),
             google_secret_field=os.environ.get("EKOVIDEO_GOOGLE_SECRET_FIELD", "Secret").strip(),
+            recovery_users=frozenset(
+                adresse.strip().lower()
+                for adresse in os.environ.get("EKOVIDEO_RECOVERY_USERS", "").split(",")
+                if adresse.strip()
+            ),
             public_url=os.environ.get(
                 "EKOVIDEO_PUBLIC_URL", "https://transcript.ekonum.fr"
             ).strip(),

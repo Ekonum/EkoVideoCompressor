@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 import re
 import secrets
+import time
 import unicodedata
 from datetime import datetime, timedelta, timezone
 from pathlib import PurePosixPath
@@ -277,13 +278,36 @@ def register_recovery_routes(
     def drive_for(user_id: int) -> UserDrive:
         return UserDrive(lambda: tokens.for_user(user_id), opener=oauth_opener)
 
+    secret_failure = {"until": 0.0}
+
+    def secret_ready() -> bool:
+        """Le secret du client est-il lisible au coffre ? Sans lui, la
+        connexion échouerait au retour de Google : autant ne pas la
+        proposer. Un échec est retenu cinq minutes, pour ne pas solliciter
+        le broker à chaque affichage."""
+        if time.monotonic() < secret_failure["until"]:
+            return False
+        try:
+            return bool(google_secret())
+        except Exception as exc:  # noqa: BLE001 — broker, réseau, élément absent
+            log.info("secret du client Google illisible : %s", exc)
+            secret_failure["until"] = time.monotonic() + 300
+            return False
+
     def google_status(user_id: int) -> dict[str, Any]:
         compte = db.google_account(user_id)
         return {
-            "available": oauth.configured and coffre.disponible,
+            "available": oauth.configured and coffre.disponible and secret_ready(),
             "connected": bool(compte),
             "email": compte["email"] if compte else "",
         }
+
+    def enabled_for(user_id: int) -> bool:
+        return "*" in config.recovery_users or db.email_for_user(user_id).lower() in config.recovery_users
+
+    def require_enabled(user_id: int) -> None:
+        if not enabled_for(user_id):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Fonction non disponible.")
 
     @app.get("/api/google")
     def google_account(owner_id: int = Depends(current_user)) -> dict:
@@ -291,6 +315,7 @@ def register_recovery_routes(
 
     @app.get("/api/google/connect")
     def google_connect(owner_id: int = Depends(human_user)) -> Response:
+        require_enabled(owner_id)
         if not oauth.configured:
             raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Connexion Google non configurée.")
         state = secrets.token_urlsafe(32)
@@ -312,6 +337,7 @@ def register_recovery_routes(
         def retour(resultat: str) -> Response:
             return RedirectResponse(f"/?recovery={resultat}", status_code=status.HTTP_302_FOUND)
 
+        require_enabled(owner_id)
         verifier = db.pop_oauth_state(state, owner_id) if state else None
         if error or not code or not verifier:
             return retour("refused" if error else "expired")
@@ -350,10 +376,17 @@ def register_recovery_routes(
 
     @app.get("/api/recovery")
     def recovery_state(owner_id: int = Depends(current_user)) -> dict:
+        if not enabled_for(owner_id):
+            return {"enabled": False, "prompt": False}
+        google = google_status(owner_id)
+        stockage_pret = storage_available()
         return {
-            "prompt": not db.recovery_dismissed(owner_id),
-            "google": google_status(owner_id),
-            "storage": storage_available(),
+            "enabled": True,
+            # L'invitation ne s'affiche que si le parcours peut aller au
+            # bout : sinon elle mènerait à « pas encore configuré ».
+            "prompt": google["available"] and stockage_pret and not db.recovery_dismissed(owner_id),
+            "google": google,
+            "storage": stockage_pret,
         }
 
     def storage_available() -> bool:
@@ -370,6 +403,7 @@ def register_recovery_routes(
 
     @app.get("/api/recovery/drive")
     def drive_inventory(owner_id: int = Depends(human_user)) -> dict:
+        require_enabled(owner_id)
         if not db.google_account(owner_id):
             raise HTTPException(status.HTTP_409_CONFLICT, "Connecte d'abord ton Google Drive.")
         drive = drive_for(owner_id)
@@ -398,6 +432,7 @@ def register_recovery_routes(
         Un fichier à la fois : la copie se fait chez Google et prend
         quelques secondes, l'interface avance ligne par ligne et montre
         chaque résultat."""
+        require_enabled(owner_id)
         if db.recovered_sources("drive").get(file_id):
             raise HTTPException(status.HTTP_409_CONFLICT, "Ce fichier a déjà été récupéré.")
         try:

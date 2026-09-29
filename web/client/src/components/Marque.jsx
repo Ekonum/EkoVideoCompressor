@@ -68,10 +68,13 @@ function Compte({ moi, surVue, surAide, actif }) {
   // L'invitation à récupérer son historique : une fois, près du compte,
   // jusqu'à ce qu'on la suive ou qu'on l'écarte. Ensuite, le menu.
   const [invitation, setInvitation] = useState(false);
+  const [recuperation, setRecuperation] = useState(false);
   const cadre = useRef(null);
 
   useEffect(() => {
-    api.recoveryState().then((etat) => setInvitation(Boolean(etat.prompt))).catch(() => {});
+    api.recoveryState()
+      .then((etat) => { setRecuperation(Boolean(etat.enabled)); setInvitation(Boolean(etat.prompt)); })
+      .catch(() => {});
   }, []);
 
   const ecarterInvitation = () => {
@@ -150,9 +153,11 @@ function Compte({ moi, surVue, surAide, actif }) {
           <button type="button" role="menuitem" onClick={choisir(() => surVue('compte'))} className={entree}>
             Réglages
           </button>
-          <button type="button" role="menuitem" onClick={choisir(() => surVue('recuperation'))} className={entree}>
-            Récupérer mon historique
-          </button>
+          {recuperation ? (
+            <button type="button" role="menuitem" onClick={choisir(() => surVue('recuperation'))} className={entree}>
+              Récupérer mon historique
+            </button>
+          ) : null}
           <button type="button" role="menuitem" onClick={choisir(surAide)}
                   className={`${entree} flex items-center justify-between`}>
             Raccourcis clavier
