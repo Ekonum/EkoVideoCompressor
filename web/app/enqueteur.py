@@ -328,7 +328,7 @@ def _demande(
         # qu'elle dit prime sur ce qu'on a entendu.
         texte += "\nLa personne t'a guidé — ses indications priment sur les indices :\n"
         texte += "\n".join(
-            f"{'Personne' if e.get('role') == 'personne' else 'Toi'} : {e.get('texte', '')}"
+            f"{'Personne' if e.get('role') == 'user' else 'Toi'} : {e.get('text', '')}"
             for e in echanges
         ) + "\n"
         texte += (

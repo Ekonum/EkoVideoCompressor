@@ -25,8 +25,8 @@ export const api = {
   jeter: (id) => call('DELETE', `/api/jobs/${id}`),
   archiver: (id) => call('POST', `/api/jobs/${id}/archive`, {}),
   restaurer: (id) => call('POST', `/api/jobs/${id}/restore`, {}),
-  supprimerDefinitivement: (id) => call('DELETE', `/api/jobs/${id}/definitif`),
-  viderCorbeille: () => call('DELETE', '/api/corbeille'),
+  supprimerDefinitivement: (id) => call('DELETE', `/api/jobs/${id}/permanent`),
+  viderCorbeille: () => call('DELETE', '/api/trash'),
   createJob: (payload) => call('POST', '/api/jobs', payload),
   job: (id) => call('GET', `/api/jobs/${id}`),
   detail: (id) => call('GET', `/api/jobs/${id}/detail`),
@@ -34,7 +34,7 @@ export const api = {
   patch: (id, payload) => call('PATCH', `/api/jobs/${id}`, payload),
   replaceTerm: (id, old, next) =>
     call('POST', `/api/jobs/${id}/terms/replace`, { old, new: next }),
-  restaurerVersion: (id, rang) => call('POST', `/api/jobs/${id}/versions/${rang}/restore`, {}),
+  restaurerVersion: (id, index) => call('POST', `/api/jobs/${id}/versions/${index}/restore`, {}),
   resetChunk: (id, index) => call('POST', `/api/jobs/${id}/chunks/${index}/reset`, {}),
   search: (q) => call('GET', `/api/search?q=${encodeURIComponent(q)}`),
   vocabulary: (selected) =>
@@ -57,7 +57,7 @@ export const api = {
   odooForget: () => call('DELETE', '/api/me/odoo'),
   odooRecords: (q) => call('GET', `/api/odoo/records?q=${encodeURIComponent(q)}`),
   odooPublish: (id, payload) => call('POST', `/api/jobs/${id}/odoo/publish`, payload),
-  enqueteGuidee: (payload) => call('POST', '/api/odoo/enquete', payload),
+  enqueteGuidee: (payload) => call('POST', '/api/odoo/investigate', payload),
   odooMeetings: () => call('GET', '/api/odoo/meetings'),
   odooContext: (model, id) =>
     call('GET', `/api/odoo/context?model=${encodeURIComponent(model)}&record_id=${id}`),

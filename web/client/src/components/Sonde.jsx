@@ -265,7 +265,7 @@ function Discussion({ indices, moment, dejaVus, echanges, setEchanges, surChoix,
   async function envoyer() {
     const texte = saisie.trim();
     if (!texte || attente) return;
-    const suite = [...echanges, { role: 'personne', texte }];
+    const suite = [...echanges, { role: 'user', texte }];
     setEchanges(suite);
     setSaisie('');
     setErreur('');
@@ -277,14 +277,14 @@ function Discussion({ indices, moment, dejaVus, echanges, setEchanges, surChoix,
       .map((d) => ({ model: d.model, id: d.id, name: d.name || '' }));
     try {
       const vue = await api.enqueteGuidee({
-        indices,
+        clues: indices,
         moment: moment || '',
-        ecartes,
-        echanges: suite.map(({ role, texte: t }) => ({ role, texte: t })),
+        rejected: ecartes,
+        messages: suite.map(({ role, texte: t }) => ({ role, text: t })),
       });
       setEchanges([...suite, {
-        role: 'ia',
-        texte: vue.reponse || (vue.candidates.length ? 'Voici ce que j’ai trouvé.' : 'Rien trouvé.'),
+        role: 'assistant',
+        texte: vue.answer || (vue.candidates.length ? 'Voici ce que j’ai trouvé.' : 'Rien trouvé.'),
         propositions: vue.candidates,
       }]);
     } catch (e) {
@@ -325,7 +325,7 @@ function Discussion({ indices, moment, dejaVus, echanges, setEchanges, surChoix,
         </div>
 
         <div ref={fil} className="min-h-[8rem] flex-1 space-y-3 overflow-y-auto px-5 py-4">
-          {echanges.map((e, i) => (e.role === 'personne' ? (
+          {echanges.map((e, i) => (e.role === 'user' ? (
             <p key={i} className="ml-auto w-fit max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-fonce px-3 py-2 text-[0.875rem] text-clair">
               {e.texte}
             </p>

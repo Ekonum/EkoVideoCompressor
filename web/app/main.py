@@ -200,24 +200,24 @@ class Reenrichissement(BaseModel):
     record_id: int = Field(default=0, ge=0)
 
 
-class Echange(BaseModel):
-    role: Literal["personne", "ia"]
-    texte: str = Field(min_length=1, max_length=2000)
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    text: str = Field(min_length=1, max_length=2000)
 
 
-class DossierEcarte(BaseModel):
+class RejectedRecord(BaseModel):
     model: str = Field(max_length=64)
     id: int = Field(ge=0)
     name: str = Field(default="", max_length=300)
 
 
-class EnqueteGuidee(BaseModel):
+class GuidedInvestigation(BaseModel):
     """Relancer l'enquête quand aucune proposition ne convient : la
     personne explique où chercher, dans une conversation."""
 
-    indices: dict[str, Any] = Field(default_factory=dict)
-    echanges: list[Echange] = Field(min_length=1, max_length=20)
-    ecartes: list[DossierEcarte] = Field(default_factory=list, max_length=20)
+    clues: dict[str, Any] = Field(default_factory=dict)
+    messages: list[ChatMessage] = Field(min_length=1, max_length=20)
+    rejected: list[RejectedRecord] = Field(default_factory=list, max_length=20)
     moment: str = Field(default="", max_length=40)
 
 
@@ -766,7 +766,7 @@ def create_app(
         db.jeter_job(job_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-    @app.delete("/api/corbeille", status_code=status.HTTP_200_OK)
+    @app.delete("/api/trash", status_code=status.HTTP_200_OK)
     def vider_corbeille(owner_id: int = Depends(current_user)) -> dict:
         """Supprime pour de bon tout ce qui est à la corbeille.
 
@@ -780,9 +780,9 @@ def create_app(
                 supprimees.append(int(job["id"]))
             except StockageIndisponible as exc:
                 log.warning("réunion %s gardée à la corbeille : %s", job["id"], exc)
-        return {"supprimees": supprimees}
+        return {"deleted": supprimees}
 
-    @app.delete("/api/jobs/{job_id}/definitif", status_code=status.HTTP_204_NO_CONTENT,
+    @app.delete("/api/jobs/{job_id}/permanent", status_code=status.HTTP_204_NO_CONTENT,
                 response_class=Response)
     def supprimer_definitivement(
         job_id: int, owner_id: int = Depends(current_user)
@@ -1060,15 +1060,15 @@ def create_app(
             db.set_uncertain(job_id, restants)
         return {"occurrences": occurrences, "technical_terms": terms}
 
-    @app.post("/api/jobs/{job_id}/versions/{rang}/restore")
+    @app.post("/api/jobs/{job_id}/versions/{index}/restore")
     def restaurer_version(
-        job_id: int, rang: int, owner_id: int = Depends(current_user)
+        job_id: int, index: int, owner_id: int = Depends(current_user)
     ) -> dict:
         """Revenir à une version antérieure — la version en place rejoint
         l'historique, donc le retour en arrière se défait lui aussi."""
         owned_job(job_id, owner_id)
         try:
-            version = db.restaurer_version(job_id, rang)
+            version = db.restaurer_version(job_id, index)
         except KeyError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Version inconnue.") from exc
         except ValueError as exc:
@@ -1511,9 +1511,9 @@ def create_app(
             ),
         }
 
-    @app.post("/api/odoo/enquete")
-    async def enquete_guidee(
-        demande: EnqueteGuidee, owner_id: int = Depends(current_user)
+    @app.post("/api/odoo/investigate")
+    async def guided_investigation(
+        demande: GuidedInvestigation, owner_id: int = Depends(current_user)
     ) -> dict:
         """Une nouvelle enquête, guidée par ce que dit la personne.
 
@@ -1521,16 +1521,16 @@ def create_app(
         un clic, puisque c'est la personne qui choisit parmi ce qui
         revient.
         """
-        if not demande.echanges or demande.echanges[-1].role != "personne":
+        if demande.messages[-1].role != "user":
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Rien à quoi répondre.")
-        ecartes = [e.model_dump() for e in demande.ecartes]
+        rejected = [r.model_dump() for r in demande.rejected]
         enquete = await asyncio.to_thread(
             _enqueter,
             owner_id,
-            demande.indices,
+            demande.clues,
             demande.moment,
-            echanges=[e.model_dump() for e in demande.echanges],
-            ecartes=ecartes,
+            echanges=[m.model_dump() for m in demande.messages],
+            ecartes=rejected,
         )
         db.add_api_usage(
             job_id=None,
@@ -1541,7 +1541,7 @@ def create_app(
             output_tokens=enquete.usage.output_tokens,
             cost_usd=enquete.usage.cost_usd,
         )
-        refuses = {(e["model"], e["id"]) for e in ecartes}
+        refuses = {(r["model"], r["id"]) for r in rejected}
         vus: set[tuple[str, int]] = set()
         propositions = []
         # Le modèle a pu reproposer un refusé malgré la consigne : on ne
@@ -1553,7 +1553,7 @@ def create_app(
             vus.add(cle)
             propositions.append(dossier)
         return {
-            "reponse": enquete.raison or (
+            "answer": enquete.raison or (
                 "Rien trouvé qui colle." if not propositions else ""
             ),
             "candidates": propositions,

@@ -20,6 +20,19 @@ catalogue des modèles, tarification, découpage, prompts, fusion. Pendant
 la phase de parité, une copie divergente serait la première chose à
 casser. Le découplage se fera en M6, quand l'app macOS sera retirée.
 
+## Conventions
+
+**Le code est en anglais, l'interface en français.** Routes d'API, clés
+JSON, tables et colonnes, noms de fonctions et de variables : en anglais
+(`/api/trash`, `/api/google/callback`). Les textes affichés restent en
+français.
+
+Une partie de l'existant est encore en français ; elle se convertit quand
+on la touche, pas en un grand renommage. Exception : les contrats déjà
+utilisés par des clients installés — l'enrôlement et l'import de l'app
+macOS (`appareil`, `code_appareil`…) — ne changent pas, pour ne pas casser
+les postes en service.
+
 ## Le contrat
 
 | Route | Rôle |

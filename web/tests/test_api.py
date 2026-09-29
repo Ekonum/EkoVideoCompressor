@@ -1082,14 +1082,14 @@ class SondeTestCase(_Fixture):
         ])
         with mock.patch.object(enqueteur, "GeminiClient", faux):
             with TestClient(self._app_avec_odoo(Passerelle())) as client:
-                vue = client.post("/api/odoo/enquete", json={
-                    "indices": {"organisations": ["Acritec"]},
-                    "echanges": [{"role": "personne",
-                                  "texte": "Cherche plutôt le projet, pas l'opportunité."}],
-                    "ecartes": [{"model": "crm.lead", "id": 364, "name": "Acritec"}],
+                vue = client.post("/api/odoo/investigate", json={
+                    "clues": {"organisations": ["Acritec"]},
+                    "messages": [{"role": "user",
+                                  "text": "Cherche plutôt le projet, pas l'opportunité."}],
+                    "rejected": [{"model": "crm.lead", "id": 364, "name": "Acritec"}],
                 }).json()
 
-        self.assertEqual(vue["reponse"], "C'est le projet de déploiement.")
+        self.assertEqual(vue["answer"], "C'est le projet de déploiement.")
         self.assertEqual([c["id"] for c in vue["candidates"]], [512])
         demande = faux.recus[0][0]["parts"][0]["text"]
         self.assertIn("Cherche plutôt le projet", demande)
@@ -1101,17 +1101,17 @@ class SondeTestCase(_Fixture):
 
     def test_l_enquete_guidee_attend_une_question(self):
         with TestClient(self._app_avec_odoo(None)) as client:
-            reponse = client.post("/api/odoo/enquete", json={
-                "echanges": [{"role": "ia", "texte": "Rien trouvé."}],
+            reponse = client.post("/api/odoo/investigate", json={
+                "messages": [{"role": "assistant", "text": "Rien trouvé."}],
             })
         self.assertEqual(reponse.status_code, 400)
 
     def test_sans_cle_odoo_l_enquete_guidee_le_dit(self):
-        vue = self.client.post("/api/odoo/enquete", json={
-            "echanges": [{"role": "personne", "texte": "C'est la mairie."}],
+        vue = self.client.post("/api/odoo/investigate", json={
+            "messages": [{"role": "user", "text": "C'est la mairie."}],
         }).json()
         self.assertEqual(vue["candidates"], [])
-        self.assertIn("clé API Odoo", vue["reponse"])
+        self.assertIn("clé API Odoo", vue["answer"])
 
 
 
@@ -2165,7 +2165,7 @@ class VideoTestCase(_Fixture):
         job_id = self._reunion()
         self._envoyer(job_id, b"0123456789")
         self.client.delete(f"/api/jobs/{job_id}")
-        self.client.delete("/api/corbeille")
+        self.client.delete("/api/trash")
         self.assertEqual(self.drive.supprimes, ["drive-1"])
         self.assertIsNone(self.db.get_job(job_id))
 
@@ -2180,8 +2180,8 @@ class VideoTestCase(_Fixture):
 
         self.drive.supprimer = refuse
         self.client.delete(f"/api/jobs/{job_id}")
-        vue = self.client.delete("/api/corbeille").json()
-        self.assertEqual(vue["supprimees"], [])
+        vue = self.client.delete("/api/trash").json()
+        self.assertEqual(vue["deleted"], [])
         self.assertIsNotNone(self.db.get_job(job_id))
 
     def test_sans_stockage_configure_rien_n_est_propose(self):
@@ -2467,8 +2467,8 @@ class CorbeilleTestCase(_Fixture):
         gardee = self._importee("Gardée")
         jetee = self._importee("Jetée")
         self.client.delete(f"/api/jobs/{jetee}")
-        vue = self.client.delete("/api/corbeille").json()
-        self.assertEqual(vue["supprimees"], [jetee])
+        vue = self.client.delete("/api/trash").json()
+        self.assertEqual(vue["deleted"], [jetee])
         self.assertIsNone(self.db.get_job(jetee))
         self.assertIsNotNone(self.db.get_job(gardee))
 
@@ -2477,10 +2477,10 @@ class CorbeilleTestCase(_Fixture):
         jeter."""
         job_id = self._importee()
         self.assertEqual(
-            self.client.delete(f"/api/jobs/{job_id}/definitif").status_code, 409)
+            self.client.delete(f"/api/jobs/{job_id}/permanent").status_code, 409)
         self.client.delete(f"/api/jobs/{job_id}")
         self.assertEqual(
-            self.client.delete(f"/api/jobs/{job_id}/definitif").status_code, 204)
+            self.client.delete(f"/api/jobs/{job_id}/permanent").status_code, 204)
         self.assertIsNone(self.db.get_job(job_id))
 
     def test_on_ne_jette_pas_la_reunion_d_un_collegue(self):
