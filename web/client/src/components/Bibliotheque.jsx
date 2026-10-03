@@ -1,16 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { Bouton, Champ, Etat, Erreur, Vide } from './Communs.jsx';
-import { duree, usd, jour, horodatage } from '../format.js';
+import { duree, fileSize, usd, jour, horodatage } from '../format.js';
 import { MOD, useRaccourcis } from '../raccourcis.js';
 import { surlignerMots } from '../surlignage.jsx';
+import {
+  enqueue, isMedia, removeFromQueue, requestLaunch, useFileDrag, useFileQueue,
+} from '../fileQueue.js';
 
 /** La bibliothèque : une table, pas une grille de cartes.
  *
  *  Ce sont des lignes comparables qu'on trie et qu'on balaie ; les
  *  encadrer une à une ajouterait des contenants sans rien clarifier.
  */
-export function Bibliotheque({ surOuvrir }) {
+export function Bibliotheque({ surOuvrir, surLancer }) {
   const [jobs, setJobs] = useState(null);
   const [erreur, setErreur] = useState('');
   const [tri, setTri] = useState({ champ: 'quand', sens: 'desc' });
@@ -194,6 +197,9 @@ export function Bibliotheque({ surOuvrir }) {
       ) : null}
 
       <Erreur>{erreur}</Erreur>
+
+      {etat === 'actif' ? <ALancer surLancer={surLancer} /> : null}
+      <DeposerIci />
 
       {resultats ? (
         <Resultats resultats={resultats} requete={recherche} surOuvrir={(id) => surOuvrir(id, recherche.trim())} />
@@ -485,5 +491,93 @@ function Resultats({ resultats, requete, surOuvrir }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+/** Les fichiers déposés qui attendent d'être lancés.
+ *
+ *  Ils restent sur le poste : la liste vit dans l'onglet, et le dit.
+ *  Chacun se lance quand on veut, dans l'ordre qu'on veut.
+ */
+function ALancer({ surLancer }) {
+  const enAttente = useFileQueue();
+  if (!enAttente.length) return null;
+  return (
+    <div className="verre mt-6 rounded-xl p-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="titre text-[1.0625rem] font-medium">
+          À lancer <span className="tabular-nums text-fonce/45">{enAttente.length}</span>
+        </h2>
+        <span className="text-[0.8125rem] text-fonce/45">
+          Restés sur ton poste : la liste se vide si tu fermes l’onglet.
+        </span>
+      </div>
+      <ul className="mt-2 divide-y divide-bord/60">
+        {enAttente.map((entree) => (
+          <li key={entree.id} className="flex items-center gap-3 py-2 text-[0.875rem]">
+            <span className="min-w-0 flex-1 truncate">{entree.file.name}</span>
+            <span className="whitespace-nowrap text-fonce/50">{jour(new Date(entree.file.lastModified).toISOString())}</span>
+            <span className="w-16 whitespace-nowrap text-right tabular-nums text-fonce/50">{fileSize(entree.file.size)}</span>
+            <button
+              type="button"
+              onClick={() => { requestLaunch(entree.id); surLancer?.(); }}
+              className="rounded-md bg-fonce px-3 py-1 text-[0.8125rem] text-clair hover:bg-fonce-doux"
+            >
+              Lancer
+            </button>
+            <button
+              type="button"
+              onClick={() => removeFromQueue(entree.id)}
+              className="px-1 text-[0.8125rem] text-fonce/45 hover:text-fonce"
+            >
+              Retirer
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** Déposer des fichiers sur la bibliothèque les ajoute à « À lancer ». */
+function DeposerIci() {
+  const glisse = useFileDrag();
+  const [message, setMessage] = useState('');
+  useEffect(() => {
+    if (!message) return undefined;
+    const minuteur = setTimeout(() => setMessage(''), 4000);
+    return () => clearTimeout(minuteur);
+  }, [message]);
+
+  return (
+    <>
+      {glisse ? (
+        <div
+          className="fixed inset-0 z-40 flex items-center justify-center bg-fonce/25 p-6 backdrop-blur-[2px]"
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            e.preventDefault();
+            const liste = [...e.dataTransfer.files];
+            const medias = liste.filter(isMedia);
+            const ajoutes = enqueue(medias);
+            const ignores = liste.length - medias.length;
+            setMessage(
+              `${ajoutes} fichier${ajoutes > 1 ? 's' : ''} ajouté${ajoutes > 1 ? 's' : ''} à « À lancer »`
+              + (ignores ? ` · ${ignores} ignoré${ignores > 1 ? 's' : ''} (ni audio ni vidéo)` : ''),
+            );
+          }}
+        >
+          <div className="pointer-events-none rounded-2xl border-2 border-dashed border-turquoise bg-white/90 px-10 py-8 text-center shadow-2xl">
+            <p className="titre text-[1.0625rem] font-medium">Dépose tes enregistrements</p>
+            <p className="mt-1 text-[0.875rem] text-fonce/60">Ils rejoignent « À lancer », à transcrire quand tu veux.</p>
+          </div>
+        </div>
+      ) : null}
+      {message ? (
+        <p className="fixed bottom-6 left-0 right-0 z-40 mx-auto w-fit rounded-lg bg-fonce px-4 py-2 text-[0.875rem] text-clair shadow-xl">
+          {message}
+        </p>
+      ) : null}
+    </>
   );
 }

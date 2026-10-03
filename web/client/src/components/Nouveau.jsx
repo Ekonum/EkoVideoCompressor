@@ -7,6 +7,9 @@ import { archiver, useArchivage } from '../archivage.js';
 import { Apercu } from './Apercu.jsx';
 import { Sonde } from './Sonde.jsx';
 import { usePipeline } from '../usePipeline.js';
+import {
+  consumeLaunchRequest, enqueue, isMedia, removeFromQueue, takeNext, useFileDrag, useFileQueue,
+} from '../fileQueue.js';
 import { duree, mo, usd, horodatage, liste } from '../format.js';
 
 const MODELE = 'gemini-3.8-flash';
@@ -59,6 +62,10 @@ export function Nouveau({ surTermine, surBibliotheque }) {
   const [fin, setFin] = useState(0);
   const pipeline = usePipeline();
   const compression = useCompression();
+  const enAttente = useFileQueue();
+  const glisse = useFileDrag();
+  const [surZone, setSurZone] = useState(false);
+  const [ignores, setIgnores] = useState(0);
 
   const capacites = typeof AudioEncoder !== 'undefined' && window.isSecureContext;
 
@@ -131,8 +138,46 @@ export function Nouveau({ surTermine, surBibliotheque }) {
     }
   }
 
-  async function choisir(event) {
-    const choisi = event.target.files[0] || null;
+  /** Des fichiers arrivent — choisis ou déposés. Le premier s'ouvre dans
+   *  le formulaire, les suivants attendent leur tour. Pendant qu'une
+   *  transcription part, tous attendent : on ne remplace pas sous les
+   *  doigts ce qu'on est en train d'envoyer. */
+  function recevoir(liste) {
+    const medias = liste.filter(isMedia);
+    setIgnores(liste.length - medias.length);
+    if (!medias.length) return;
+    const occupe = pipeline.etat === 'traitement' || pipeline.etat === 'creation';
+    if (occupe) {
+      enqueue(medias);
+      return;
+    }
+    charger(medias[0]);
+    enqueue(medias.slice(1));
+  }
+
+  function choisir(event) {
+    const liste = [...(event.target.files || [])];
+    // Vidé aussitôt : choisir à nouveau le même fichier doit encore
+    // déclencher quelque chose.
+    event.target.value = '';
+    if (liste.length) recevoir(liste);
+  }
+
+  // « Lancer » depuis la bibliothèque : le fichier attendait dans la file.
+  useEffect(() => {
+    const demande = consumeLaunchRequest();
+    if (demande) charger(demande);
+  }, []);
+
+  // Quitter l'écran avec un fichier chargé mais pas lancé le remet en tête
+  // de la file : il attend dans « À lancer » au lieu de disparaître.
+  const enSuspens = useRef(null);
+  enSuspens.current = pipeline.etat === 'repos' && !pipeline.jobId ? fichier : null;
+  useEffect(() => () => {
+    if (enSuspens.current) enqueue([enSuspens.current], { front: true });
+  }, []);
+
+  async function charger(choisi) {
     setFichier(null);
     setSecondes(0);
     sondeCourante.current += 1;
@@ -247,14 +292,86 @@ export function Nouveau({ surTermine, surBibliotheque }) {
       <div className="mt-8 space-y-8">
         <div>
           <h2 className="titre text-[1.0625rem] font-medium">1. Le fichier</h2>
-          <input
-            ref={champFichier}
-            type="file"
-            accept="video/*,audio/*"
-            onChange={choisir}
-            disabled={enCours}
-            className="verre mt-3 block w-full cursor-pointer rounded-xl border-dashed px-4 py-6 text-fonce/70 file:mr-4 file:rounded-md file:border-0 file:bg-fonce file:px-3 file:py-1.5 file:text-clair"
-          />
+          {/* La zone change d'aspect dès qu'un fichier survole la page,
+              et plus franchement quand il la survole elle : on voit où
+              lâcher avant d'avoir à viser. */}
+          <div
+            className="relative mt-3"
+            onDragOver={(e) => { e.preventDefault(); setSurZone(true); }}
+            onDragLeave={() => setSurZone(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setSurZone(false);
+              recevoir([...e.dataTransfer.files]);
+            }}
+          >
+            {/* Le champ natif reste, caché : il dirait « Aucun fichier
+                choisi » après un dépôt, alors qu'un fichier est chargé. */}
+            <input
+              id="champ-fichier"
+              ref={champFichier}
+              type="file"
+              multiple
+              accept="video/*,audio/*"
+              onChange={choisir}
+              disabled={enCours}
+              className="sr-only"
+            />
+            <label
+              htmlFor="champ-fichier"
+              className={`verre flex items-center gap-4 rounded-xl border-dashed px-4 py-5 transition-opacity ${
+                enCours ? 'cursor-not-allowed' : 'cursor-pointer hover:bg-white/50'
+              } ${glisse ? 'opacity-0' : ''}`}
+            >
+              <span className={`shrink-0 rounded-md px-3 py-1.5 text-[0.875rem] ${
+                enCours ? 'bg-fonce/30 text-clair' : 'bg-fonce text-clair'
+              }`}>
+                Choisir des fichiers
+              </span>
+              <span className="min-w-0 truncate text-[0.9375rem] text-fonce/65">
+                {fichier ? fichier.name : 'ou glisse un ou plusieurs enregistrements ici'}
+              </span>
+            </label>
+            {glisse ? (
+              <div
+                className={`pointer-events-none absolute inset-0 flex flex-col items-center justify-center rounded-xl border-2 border-dashed transition-all ${
+                  surZone
+                    ? 'scale-[1.02] border-turquoise-sombre bg-turquoise/25 text-fonce shadow-lg'
+                    : 'border-turquoise bg-turquoise/10 text-fonce/75'
+                }`}
+              >
+                <span className="titre text-[0.9375rem] font-medium">
+                  {surZone ? 'Lâche pour ajouter' : 'Dépose tes enregistrements ici'}
+                </span>
+                <span className="text-[0.8125rem] text-fonce/55">
+                  {enCours ? 'ils attendront la fin de l’envoi en cours' : 'un seul, ou plusieurs à la fois'}
+                </span>
+              </div>
+            ) : null}
+          </div>
+          {ignores ? (
+            <p className="mt-2 text-[0.8125rem] text-fonce/55">
+              {ignores} fichier{ignores > 1 ? 's' : ''} ignoré{ignores > 1 ? 's' : ''} : ni audio ni vidéo.
+            </p>
+          ) : null}
+          {enAttente.length ? (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[0.8125rem]">
+              <span className="text-fonce/55">Ensuite :</span>
+              {enAttente.map((entree) => (
+                <span key={entree.id} className="inline-flex items-center gap-1 rounded-full bg-white/70 px-2.5 py-0.5 text-fonce/75 ring-1 ring-bord">
+                  {entree.file.name}
+                  <button
+                    type="button"
+                    onClick={() => removeFromQueue(entree.id)}
+                    aria-label={`Retirer ${entree.file.name} de la file`}
+                    className="text-fonce/40 hover:text-fonce"
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          ) : null}
           {lecture ? <p className="mt-2 text-[0.875rem] text-fonce/60">{lecture}</p> : null}
           {fichier ? (
             <div className="mt-3 flex flex-wrap items-center gap-3 text-[0.875rem]">
@@ -507,7 +624,8 @@ export function Nouveau({ surTermine, surBibliotheque }) {
                 type="button"
                 onClick={() => {
                   // La transcription en cours continue ; on repart d'un
-                  // formulaire vierge pour la suivante.
+                  // formulaire vierge pour la suivante — et s'il y a des
+                  // fichiers en attente, avec le prochain déjà chargé.
                   pipeline.detacher();
                   setFichier(null); setSecondes(0); setLecture(''); setSonde(null);
                   setDossier(null); setClient(''); setParticipants(''); setGlossaire('');
@@ -516,11 +634,15 @@ export function Nouveau({ surTermine, surBibliotheque }) {
                   sondeCourante.current += 1;
                   apport.current = { client: '', termes: [] };
                   if (champFichier.current) champFichier.current.value = '';
+                  const suivant = takeNext();
+                  if (suivant) charger(suivant);
                   window.scrollTo({ top: 0, behavior: 'smooth' });
                 }}
                 className="rounded-md px-3 py-1.5 text-[0.875rem] text-fonce/70 ring-1 ring-bord hover:bg-white/60"
               >
-                Lancer une autre transcription
+                {enAttente.length
+                  ? `Passer à la suivante (${enAttente.length} en attente)`
+                  : 'Lancer une autre transcription'}
               </button>
             </div>
           </div>
