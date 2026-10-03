@@ -182,6 +182,20 @@ class DriveStockage:
 
         return Plage(statut=statut, entetes=entetes, flux=flux())
 
+    def copy_from(self, file_id: str, name: str) -> dict[str, Any]:
+        """Copie un fichier du Drive de quelqu'un dans le stockage, sans
+        qu'un octet passe par le serveur : Google copie chez lui. Le compte
+        de service doit avoir été autorisé à lire le fichier."""
+        reponse = self._requete(
+            "POST",
+            f"{FICHIERS_URL}/{urllib.parse.quote(file_id)}/copy?"
+            + urllib.parse.urlencode({"supportsAllDrives": "true", "fields": "id,size,md5Checksum"}),
+            corps=json.dumps({"name": name, "parents": [self._dossier]}).encode(),
+            type_="application/json; charset=UTF-8",
+        )
+        with reponse:
+            return json.loads(reponse.read().decode("utf-8") or "{}")
+
     def supprimer(self, fichier_id: str) -> None:
         """Suppression définitive — le Drive partagé n'a pas de corbeille
         à vider après coup : c'est la corbeille de transcript qui en tient
