@@ -69,7 +69,7 @@ export default function App() {
             surBibliotheque={() => setVue('bibliotheque')}
           />
         ) : (
-          <Bibliotheque surOuvrir={ouvrir} surLancer={() => setVue('nouveau')} />
+          <Bibliotheque surOuvrir={ouvrir} surLancer={() => setVue('nouveau')} surVue={setVue} />
         )}
       </main>
       {aide ? <Aide surFermer={() => setAide(false)} /> : null}

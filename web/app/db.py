@@ -221,6 +221,8 @@ class Database:
             # L'invitation à récupérer son historique ne revient pas une
             # fois écartée.
             ("recovery_dismissed_at", "TEXT"),
+            # L'accueil des nouveaux venus, une fois masqué, ne revient pas.
+            ("onboarding_dismissed_at", "TEXT"),
         ):
             self._ensure_column(conn, "users", colonne, ddl)
 
@@ -898,6 +900,34 @@ class Database:
                 (match, owner_id, limit),
             ).fetchall()
             return [dict(r) for r in rows]
+
+    # -- onboarding ------------------------------------------------------
+
+    def onboarding_state(self, user_id: int) -> dict[str, bool]:
+        """Où en est la personne de ses premiers pas : chaque étape se lit
+        dans ce qu'elle a fait, pas dans une case qu'elle aurait cochée."""
+        with self.connect() as conn:
+            user = conn.execute(
+                "SELECT odoo_login, odoo_key_chiffree, onboarding_dismissed_at FROM users WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+            mac = conn.execute(
+                "SELECT 1 FROM enrolements WHERE owner_id = ? LIMIT 1", (user_id,)
+            ).fetchone()
+            job = conn.execute("SELECT 1 FROM jobs WHERE owner_id = ? LIMIT 1", (user_id,)).fetchone()
+        return {
+            "odoo": bool(user and user["odoo_login"] and user["odoo_key_chiffree"]),
+            "mac": bool(mac),
+            "transcription": bool(job),
+            "dismissed": bool(user and user["onboarding_dismissed_at"]),
+        }
+
+    def dismiss_onboarding(self, user_id: int) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE users SET onboarding_dismissed_at = ? WHERE id = ?",
+                (datetime.now().isoformat(timespec="seconds"), user_id),
+            )
 
     # -- Google account and history recovery ----------------------------
 
