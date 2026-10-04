@@ -18,7 +18,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Rien ne se publie sans vérification : les tests du moteur et le build
+  # de l'app passent d'abord, dans le même run.
+  verify:
+    uses: ./.github/workflows/build-macos.yml
+
   release:
+    needs: verify
     runs-on: macos-15
     permissions:
       contents: write

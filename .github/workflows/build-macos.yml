@@ -6,6 +6,9 @@ on:
       - main
   pull_request:
   workflow_dispatch:
+  # Appelé aussi par release-macos.yml : la release ne part qu'après ces
+  # tests et ce build.
+  workflow_call:
 
 jobs:
   build:
