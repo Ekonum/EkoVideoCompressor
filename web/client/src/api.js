@@ -58,6 +58,8 @@ export const api = {
   odooRecords: (q) => call('GET', `/api/odoo/records?q=${encodeURIComponent(q)}`),
   odooPublish: (id, payload) => call('POST', `/api/jobs/${id}/odoo/publish`, payload),
   enqueteGuidee: (payload) => call('POST', '/api/odoo/investigate', payload),
+  onboarding: () => call('GET', '/api/onboarding'),
+  onboardingDismiss: () => call('POST', '/api/onboarding/dismiss', {}),
   googleStatus: () => call('GET', '/api/google'),
   googleDisconnect: () => call('DELETE', '/api/google'),
   recoveryState: () => call('GET', '/api/recovery'),

@@ -1705,6 +1705,23 @@ def create_app(
         oauth_opener=google_opener,
     )
 
+    @app.get("/api/onboarding")
+    def onboarding(owner_id: int = Depends(current_user)) -> dict:
+        """L'accueil s'affiche tant que l'essentiel n'est pas fait — la clé
+        Odoo et une première réunion — et qu'on ne l'a pas masqué. Le Mac
+        est facultatif : tout le monde n'utilisait pas l'app."""
+        etat = db.onboarding_state(owner_id)
+        return {
+            "show": not etat["dismissed"] and not (etat["odoo"] and etat["transcription"]),
+            "steps": {k: etat[k] for k in ("odoo", "mac", "transcription")},
+        }
+
+    @app.post("/api/onboarding/dismiss", status_code=status.HTTP_204_NO_CONTENT,
+              response_class=Response)
+    def onboarding_dismiss(owner_id: int = Depends(human_user)) -> Response:
+        db.dismiss_onboarding(owner_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
     @app.get("/api/settings")
     def settings_view(owner_id: int = Depends(current_user)) -> dict:
         """Ce que l'interface a besoin de savoir : les modèles offerts et

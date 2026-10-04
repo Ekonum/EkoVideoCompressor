@@ -4,6 +4,7 @@ import { Bouton, Champ, Etat, Erreur, Vide } from './Communs.jsx';
 import { duree, fileSize, usd, jour, horodatage } from '../format.js';
 import { MOD, useRaccourcis } from '../raccourcis.js';
 import { surlignerMots } from '../surlignage.jsx';
+import { Welcome } from './Welcome.jsx';
 import {
   enqueue, isMedia, removeFromQueue, requestLaunch, useFileDrag, useFileQueue,
 } from '../fileQueue.js';
@@ -13,7 +14,7 @@ import {
  *  Ce sont des lignes comparables qu'on trie et qu'on balaie ; les
  *  encadrer une à une ajouterait des contenants sans rien clarifier.
  */
-export function Bibliotheque({ surOuvrir, surLancer }) {
+export function Bibliotheque({ surOuvrir, surLancer, surVue }) {
   const [jobs, setJobs] = useState(null);
   const [erreur, setErreur] = useState('');
   const [tri, setTri] = useState({ champ: 'quand', sens: 'desc' });
@@ -198,6 +199,7 @@ export function Bibliotheque({ surOuvrir, surLancer }) {
 
       <Erreur>{erreur}</Erreur>
 
+      {etat === 'actif' ? <Welcome onNavigate={(vue) => surVue?.(vue)} /> : null}
       {etat === 'actif' ? <ALancer surLancer={surLancer} /> : null}
       <DeposerIci />
 

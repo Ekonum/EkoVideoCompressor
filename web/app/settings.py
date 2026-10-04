@@ -166,7 +166,8 @@ class Settings:
             google_secret_item=os.environ.get(
                 "EKOVIDEO_GOOGLE_SECRET_ITEM", "Ekonum - Google transcript OAuth"
             ).strip(),
-            google_secret_field=os.environ.get("EKOVIDEO_GOOGLE_SECRET_FIELD", "Secret").strip(),
+            # Les noms du coffre, comme pour « Client OAuth - Piste ».
+            google_secret_field=os.environ.get("EKOVIDEO_GOOGLE_SECRET_FIELD", "Client secret").strip(),
             recovery_users=frozenset(
                 adresse.strip().lower()
                 for adresse in os.environ.get("EKOVIDEO_RECOVERY_USERS", "").split(",")

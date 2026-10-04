@@ -1120,6 +1120,26 @@ class SondeTestCase(_Fixture):
 
 
 
+class OnboardingTestCase(_Fixture):
+    """L'accueil se lit dans ce que la personne a fait."""
+
+    def test_l_accueil_suit_les_premiers_pas_puis_s_efface(self):
+        vue = self.client.get("/api/onboarding").json()
+        self.assertTrue(vue["show"])
+        self.assertEqual(vue["steps"], {"odoo": False, "mac": False, "transcription": False})
+
+        self.client.put("/api/me/odoo", json={"login": "robin@ekonum.fr", "api_key": "cle-odoo"})
+        self._create(duration=600.0)
+        vue = self.client.get("/api/onboarding").json()
+        self.assertEqual((vue["steps"]["odoo"], vue["steps"]["transcription"]), (True, True))
+        # L'essentiel fait, le Mac facultatif : l'accueil s'efface.
+        self.assertFalse(vue["show"])
+
+    def test_masque_il_ne_revient_pas(self):
+        self.client.post("/api/onboarding/dismiss")
+        self.assertFalse(self.client.get("/api/onboarding").json()["show"])
+
+
 class FauxGemini:
     """Rejoue une suite de réponses Gemini, tour par tour."""
 
