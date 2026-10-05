@@ -1604,7 +1604,10 @@ class LiaisonAutomatiqueTestCase(_Fixture):
             gemini_key=GeminiKey(url="", token="", item="", field="", static_key="k"),
             odoo_factory=lambda _: self._passerelle(chatter),
         )
-        with TestClient(app) as client:
+        # _Client attend, après chaque requête, la fin des tâches de fond :
+        # transcription des fenêtres puis finalisation et dépôt. Une attente
+        # bornée à deux secondes passait en local et cassait sur la CI.
+        with _Client(app) as client:
             job = client.post("/api/jobs", json={
                 "filename": "reunion.mov", "duration_seconds": 600.0,
                 "model": "gemini-3.8-flash", "language": "fr",
@@ -1613,14 +1616,6 @@ class LiaisonAutomatiqueTestCase(_Fixture):
             for fenetre in job["chunks"]:
                 client.put(f"/api/jobs/{job['job_id']}/chunks/{fenetre['index']}",
                            content=b"audio")
-            # Le serveur finalise seul, en tâche de fond : un client
-            # attend la fin au lieu de la déclencher.
-            import time as _time
-
-            for _ in range(200):
-                if client.get(f"/api/jobs/{job['job_id']}").json()["status"] == "termine":
-                    break
-                _time.sleep(0.01)
             return client.post(f"/api/jobs/{job['job_id']}/finalize").json(), job
 
     def test_depose_et_previent_sans_rien_demander(self):
