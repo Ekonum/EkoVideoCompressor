@@ -1120,6 +1120,18 @@ class SondeTestCase(_Fixture):
 
 
 
+class SharePageTestCase(_Fixture):
+    def test_la_page_a_partager_porte_son_apercu(self):
+        """Un robot d'aperçu n'a pas de session : la page doit tout dire
+        d'elle-même, image comprise, par des adresses absolues."""
+        page = self.client.get("/bienvenue")
+        self.assertEqual(page.status_code, 200)
+        self.assertIn('property="og:image" content="https://transcript.test/bienvenue/apercu.png"', page.text)
+        self.assertIn('name="twitter:card" content="summary_large_image"', page.text)
+        image = Path(__file__).resolve().parents[1] / "client" / "public" / "bienvenue" / "apercu.png"
+        self.assertTrue(image.is_file())
+
+
 class OnboardingTestCase(_Fixture):
     """L'accueil se lit dans ce que la personne a fait."""
 
