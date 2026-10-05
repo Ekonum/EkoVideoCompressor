@@ -46,6 +46,7 @@ const ETATS = {
   termine: ['Terminé', 'bg-turquoise text-fonce'],
   erreur: ['Erreur', 'bg-[#b3261e]/12 text-[#8c1d18]'],
   recovered: ['Récupérée', 'bg-violet/10 text-violet'],
+  cancelled: ['Interrompue', 'bg-fonce/8 text-fonce/60'],
 };
 
 export function Etat({ valeur }) {

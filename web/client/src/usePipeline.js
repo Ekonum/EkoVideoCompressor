@@ -57,6 +57,10 @@ function suivre(cle, jobId) {
           return f;
         }),
       });
+      if (vue.status === 'cancelled' || tache.etat === 'interrompu') {
+        publier(cle, { etat: 'interrompu', message: '' });
+        return;
+      }
       if (vue.status === 'erreur') {
         publier(cle, { etat: 'repos', erreur: vue.error || 'La transcription a échoué.' });
         return;
@@ -73,6 +77,13 @@ function suivre(cle, jobId) {
   };
   setTimeout(tour, 3000);
 }
+
+// Les workers en cours, par transcription : « Interrompre » doit pouvoir
+// arrêter l'encodage sur-le-champ, pas au prochain envoi.
+const workers = new Map();
+// Ce qu'il faut pour reprendre une transcription au même endroit : le
+// fichier reste en mémoire tant que l'onglet est ouvert.
+const reprises = new Map();
 
 async function demarrer(cle, { fichier, duree, contexte, modele, offset = 0, meetingDate }) {
   publier(cle, {
@@ -100,35 +111,86 @@ async function demarrer(cle, { fichier, duree, contexte, modele, offset = 0, mee
     estimation: job.estimated_cost_usd,
     fenetres: job.chunks.map((c) => ({ ...c, etat: 'attendue', octets: 0 })),
     etat: 'traitement',
-    message: 'Encodage sur ce poste…',
   });
+  reprises.set(cle, { fichier, job, offset });
+  await envoyer(cle);
+  suivre(cle, job.job_id);
+}
+
+/** Encode et envoie ce qui manque encore au serveur — tout, au premier
+ *  passage ; seulement les fenêtres absentes, après une erreur. */
+async function envoyer(cle) {
+  const { fichier, job, offset } = reprises.get(cle);
+  publier(cle, { erreur: '', envoiTermine: false, message: 'Encodage sur ce poste…' });
 
   // Reprise : le serveur dit ce qui manque, on ne réencode que cela.
   const restant = (await api.job(job.job_id)).missing_chunks;
+  // Interrompue pendant qu'on interrogeait le serveur : rien à encoder.
+  if (taches.get(cle)?.etat === 'interrompu') return;
   const worker = new Worker(new URL('./media-worker.js', import.meta.url), { type: 'module' });
+  workers.set(cle, worker);
+  const finir = () => { worker.terminate(); workers.delete(cle); };
   worker.onmessage = ({ data }) => {
     if (data.kind === 'encoding') {
       majFenetre(cle, data.index, { etat: 'encodage', progression: data.ratio });
     } else if (data.kind === 'encoded') {
       majFenetre(cle, data.index, { etat: 'envoi', octets: data.bytes });
+    } else if (data.kind === 'retrying') {
+      publier(cle, {
+        message: `Connexion perdue : nouvel essai dans ${Math.round(data.wait / 1000)} s (essai ${data.attempt + 1})…`,
+      });
     } else if (data.kind === 'uploaded') {
       majFenetre(cle, data.index, { etat: 'transcription' });
+      publier(cle, { message: 'Encodage sur ce poste…' });
     } else if (data.kind === 'done') {
-      worker.terminate();
+      finir();
       publier(cle, {
         envoiTermine: true,
         message: 'Tout est envoyé : le serveur termine seul. Tu peux quitter cet écran.',
       });
+    } else if (data.kind === 'cancelled') {
+      finir();
+      publier(cle, { etat: 'interrompu', message: '', erreur: '' });
     } else if (data.kind === 'error') {
-      worker.terminate();
-      publier(cle, { erreur: data.message });
+      finir();
+      publier(cle, { erreur: data.message, reprenable: true });
+      // L'erreur part aussi au serveur : sans elle, on ne saurait d'un
+      // « network error » que ce qu'en dit la personne qui l'a eu.
+      api.reportClientError({
+        job_id: job.job_id, stage: data.stage || '', file_name: fichier.name, message: data.message,
+      }).catch(() => {});
     }
   };
   worker.postMessage({
     file: fichier, jobId: job.job_id, chunks: job.chunks, audio: job.audio,
     pending: restant, offset,
   });
-  suivre(cle, job.job_id);
+}
+
+/** Reprend une transcription en erreur au même endroit, sans recréer de
+ *  réunion ni repayer les fenêtres déjà transcrites. */
+export function reprendre(cle) {
+  if (reprises.has(cle)) envoyer(cle);
+}
+
+/** Interrompt une transcription : l'encodage s'arrête tout de suite, le
+ *  serveur ne transcrit plus rien, et la réunion part à la corbeille. */
+export async function interrompre(cle) {
+  const tache = taches.get(cle);
+  workers.get(cle)?.terminate();
+  workers.delete(cle);
+  reprises.delete(cle);
+  publier(cle, { etat: 'interrompu', message: '', erreur: '' });
+  if (tache?.jobId) await api.cancelJob(tache.jobId).catch(() => {});
+}
+
+/** Interrompt une réunion depuis la bibliothèque. Si elle s'encode dans
+ *  cet onglet, l'encodage s'arrête aussitôt ; sinon, le serveur refusera
+ *  les envois du navigateur qui l'encode ailleurs. */
+export async function interrompreReunion(jobId) {
+  const cle = [...taches.entries()].find(([, t]) => t.jobId === jobId)?.[0];
+  if (cle) return interrompre(cle);
+  return api.cancelJob(jobId);
 }
 
 /** Toutes les transcriptions lancées depuis cet onglet. */
@@ -164,6 +226,8 @@ export function usePipeline() {
 
   const tache = (cle && taches.get(cle)) || {};
   return {
+    cle,
+    reprenable: Boolean(tache.reprenable && tache.erreur),
     jobId: tache.jobId ?? null,
     fenetres: tache.fenetres || [],
     etat: tache.etat || 'repos',
