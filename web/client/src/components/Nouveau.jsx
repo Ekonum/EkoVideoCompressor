@@ -6,7 +6,7 @@ import { useCompression } from '../useCompression.js';
 import { archiver, useArchivage } from '../archivage.js';
 import { Apercu } from './Apercu.jsx';
 import { Sonde } from './Sonde.jsx';
-import { usePipeline } from '../usePipeline.js';
+import { interrompre, reprendre, usePipeline } from '../usePipeline.js';
 import {
   consumeLaunchRequest, enqueue, isMedia, removeFromQueue, takeNext, useFileDrag, useFileQueue,
 } from '../fileQueue.js';
@@ -26,6 +26,19 @@ const MODELE = 'gemini-3.8-flash';
 function versChampLocal(date) {
   const decale = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
   return decale.toISOString().slice(0, 16);
+}
+
+/** Au-dessous de ce poids, le fichier est copié en mémoire dès qu'on le
+ *  choisit. Un mémo vocal synchronisé par iCloud peut être réécrit sur le
+ *  disque entre le dépôt et l'encodage ; Chrome refuse alors de le relire,
+ *  avec un « network error » qui n'a rien de réseau. La copie, elle, ne
+ *  bouge plus. Au-delà, une vidéo de plusieurs gigaoctets pèserait trop. */
+const COPIE_MAX = 400 * 1024 * 1024;
+
+async function copieEnMemoire(fichier) {
+  if (fichier.size > COPIE_MAX) return fichier;
+  const octets = await fichier.arrayBuffer();
+  return new File([octets], fichier.name, { type: fichier.type, lastModified: fichier.lastModified });
 }
 
 export function Nouveau({ surTermine, surBibliotheque }) {
@@ -177,15 +190,16 @@ export function Nouveau({ surTermine, surBibliotheque }) {
     if (enSuspens.current) enqueue([enSuspens.current], { front: true });
   }, []);
 
-  async function charger(choisi) {
+  async function charger(original) {
     setFichier(null);
     setSecondes(0);
     sondeCourante.current += 1;
     setSonde(null);
     retirer();
-    if (!choisi) return setLecture('');
+    if (!original) return setLecture('');
     setLecture('Lecture des métadonnées…');
     try {
+      const choisi = await copieEnMemoire(original);
       const total = await sonderDuree(choisi);
       setFichier(choisi);
       setSecondes(total);
@@ -597,6 +611,16 @@ export function Nouveau({ surTermine, surBibliotheque }) {
         </div>
 
         <Erreur>{pipeline.erreur}</Erreur>
+        {pipeline.reprenable ? (
+          // Le fichier est encore en mémoire et la réunion existe : on
+          // reprend où ça s'est arrêté, sans repayer ce qui est transcrit.
+          <div className="-mt-4 flex flex-wrap items-center gap-3 text-[0.875rem]">
+            <Bouton onClick={() => reprendre(pipeline.cle)}>Reprendre là où ça s’est arrêté</Bouton>
+            <span className="text-fonce/55">
+              Si le fichier est sur iCloud, attends qu’il soit entièrement téléchargé sur ce Mac.
+            </span>
+          </div>
+        ) : null}
         <Erreur>{compression.erreur}</Erreur>
         {archivage ? <AvancementArchivage tache={archivage} /> : null}
         <Compression compression={compression} />
@@ -609,12 +633,14 @@ export function Nouveau({ surTermine, surBibliotheque }) {
           />
         ) : null}
 
-        {pipeline.etat === 'traitement' ? (
+        {pipeline.etat === 'traitement' || pipeline.etat === 'interrompu' ? (
           <div className="verre rounded-xl p-4">
             <p className="text-[0.875rem] text-fonce/75">
-              {pipeline.envoiTermine
-                ? 'Tout est envoyé : le serveur termine seul. Tu peux fermer cet onglet.'
-                : 'Tu peux faire autre chose pendant ce temps — garde seulement cet onglet ouvert tant que l’envoi n’est pas fini.'}
+              {pipeline.etat === 'interrompu'
+                ? 'Transcription interrompue. La réunion est dans la corbeille, si tu veux la récupérer.'
+                : pipeline.envoiTermine
+                  ? 'Tout est envoyé : le serveur termine seul. Tu peux fermer cet onglet.'
+                  : 'Tu peux faire autre chose pendant ce temps — garde seulement cet onglet ouvert tant que l’envoi n’est pas fini.'}
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
               <Bouton onClick={() => { pipeline.detacher(); surBibliotheque?.(); }}>
@@ -644,6 +670,20 @@ export function Nouveau({ surTermine, surBibliotheque }) {
                   ? `Passer à la suivante (${enAttente.length} en attente)`
                   : 'Lancer une autre transcription'}
               </button>
+              {pipeline.etat === 'traitement' ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (window.confirm(
+                      'Interrompre cette transcription ? Ce qui n’est pas encore transcrit ne le sera pas, '
+                      + 'et la réunion part à la corbeille.',
+                    )) interrompre(pipeline.cle);
+                  }}
+                  className="ml-auto rounded-md px-3 py-1.5 text-[0.875rem] text-[#8c1d18] ring-1 ring-[#b3261e]/30 hover:bg-[#b3261e]/5"
+                >
+                  Interrompre
+                </button>
+              ) : null}
             </div>
           </div>
         ) : null}

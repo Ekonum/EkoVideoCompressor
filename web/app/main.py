@@ -201,6 +201,13 @@ class Reenrichissement(BaseModel):
     record_id: int = Field(default=0, ge=0)
 
 
+class ClientError(BaseModel):
+    job_id: int | None = None
+    stage: str = Field(default="", max_length=40)
+    file_name: str = Field(default="", max_length=500)
+    message: str = Field(default="", max_length=4000)
+
+
 class ChatMessage(BaseModel):
     role: Literal["user", "assistant"]
     text: str = Field(min_length=1, max_length=2000)
@@ -590,6 +597,10 @@ def create_app(
         job_id: int, index: int, request: Request, owner_id: int = Depends(current_user)
     ) -> dict:
         job = owned_job(job_id, owner_id)
+        # Une transcription interrompue ne reprend pas par la bande : le
+        # navigateur qui encode encore s'arrête sur ce refus.
+        if job["status"] == "cancelled" or job["deleted_at"]:
+            raise HTTPException(status.HTTP_409_CONFLICT, "Transcription interrompue.")
         chunks = {c["idx"]: c for c in db.chunks_for_job(job_id)}
         window = chunks.get(index)
         if window is None:
@@ -694,6 +705,39 @@ def create_app(
             technical_terms=merged.technical_terms,
             cost_usd=merged.usage.cost_usd,
         )
+
+    @app.post("/api/jobs/{job_id}/cancel")
+    def cancel_job(job_id: int, owner_id: int = Depends(current_user)) -> dict:
+        """Interrompt une transcription lancée.
+
+        Les fenêtres pas encore transcrites ne le seront pas, le navigateur
+        qui encode encore s'arrête au prochain envoi, et la réunion part à
+        la corbeille — récupérable, comme tout ce qu'on jette. Une
+        transcription terminée ne s'interrompt plus : elle se jette.
+        """
+        job = owned_job(job_id, owner_id)
+        if job["status"] in {"termine", "finalisation"}:
+            raise HTTPException(status.HTTP_409_CONFLICT, "Transcription déjà terminée.")
+        db.set_job_status(job_id, "cancelled", error="Interrompue à la demande.")
+        db.jeter_job(job_id)
+        return {"cancelled": True}
+
+    @app.post("/api/client-errors", status_code=status.HTTP_204_NO_CONTENT,
+              response_class=Response)
+    def client_error(
+        report: ClientError, request: Request, owner_id: int = Depends(current_user)
+    ) -> Response:
+        """Ce que le navigateur a vu échouer, dans les journaux du serveur.
+
+        Une erreur d'encodage ou d'envoi n'arrive jamais jusqu'ici d'elle-
+        même : sans ce relais, on ne sait d'un « network error » que ce
+        qu'en dit la personne qui l'a eu."""
+        log.warning(
+            "erreur navigateur : utilisateur=%s job=%s étape=%s fichier=%s message=%s agent=%s",
+            owner_id, report.job_id, report.stage, report.file_name[:120],
+            report.message[:500], request.headers.get("user-agent", "")[:160],
+        )
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.post("/api/jobs/{job_id}/finalize", response_model=FinalizeResponse)
     def finalize(job_id: int, owner_id: int = Depends(current_user)) -> FinalizeResponse:
@@ -1795,10 +1839,19 @@ def create_app(
 
     # -- tâche de fond -------------------------------------------------
 
+    def interrompue(job_id: int) -> bool:
+        courant = db.get_job(job_id) or {}
+        return courant.get("status") == "cancelled" or bool(courant.get("deleted_at"))
+
     async def _run_chunk(job: dict, window: dict, path: Path) -> None:
         job_id = int(job["id"])
         index = int(window["idx"])
         async with app.state.semaphore:
+            # Interrompue pendant que la fenêtre attendait son tour : on ne
+            # paie pas pour une transcription dont personne ne veut plus.
+            if interrompue(job_id):
+                _discard(path)
+                return
             try:
                 result = await asyncio.to_thread(_transcribe_blocking, job, window, path)
             except (CloudTranscriptionError, SecretError) as exc:
@@ -1824,6 +1877,8 @@ def create_app(
                 output_tokens=result.usage.output_tokens,
                 cost_usd=result.usage.cost_usd,
             )
+            if interrompue(job_id):
+                return
             remaining = [
                 c for c in db.chunks_for_job(job_id) if c["status"] != "termine"
             ]

@@ -5,6 +5,7 @@ import { duree, fileSize, usd, jour, horodatage } from '../format.js';
 import { MOD, useRaccourcis } from '../raccourcis.js';
 import { surlignerMots } from '../surlignage.jsx';
 import { Welcome } from './Welcome.jsx';
+import { interrompreReunion } from '../usePipeline.js';
 import {
   enqueue, isMedia, removeFromQueue, requestLaunch, useFileDrag, useFileQueue,
 } from '../fileQueue.js';
@@ -448,6 +449,15 @@ function Actions({ job, etat, surFait, surErreur }) {
     </button>
   );
 
+  if (etat === 'actif' && ['en_attente', 'en_cours', 'a_finaliser'].includes(job.status)) {
+    // En cours, ou bloquée : on l'arrête plutôt que de l'archiver.
+    return bouton('Interrompre', async (id) => {
+      if (!window.confirm('Interrompre cette transcription ? La réunion part à la corbeille.')) {
+        throw new Error('Interruption annulée.');
+      }
+      return interrompreReunion(id);
+    }, 'Arrêter la transcription — la réunion part à la corbeille');
+  }
   if (etat === 'actif') {
     return (
       <>

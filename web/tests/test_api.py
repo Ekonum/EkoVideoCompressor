@@ -1120,6 +1120,42 @@ class SondeTestCase(_Fixture):
 
 
 
+class CancelTestCase(_Fixture):
+    """Interrompre une transcription qu'on vient de lancer."""
+
+    def test_interrompre_arrete_les_envois_et_jette_la_reunion(self):
+        body = self._create(duration=4 * 3600.0)
+        job_id = body["job_id"]
+        self.assertGreater(len(body["chunks"]), 1)
+        self.client.put(f"/api/jobs/{job_id}/chunks/0", content=b"audio")
+        self.assertEqual(self.client.post(f"/api/jobs/{job_id}/cancel").json(), {"cancelled": True})
+        # Le navigateur qui encode encore est arrêté au prochain envoi.
+        reponse = self.client.put(f"/api/jobs/{job_id}/chunks/1", content=b"audio")
+        self.assertEqual(reponse.status_code, 409)
+        job = self.db.get_job(job_id)
+        self.assertEqual(job["status"], "cancelled")
+        self.assertTrue(job["deleted_at"], "elle part à la corbeille, récupérable")
+        # Rien n'est finalisé derrière son dos.
+        self.assertFalse((job.get("transcript") or "").strip())
+
+    def test_une_transcription_terminee_ne_s_interrompt_plus(self):
+        body = self._create(duration=600.0)
+        for fenetre in body["chunks"]:
+            self.client.put(f"/api/jobs/{body['job_id']}/chunks/{fenetre['index']}", content=b"audio")
+        self.assertEqual(self._attendre_termine(body["job_id"])["status"], "termine")
+        self.assertEqual(self.client.post(f"/api/jobs/{body['job_id']}/cancel").status_code, 409)
+
+    def test_une_erreur_du_navigateur_arrive_dans_les_journaux(self):
+        with self.assertLogs("ekovideo.web", level="WARNING") as journaux:
+            reponse = self.client.post("/api/client-errors", json={
+                "job_id": 7, "stage": "encodage", "file_name": "1 oct. à 09-37.m4a",
+                "message": "TypeError: network error",
+            })
+        self.assertEqual(reponse.status_code, 204)
+        self.assertIn("network error", journaux.output[0])
+        self.assertIn("encodage", journaux.output[0])
+
+
 class SharePageTestCase(_Fixture):
     def test_la_page_a_partager_porte_son_apercu(self):
         """Un robot d'aperçu n'a pas de session : la page doit tout dire

@@ -83,52 +83,87 @@ self.onmessage = async (event) => {
 
   const { file, jobId, chunks, audio, pending, offset = 0 } = event.data;
   const todo = new Set(pending);
+  let stage = 'encodage';
 
   try {
     for (const chunk of chunks) {
       if (!todo.has(chunk.index)) continue;   // déjà transcrite : on ne repaie pas
 
+      stage = 'encodage';
       const started = performance.now();
       const { format, type } = outputFormat(audio);
       const target = new BufferTarget();
-      const conversion = await Conversion.init({
-        input: new Input({ formats: ALL_FORMATS, source: new BlobSource(file) }),
-        output: new Output({ format, target }),
-        // Le plan de découpage est exprimé dans le temps *retenu* ;
-        // l'offset le ramène sur la source quand l'utilisateur a rogné.
-        trim: { start: offset + chunk.start, end: offset + chunk.end },
-        video: { discard: true },
-        audio: {
-          codec: audio.codec,
-          numberOfChannels: audio.channels,
-          sampleRate: audio.sample_rate,
-          quality: new Quality({ bitrate: audio.bitrate }),
-        },
-      });
-      conversion.onProgress = (ratio) =>
-        say({ kind: 'encoding', index: chunk.index, ratio });
-      await conversion.execute();
+      try {
+        const conversion = await Conversion.init({
+          input: new Input({ formats: ALL_FORMATS, source: new BlobSource(file) }),
+          output: new Output({ format, target }),
+          // Le plan de découpage est exprimé dans le temps *retenu* ;
+          // l'offset le ramène sur la source quand l'utilisateur a rogné.
+          trim: { start: offset + chunk.start, end: offset + chunk.end },
+          video: { discard: true },
+          audio: {
+            codec: audio.codec,
+            numberOfChannels: audio.channels,
+            sampleRate: audio.sample_rate,
+            quality: new Quality({ bitrate: audio.bitrate }),
+          },
+        });
+        conversion.onProgress = (ratio) =>
+          say({ kind: 'encoding', index: chunk.index, ratio });
+        await conversion.execute();
+      } catch (error) {
+        // Chrome dit « network error » quand un fichier a changé sur le
+        // disque depuis sa sélection (synchronisation iCloud, par
+        // exemple) : ce n'est pas le réseau, c'est la lecture.
+        throw new Error(
+          `lecture du fichier impossible (fenêtre ${chunk.index + 1}) : ${error?.message || error}`,
+        );
+      }
 
       const bytes = target.buffer;
       say({ kind: 'encoded', index: chunk.index, bytes: bytes.byteLength,
             ms: performance.now() - started });
 
-      const response = await fetch(`/api/jobs/${jobId}/chunks/${chunk.index}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': type },
-        body: bytes,
-      });
+      stage = 'envoi';
+      const response = await envoyer(`/api/jobs/${jobId}/chunks/${chunk.index}`, bytes, type,
+        (attempt, wait) => say({ kind: 'retrying', index: chunk.index, attempt, wait }));
+      if (response.status === 409) {
+        say({ kind: 'cancelled' });
+        return;
+      }
       if (!response.ok) {
         const detail = await response.text();
-        throw new Error(`envoi de la fenêtre ${chunk.index} refusé (${response.status}) : ${detail}`);
+        throw new Error(`envoi de la fenêtre ${chunk.index + 1} refusé (${response.status}) : ${detail}`);
       }
       say({ kind: 'uploaded', index: chunk.index });
     }
     say({ kind: 'done' });
   } catch (error) {
-    say({ kind: 'error', message: error?.message || String(error) });
+    say({ kind: 'error', stage, message: error?.message || String(error) });
   }
 };
+
+/** Envoie une fenêtre, en réessayant sur ce qui passe : coupure réseau,
+ *  serveur qui redémarre (5xx), trop de demandes (429). Un refus franc
+ *  (4xx) ne se réessaie pas — il dit quelque chose. */
+async function envoyer(url, bytes, type, onRetry) {
+  const attentes = [2000, 5000, 15000, 30000];
+  for (let essai = 0; ; essai += 1) {
+    try {
+      const response = await fetch(url, {
+        method: 'PUT', headers: { 'Content-Type': type }, body: bytes,
+      });
+      const passager = response.status >= 500 || response.status === 429;
+      if (!passager || essai >= attentes.length) return response;
+    } catch (error) {
+      if (essai >= attentes.length) {
+        throw new Error(`serveur injoignable après ${essai + 1} essais : ${error?.message || error}`);
+      }
+    }
+    onRetry(essai + 1, attentes[essai]);
+    await new Promise((resolve) => setTimeout(resolve, attentes[essai]));
+  }
+}
 
 /** Compression, écrite directement sur le disque de l'utilisateur.
  *
