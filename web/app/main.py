@@ -26,7 +26,7 @@ from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi import Response
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -465,6 +465,44 @@ def create_app(
         if not chemin.is_file():
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Manifeste non construit.")
         return JSONResponse(json.loads(chemin.read_text(encoding="utf-8")))
+
+    @app.get("/bienvenue", response_class=HTMLResponse)
+    def welcome_page() -> HTMLResponse:
+        """La page à partager.
+
+        Un lien collé dans Odoo ou un e-mail est prévisualisé par un robot
+        qui n'a pas de session : sur « / », il ne voit que la page de
+        connexion d'Access. Cette page-ci est ouverte (contournement Access,
+        comme les points de santé), porte le titre, la description et
+        l'image de l'aperçu, et renvoie aussitôt un humain vers l'app — où
+        Access lui demandera de se connecter.
+        """
+        base = config.public_url.rstrip("/")
+        titre = "transcript — vos réunions, transcrites et rangées dans Odoo"
+        description = (
+            "Déposez l’enregistrement : transcript le transcrit, retrouve le bon "
+            "dossier Odoo et l’y dépose à votre nom."
+        )
+        return HTMLResponse(f"""<!doctype html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{titre}</title>
+<meta name="description" content="{description}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Ekonum">
+<meta property="og:title" content="{titre}">
+<meta property="og:description" content="{description}">
+<meta property="og:url" content="{base}/bienvenue">
+<meta property="og:image" content="{base}/bienvenue/apercu.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="transcript : vos réunions, transcrites et rangées dans Odoo">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="/marque/icone.svg">
+<script>location.replace("/")</script>
+</head><body style="font-family:sans-serif;padding:2rem">
+<p><a href="/">Ouvrir transcript</a></p>
+</body></html>""")
 
     @app.get("/")
     def index():
