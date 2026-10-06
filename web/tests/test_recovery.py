@@ -6,6 +6,7 @@ import base64
 import io
 import json
 import tempfile
+import unicodedata
 import unittest
 import urllib.error
 import urllib.parse
@@ -51,6 +52,8 @@ class RulesTestCase(unittest.TestCase):
             "benjamin dotte_10-28-25_0514PM.amr": "2025-10-28T17:14",
             "\u202a03 27 51 11 33\u202c_10-13-25_0344PM.amr": "2025-10-13T15:44",
             "appel_01-05-26_1210AM.amr": "2026-01-05T00:10",
+            # Le Mac écrit « à » en deux caractères : « a » et l'accent.
+            unicodedata.normalize("NFD", "Enregistrement de l’écran 2026-06-25 à 13.59.49.mov"): "2026-06-25T13:59",
         }
         for nom, attendu in cas.items():
             with self.subTest(nom=nom):

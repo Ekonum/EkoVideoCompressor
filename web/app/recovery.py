@@ -96,6 +96,14 @@ def _fold(text: str) -> str:
     )
 
 
+def _clean(name: str) -> str:
+    """Le nom tel que les règles le lisent. Le Mac écrit ses noms en
+    Unicode décomposé — « à » y devient « a » suivi d'un accent — et
+    l'iPhone y glisse des caractères invisibles : sans ce passage, ni
+    « à 10.15 » ni « réunion » ne se reconnaissent."""
+    return INVISIBLE.sub("", unicodedata.normalize("NFC", name))
+
+
 def stem(name: str) -> str:
     """Le nom qui reste d'un fichier quand on retire ce que les copies y
     ajoutent : extension, « _compressed », « (1) »."""
@@ -121,7 +129,7 @@ def recording_date(file: dict[str, Any]) -> tuple[str, bool]:
     mémo vocal envoyé trois jours après porte la date de l'envoi. Le nom,
     quand il en porte une, est plus fiable.
     """
-    name = INVISIBLE.sub("", str(file.get("name") or ""))
+    name = _clean(str(file.get("name") or ""))
     reference = min(
         (d for d in (_parse_iso(file.get("createdTime", "")), _parse_iso(file.get("modifiedTime", ""))) if d),
         default=None,
@@ -176,7 +184,7 @@ def duration_seconds(file: dict[str, Any]) -> float | None:
 
 def classify(file: dict[str, Any]) -> str:
     """« meeting », « unsure » ou « other » — une proposition, pas un tri."""
-    name = str(file.get("name") or "")
+    name = _clean(str(file.get("name") or ""))
     if NOT_MEETING.search(name) or ARTIFACT.match(name):
         return "other"
     duree = duration_seconds(file)
