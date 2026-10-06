@@ -6,6 +6,7 @@ import base64
 import io
 import json
 import tempfile
+import unicodedata
 import unittest
 import urllib.error
 import urllib.parse
@@ -41,6 +42,24 @@ class RulesTestCase(unittest.TestCase):
         meet = {"name": "Point Acritec - 2026/03/12 10:00 CET - Recording", "createdTime": "2026-03-12T11:00:00Z"}
         self.assertEqual(recording_date(meet), ("2026-03-12T10:00", True))
 
+    def test_l_heure_aussi_quel_que_soit_l_enregistreur(self):
+        cas = {
+            "Enregistrement de l’écran 2025-03-04 à 10.15.32.mov": "2025-03-04T10:15",
+            "Screen Recording 2025-03-04 at 9.15.32 PM.mov": "2025-03-04T21:15",
+            # Les mémos récents : une virgule, et un espace invisible.
+            "19 févr., 14.03\u200b.m4a": "2026-02-19T14:03",
+            # L'enregistreur d'appels : mois d'abord, heure sur 12 h.
+            "benjamin dotte_10-28-25_0514PM.amr": "2025-10-28T17:14",
+            "\u202a03 27 51 11 33\u202c_10-13-25_0344PM.amr": "2025-10-13T15:44",
+            "appel_01-05-26_1210AM.amr": "2026-01-05T00:10",
+            # Le Mac écrit « à » en deux caractères : « a » et l'accent.
+            unicodedata.normalize("NFD", "Enregistrement de l’écran 2026-06-25 à 13.59.49.mov"): "2026-06-25T13:59",
+        }
+        for nom, attendu in cas.items():
+            with self.subTest(nom=nom):
+                self.assertEqual(recording_date({"name": nom, "createdTime": "2026-03-01T08:00:00Z"}),
+                                 (attendu, True))
+
     def test_sans_date_dans_le_nom_on_prend_la_plus_ancienne_de_drive(self):
         fichier = {"name": "Rue des Hauts Vents 4.m4a", "createdTime": "2026-04-10T09:00:00Z",
                    "modifiedTime": "2026-04-02T14:30:00Z"}
@@ -56,6 +75,12 @@ class RulesTestCase(unittest.TestCase):
         court = {"name": "Point rapide.mp4", "mimeType": "video/mp4",
                  "videoMediaMetadata": {"durationMillis": "40000"}}
         self.assertEqual(classify(court), "other")
+
+    def test_les_restes_de_l_ancienne_app_ne_sont_pas_des_reunions(self):
+        for nom in ("audio.wav", "audio.vad.wav", "audio_partie_03.wav"):
+            with self.subTest(nom=nom):
+                self.assertEqual(classify({"name": nom, "mimeType": "audio/wav"}), "other")
+        self.assertEqual(classify({"name": "audio Seyve.wav", "mimeType": "audio/wav"}), "meeting")
 
     def test_le_nom_seul_ne_suffit_pas_a_reconnaitre_une_reunion(self):
         """« Nouvel enregistrement 9 » revient d'une année sur l'autre."""
@@ -88,6 +113,31 @@ class RulesTestCase(unittest.TestCase):
         self.assertEqual(par_id["d"]["status"], "recovered")
         self.assertEqual(par_id["d"]["recovered_by"], "luka@ekonum.fr")
         self.assertNotIn("job_id", par_id["d"], "la réunion d'un autre ne s'ouvre pas")
+
+
+    def test_meme_nom_et_meme_taille_c_est_le_meme_fichier(self):
+        """Drive recalcule parfois l'empreinte d'un fichier redéposé."""
+        fichiers = [
+            {"id": "a", "name": "Côte de Cambon 2.m4a", "mimeType": "audio/x-m4a", "size": "4963100",
+             "md5Checksum": "m1", "createdTime": "2026-09-21T17:00:00Z"},
+            {"id": "b", "name": "Côte de Cambon 2 (1).m4a", "mimeType": "audio/x-m4a", "size": "4963100",
+             "md5Checksum": "m2", "createdTime": "2026-09-22T08:00:00Z"},
+            {"id": "c", "name": "Côte de Cambon 2.m4a", "mimeType": "audio/x-m4a", "size": "5000000",
+             "md5Checksum": "m3", "createdTime": "2026-09-23T08:00:00Z"},
+            {"id": "d", "name": "Nouvel enregistrement.m4a", "mimeType": "audio/x-m4a", "size": "4663320",
+             "md5Checksum": "m4", "createdTime": "2026-09-20T08:00:00Z"},
+        ]
+        items = build_inventory(
+            fichiers, user_id=1, shared_drives={},
+            recovered={"x": {"name": "Nouvel enregistrement.m4a", "size_bytes": 4663320, "user_id": 1,
+                             "user_email": "robin@ekonum.fr", "job_id": 4}},
+            recovered_checksums={}, library=[], excluded_drives=set(),
+        )
+        par_id = {i["id"]: i for i in items}
+        self.assertEqual(par_id["a"]["status"], "new")
+        self.assertEqual((par_id["b"]["status"], par_id["b"]["duplicate_of"]), ("duplicate", "a"))
+        self.assertEqual(par_id["c"]["status"], "new", "même nom, autre taille : un autre enregistrement")
+        self.assertEqual((par_id["d"]["status"], par_id["d"]["job_id"]), ("recovered", 4))
 
 
 class FauxGoogle:
@@ -250,6 +300,49 @@ class RecoveryApiTestCase(unittest.TestCase):
         apres = {i["id"]: i for i in self.client.get("/api/recovery/drive").json()["items"]}
         self.assertEqual(apres["f1"]["status"], "recovered")
         self.assertEqual(apres["f1"]["job_id"], vue["job_id"])
+
+    def _reunion_deja_transcrite(self, owner_id=1):
+        job_id = self.db.create_job(
+            owner_id=owner_id, filename="21 sept. à 18-34.m4a", duration_seconds=1800, model="",
+            language="fr", context={}, chunks=[],
+        )
+        self.db.set_meeting_date(job_id, "2026-09-21T18:34")
+        return job_id
+
+    def test_ranger_avec_la_reunion_existante_plutot_qu_en_creer_une(self):
+        self._connecter()
+        job_id = self._reunion_deja_transcrite()
+        item = {i["id"]: i for i in self.client.get("/api/recovery/drive").json()["items"]}["f1"]
+        self.assertEqual((item["status"], item["job_id"]), ("in_library", job_id))
+
+        vue = self.client.post("/api/recovery/drive/f1/attach",
+                               json={"job_id": job_id, "trash_original": True}).json()
+        self.assertEqual((vue["job_id"], vue["video"], vue["original"]), (job_id, "attached", "trashed"))
+        self.assertEqual(self.google.droits["f1"], [])
+        self.assertTrue(self.client.get(f"/api/jobs/{job_id}/detail").json()["video"]["presente"])
+        self.assertEqual(self.client.get("/api/jobs").headers["x-total-count"], "1", "pas de seconde réunion")
+        apres = {i["id"]: i for i in self.client.get("/api/recovery/drive").json()["items"]}["f1"]
+        self.assertEqual((apres["status"], apres["job_id"]), ("recovered", job_id))
+        self.assertEqual(self.client.post("/api/recovery/drive/f1/attach",
+                                          json={"job_id": job_id}).status_code, 409)
+
+    def test_une_reunion_qui_a_deja_sa_video_garde_l_original_s_il_differe(self):
+        self._connecter()
+        job_id = self._reunion_deja_transcrite()
+        self.db.ouvrir_envoi_video(job_id, "", 99)
+        self.db.terminer_envoi_video(job_id, "video-mac")
+        vue = self.client.post("/api/recovery/drive/f1/attach",
+                               json={"job_id": job_id, "trash_original": True}).json()
+        self.assertEqual((vue["video"], vue["original"]), ("kept", "kept_different"))
+        self.assertEqual(self.google.corbeille, [])
+        self.assertEqual(self.db.get_job(job_id)["video_file_id"], "video-mac")
+
+    def test_on_ne_range_pas_avec_la_reunion_d_un_autre(self):
+        self._connecter()
+        autre = self._reunion_deja_transcrite(owner_id=self.db.user_id_for_email("luka@ekonum.fr"))
+        reponse = self.client.post("/api/recovery/drive/f1/attach", json={"job_id": autre})
+        self.assertEqual(reponse.status_code, 404)
+        self.assertEqual(self.google.corbeille, [])
 
     def test_sans_retrait_demande_l_original_reste(self):
         self._connecter()

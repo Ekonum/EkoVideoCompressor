@@ -76,6 +76,11 @@ export const api = {
   driveInventory: () => call('GET', '/api/recovery/drive'),
   driveImport: (fileId, trashOriginal) =>
     call('POST', `/api/recovery/drive/${encodeURIComponent(fileId)}`, { trash_original: trashOriginal }),
+  driveAttach: (fileId, jobId, trashOriginal) =>
+    call('POST', `/api/recovery/drive/${encodeURIComponent(fileId)}/attach`, {
+      job_id: jobId,
+      trash_original: trashOriginal,
+    }),
   odooMeetings: () => call('GET', '/api/odoo/meetings'),
   odooContext: (model, id) =>
     call('GET', `/api/odoo/context?model=${encodeURIComponent(model)}&record_id=${id}`),
