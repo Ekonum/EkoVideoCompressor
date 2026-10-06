@@ -66,10 +66,27 @@ MONTHS = {
     "mai": 5, "juin": 6, "juil": 7, "août": 8, "aout": 8, "sept": 9, "oct": 10,
     "nov": 11, "déc": 12, "dec": 12,
 }
-# « 21 sept. à 18-34 » : le nom que l'enregistreur de l'iPhone et du Mac
-# donne à ses fichiers.
-VOICE_MEMO = re.compile(r"(\d{1,2}) ([a-zéû]+)\.? à (\d{1,2})[-h:](\d{2})", re.IGNORECASE)
-ISO_DATE = re.compile(r"(20\d{2})[-/_.]?(\d{2})[-/_.]?(\d{2})(?:[ T_-]+(\d{2})[-h:.]?(\d{2}))?")
+# « 21 sept. à 18-34 », ou « 19 févr., 14.03 » dans les versions
+# récentes : le nom que l'enregistreur de l'iPhone et du Mac donne à ses
+# fichiers.
+VOICE_MEMO = re.compile(r"(\d{1,2}) ([a-zéû]+)\.?(?:,| à) (\d{1,2})[-h:.](\d{2})", re.IGNORECASE)
+# « 2026/03/12 10:00 » (Meet), « 2025-03-04 à 10.15.32 » (capture d'écran
+# du Mac), « 2025-03-04 at 9.15.32 PM » (la même, en anglais).
+ISO_DATE = re.compile(
+    r"(20\d{2})[-/_.]?(\d{2})[-/_.]?(\d{2})"
+    r"(?:(?:[ T_-]+|\s+(?:à|at)\s+)(\d{1,2})[-h:.]?(\d{2})(?:[-h:.]\d{2})?(?:\s*([AP]M))?)?",
+    re.IGNORECASE,
+)
+# « benjamin dotte_10-28-25_0514PM.amr » : l'enregistreur d'appels du
+# téléphone, mois d'abord, à l'américaine.
+CALL_RECORDER = re.compile(r"_(\d{2})-(\d{2})-(\d{2})_(\d{2})(\d{2})([AP]M)\b", re.IGNORECASE)
+# Ce que l'ancienne app macOS laissait derrière elle en transcrivant : la
+# piste extraite, sa version sans silences, ses morceaux. Pas une réunion
+# de plus — au mieux, la seule trace audio d'une réunion déjà là.
+ARTIFACT = re.compile(r"^audio(?:\.vad|_partie_\d+)?\.(?:wav|m4a|mp3|flac)$", re.IGNORECASE)
+# Les caractères invisibles que l'iPhone glisse dans ses noms (« 14.03\u200b »)
+# ou qui entourent un numéro de téléphone (« \u202a03 27… \u202c »).
+INVISIBLE = re.compile(r"[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]")
 MIN_MEETING_SECONDS = 120
 
 
@@ -104,7 +121,7 @@ def recording_date(file: dict[str, Any]) -> tuple[str, bool]:
     mémo vocal envoyé trois jours après porte la date de l'envoi. Le nom,
     quand il en porte une, est plus fiable.
     """
-    name = str(file.get("name") or "")
+    name = INVISIBLE.sub("", str(file.get("name") or ""))
     reference = min(
         (d for d in (_parse_iso(file.get("createdTime", "")), _parse_iso(file.get("modifiedTime", ""))) if d),
         default=None,
@@ -125,15 +142,31 @@ def recording_date(file: dict[str, Any]) -> tuple[str, bool]:
                 pass
     iso = ISO_DATE.search(name)
     if iso:
-        a, m, j, h, mi = iso.groups()
+        a, m, j, h, mi, meridien = iso.groups()
         try:
-            date = datetime(int(a), int(m), int(j), int(h or 0), int(mi or 0))
+            date = datetime(int(a), int(m), int(j), _hour(h, meridien), int(mi or 0))
+            return date.isoformat(timespec="minutes"), True
+        except ValueError:
+            pass
+    appel = CALL_RECORDER.search(name)
+    if appel:
+        m, j, a, h, mi, meridien = appel.groups()
+        try:
+            date = datetime(2000 + int(a), int(m), int(j), _hour(h, meridien), int(mi))
             return date.isoformat(timespec="minutes"), True
         except ValueError:
             pass
     if reference:
         return reference.astimezone().replace(tzinfo=None).isoformat(timespec="minutes"), False
     return "", False
+
+
+def _hour(heure: str | None, meridien: str | None) -> int:
+    """L'heure sur 24 h, que le nom la donne sur 24 h ou sur 12 h."""
+    h = int(heure or 0)
+    if meridien:
+        h = h % 12 + (12 if meridien.upper() == "PM" else 0)
+    return h
 
 
 def duration_seconds(file: dict[str, Any]) -> float | None:
@@ -144,7 +177,7 @@ def duration_seconds(file: dict[str, Any]) -> float | None:
 def classify(file: dict[str, Any]) -> str:
     """« meeting », « unsure » ou « other » — une proposition, pas un tri."""
     name = str(file.get("name") or "")
-    if NOT_MEETING.search(name):
+    if NOT_MEETING.search(name) or ARTIFACT.match(name):
         return "other"
     duree = duration_seconds(file)
     if duree is not None and duree < MIN_MEETING_SECONDS:
@@ -179,6 +212,26 @@ def library_match(file: dict[str, Any], date: str, library: list[dict[str, Any]]
     return None
 
 
+def same_file_key(name: str, size: int | str | None) -> tuple[str, int] | None:
+    """Ce qui fait de deux fichiers le même enregistrement quand leurs
+    empreintes diffèrent : même nom une fois les ajouts des copies retirés,
+    même taille à l'octet près. Drive recalcule parfois l'empreinte d'un
+    fichier redéposé ; deux réunions distinctes, elles, n'ont jamais
+    exactement la même taille."""
+    racine, taille = stem(name), int(size or 0)
+    return (racine, taille) if racine and taille else None
+
+
+def recovered_by_name(recovered: dict[str, dict[str, Any]]) -> dict[tuple[str, int], dict[str, Any]]:
+    """Les fichiers déjà récupérés, rangés par nom et taille."""
+    index: dict[tuple[str, int], dict[str, Any]] = {}
+    for row in recovered.values():
+        cle = same_file_key(str(row.get("name") or ""), row.get("size_bytes"))
+        if cle and cle not in index:
+            index[cle] = row
+    return index
+
+
 def build_inventory(
     files: list[dict[str, Any]],
     *,
@@ -193,6 +246,8 @@ def build_inventory(
     statut par fichier, et jamais deux lignes pour le même contenu."""
     items: list[dict[str, Any]] = []
     vus: dict[str, str] = {}
+    vus_nom: dict[tuple[str, int], str] = {}
+    recuperes_nom = recovered_by_name(recovered)
     # Les plus anciens d'abord pour le dédoublonnage : la copie qu'on garde
     # est l'originale, pas celle déposée une seconde fois.
     for file in sorted(files, key=lambda f: f.get("createdTime", "")):
@@ -214,15 +269,20 @@ def build_inventory(
             "kind": classify(file),
             "status": "new",
         }
-        deja = recovered.get(file["id"]) or (recovered_checksums.get(checksum) if checksum else None)
+        cle = same_file_key(item["name"], item["size"])
+        deja = (
+            recovered.get(file["id"])
+            or (recovered_checksums.get(checksum) if checksum else None)
+            or (recuperes_nom.get(cle) if cle else None)
+        )
         if deja:
             item["status"] = "recovered"
             item["recovered_by"] = deja.get("user_email", "")
             if deja.get("user_id") == user_id and deja.get("job_id"):
                 item["job_id"] = deja["job_id"]
-        elif checksum and checksum in vus:
+        elif (checksum and checksum in vus) or (cle and cle in vus_nom):
             item["status"] = "duplicate"
-            item["duplicate_of"] = vus[checksum]
+            item["duplicate_of"] = vus[checksum] if checksum in vus else vus_nom[cle]
         else:
             job = library_match(file, date, library)
             if job:
@@ -231,6 +291,8 @@ def build_inventory(
                     item["job_id"] = job["id"]
         if checksum and checksum not in vus:
             vus[checksum] = file["id"]
+        if cle and cle not in vus_nom:
+            vus_nom[cle] = file["id"]
         items.append(item)
     items.sort(key=lambda i: i["recorded_at"], reverse=True)
     return items
@@ -246,6 +308,11 @@ def _location(file: dict[str, Any], shared_drives: dict[str, str]) -> dict[str, 
 
 
 class DriveImport(BaseModel):
+    trash_original: bool = False
+
+
+class DriveAttach(BaseModel):
+    job_id: int
     trash_original: bool = False
 
 
@@ -447,6 +514,9 @@ def register_recovery_routes(
         checksum = fichier.get("md5Checksum") or None
         if checksum and db.recovered_checksums().get(checksum):
             raise HTTPException(status.HTTP_409_CONFLICT, "Le même contenu a déjà été récupéré.")
+        cle = same_file_key(str(fichier.get("name") or ""), fichier.get("size"))
+        if cle and cle in recovered_by_name(db.recovered_sources("drive")):
+            raise HTTPException(status.HTTP_409_CONFLICT, "Le même fichier a déjà été récupéré.")
 
         date, _ = recording_date(fichier)
         taille = int(fichier.get("size") or 0)
@@ -455,6 +525,72 @@ def register_recovery_routes(
             duration_seconds=duration_seconds(fichier) or 0, model="", language="fr",
             context={"recovered_from": "drive"}, chunks=[],
         )
+        try:
+            copy_video(drive, stockage, file_id, fichier, job_id)
+        except HTTPException:
+            db.supprimer_job(job_id)
+            raise
+        db.set_meeting_date(job_id, date or None)
+        db.set_job_status(job_id, "recovered")
+        db.record_recovered(
+            source="drive", external_id=file_id, checksum=checksum, size_bytes=taille,
+            name=fichier.get("name", ""), job_id=job_id, user_id=owner_id,
+        )
+        corbeille = trash_original(drive, file_id) if payload.trash_original else "not_requested"
+        return {"job_id": job_id, "original": corbeille, "recorded_at": date}
+
+    @app.post("/api/recovery/drive/{file_id}/attach")
+    def drive_attach(file_id: str, payload: DriveAttach, owner_id: int = Depends(human_user)) -> dict:
+        """Range un fichier avec la réunion déjà transcrite qu'il
+        enregistre, au lieu d'en créer une seconde.
+
+        Une réunion transcrite par l'app macOS n'a souvent pas gardé sa
+        vidéo : celle du Drive la rejoint, en stockage froid. Si elle en a
+        déjà une, rien n'est copié — et l'original ne part à la corbeille
+        que s'il est, à l'octet près, celui qu'on garde."""
+        require_enabled(owner_id)
+        if db.recovered_sources("drive").get(file_id):
+            raise HTTPException(status.HTTP_409_CONFLICT, "Ce fichier a déjà été récupéré.")
+        job = db.get_job(payload.job_id)
+        if not job or job["owner_id"] != owner_id or job["deleted_at"]:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Réunion introuvable.")
+        drive = drive_for(owner_id)
+        try:
+            fichier = drive.file(file_id)
+        except GoogleUnavailable as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+        taille = int(fichier.get("size") or 0)
+
+        if job["video_file_id"]:
+            video = "kept"
+            verifie = bool(taille) and int(job["video_bytes"] or 0) == taille
+        else:
+            try:
+                stockage = storage()
+            except StockageIndisponible as exc:
+                raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+            copy_video(drive, stockage, file_id, fichier, job["id"])
+            video, verifie = "attached", True
+        date, depuis_le_nom = recording_date(fichier)
+        if depuis_le_nom and not job["meeting_date"]:
+            db.set_meeting_date(job["id"], date)
+        db.record_recovered(
+            source="drive", external_id=file_id, checksum=fichier.get("md5Checksum") or None,
+            size_bytes=taille, name=fichier.get("name", ""), job_id=job["id"], user_id=owner_id,
+        )
+        if not payload.trash_original:
+            corbeille = "not_requested"
+        elif verifie:
+            corbeille = trash_original(drive, file_id)
+        else:
+            corbeille = "kept_different"
+        return {"job_id": job["id"], "video": video, "original": corbeille}
+
+    def copy_video(drive: UserDrive, stockage, file_id: str, fichier: dict[str, Any], job_id: int) -> None:
+        """Copie un fichier du Drive vers le stockage de transcript, chez
+        Google, et le donne pour vidéo à la réunion — seulement si la
+        copie a la taille de l'original."""
+        taille = int(fichier.get("size") or 0)
         droit = ""
         try:
             droit = drive.grant_reader(file_id, config.gcp_compte)
@@ -464,7 +600,6 @@ def register_recovery_routes(
                 stockage.supprimer(str(copie.get("id") or ""))
                 raise StockageIndisponible("La copie n'a pas la taille de l'original.")
         except (GoogleUnavailable, StockageIndisponible) as exc:
-            db.supprimer_job(job_id)
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Copie impossible : {exc}") from exc
         finally:
             # Le droit de lecture n'était que le temps de la copie.
@@ -473,24 +608,15 @@ def register_recovery_routes(
                     drive.revoke_permission(file_id, droit)
                 except GoogleUnavailable as exc:
                     log.warning("droit temporaire non retiré sur %s : %s", file_id, exc)
-
         db.ouvrir_envoi_video(job_id, "", taille)
         db.terminer_envoi_video(job_id, str(copie["id"]))
-        db.set_meeting_date(job_id, date or None)
-        db.set_job_status(job_id, "recovered")
-        db.record_recovered(
-            source="drive", external_id=file_id, checksum=checksum, size_bytes=taille,
-            name=fichier.get("name", ""), job_id=job_id, user_id=owner_id,
-        )
 
-        corbeille = "not_requested"
-        if payload.trash_original:
-            try:
-                drive.trash(file_id)
-                db.mark_original_trashed("drive", file_id)
-                corbeille = "trashed"
-            except GoogleUnavailable as exc:
-                # Copie faite, original gardé : rien n'est perdu, on le dit.
-                log.info("original gardé (%s) : %s", file_id, exc)
-                corbeille = "kept"
-        return {"job_id": job_id, "original": corbeille, "recorded_at": date}
+    def trash_original(drive: UserDrive, file_id: str) -> str:
+        try:
+            drive.trash(file_id)
+            db.mark_original_trashed("drive", file_id)
+            return "trashed"
+        except GoogleUnavailable as exc:
+            # Copie faite, original gardé : rien n'est perdu, on le dit.
+            log.info("original gardé (%s) : %s", file_id, exc)
+            return "kept"

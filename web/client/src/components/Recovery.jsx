@@ -166,7 +166,7 @@ function DriveSource({ google, storage, onGoogle, onOpen }) {
 function Inventory({ items, storage, onReload, onOpen }) {
   const [filter, setFilter] = useState('meeting');
   const [selected, setSelected] = useState(() => new Set(
-    items.filter((i) => i.status === 'new' && i.kind === 'meeting').map((i) => i.id),
+    items.filter((i) => (i.status === 'new' && i.kind === 'meeting') || attachable(i)).map((i) => i.id),
   ));
   const [trashOriginals, setTrashOriginals] = useState(true);
   const [results, setResults] = useState({}); // id → { state, message, jobId }
@@ -195,16 +195,14 @@ function Inventory({ items, storage, onReload, onOpen }) {
     for (const item of chosen) {
       setResults((r) => ({ ...r, [item.id]: { state: 'running' } }));
       try {
-        const vue = await api.driveImport(item.id, trashOriginals);
+        // Déjà transcrite : le fichier rejoint sa réunion, il n'en crée pas
+        // une seconde.
+        const vue = attachable(item)
+          ? await api.driveAttach(item.id, item.job_id, trashOriginals)
+          : await api.driveImport(item.id, trashOriginals);
         setResults((r) => ({
           ...r,
-          [item.id]: {
-            state: 'done',
-            jobId: vue.job_id,
-            message: vue.original === 'trashed'
-              ? 'récupérée · original à la corbeille du Drive'
-              : vue.original === 'kept' ? 'récupérée · original gardé (droits insuffisants pour le retirer)' : 'récupérée',
-          },
+          [item.id]: { state: 'done', jobId: vue.job_id, message: resultMessage(vue) },
         }));
       } catch (e) {
         setResults((r) => ({ ...r, [item.id]: { state: 'error', message: e.message } }));
@@ -278,7 +276,7 @@ function Inventory({ items, storage, onReload, onOpen }) {
             : chosen.length
               ? `${chosen.length} fichier${chosen.length > 1 ? 's' : ''} · ${fileSize(totalSize)}`
               : recoveredCount
-                ? `${recoveredCount} réunion${recoveredCount > 1 ? 's' : ''} récupérée${recoveredCount > 1 ? 's' : ''}, rangée${recoveredCount > 1 ? 's' : ''} à leur date dans ta bibliothèque`
+                ? `${recoveredCount} fichier${recoveredCount > 1 ? 's' : ''} rangé${recoveredCount > 1 ? 's' : ''} à leur date dans ta bibliothèque`
                 : 'Coche les fichiers à récupérer'}
         </span>
         <label className="flex items-center gap-2 text-[0.8125rem] text-clair/80">
@@ -305,11 +303,29 @@ function Inventory({ items, storage, onReload, onOpen }) {
   );
 }
 
+// Un fichier qui enregistre une réunion déjà à soi dans transcript : on le
+// range avec elle plutôt que d'en créer une seconde.
+const attachable = (item) => item.status === 'in_library' && Boolean(item.job_id);
+
+function resultMessage(vue) {
+  const rangement = vue.video === 'attached'
+    ? 'rangée avec la réunion existante, qui garde désormais son enregistrement'
+    : vue.video === 'kept' ? 'rangée avec la réunion existante' : 'récupérée';
+  const original = {
+    trashed: 'original à la corbeille du Drive',
+    kept: 'original gardé (droits insuffisants pour le retirer)',
+    kept_different: 'original gardé : il diffère de l’enregistrement déjà conservé',
+  }[vue.original];
+  return original ? `${rangement} · ${original}` : rangement;
+}
+
 function Row({ item, checked, result, disabled, onToggle, onOpen }) {
   const status = {
     recovered: item.recovered_by ? `déjà récupéré${item.job_id ? '' : ` par ${item.recovered_by}`}` : 'déjà récupéré',
     duplicate: 'copie d’un autre fichier de la liste',
-    in_library: 'semble déjà dans transcript',
+    in_library: item.job_id
+      ? 'déjà transcrite : sera rangée avec la réunion existante'
+      : 'semble déjà transcrite par un collègue',
   }[item.status];
 
   return (
