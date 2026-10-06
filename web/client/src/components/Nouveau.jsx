@@ -457,6 +457,9 @@ export function Nouveau({ surTermine, surBibliotheque }) {
             3 juillet » et un titre utile.
           </p>
           <Sonde
+            // Une réunion, une conversation : la recherche guidée d'un
+            // fichier ne doit pas suivre le suivant, qui est un autre dossier.
+            key={fichier ? `${fichier.name}|${fichier.size}|${fichier.lastModified}` : 'aucun'}
             etat={sonde}
             retenu={dossier}
             // Choisir un dossier, c'est le valider : la transcription y
