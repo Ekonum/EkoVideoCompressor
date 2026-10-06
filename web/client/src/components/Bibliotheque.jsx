@@ -15,6 +15,11 @@ import {
  *  Ce sont des lignes comparables qu'on trie et qu'on balaie ; les
  *  encadrer une à une ajouterait des contenants sans rien clarifier.
  */
+const PAR_PAGE = 50;
+const COLONNES_SERVEUR = {
+  quand: 'date', title: 'title', duration_seconds: 'duration', status: 'status', cost_usd: 'cost',
+};
+
 export function Bibliotheque({ surOuvrir, surLancer, surVue }) {
   const [jobs, setJobs] = useState(null);
   const [erreur, setErreur] = useState('');
@@ -34,10 +39,18 @@ export function Bibliotheque({ surOuvrir, surLancer, surVue }) {
   const chercher = () => { champRecherche.current?.focus(); champRecherche.current?.select(); };
   const vider = () => { setChoisis(new Set()); ancre.current = null; };
 
+  // Le tri et la pagination se font au serveur : la bibliothèque peut
+  // compter des centaines de réunions, et le navigateur n'en reçoit
+  // qu'une page.
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
   const recharger = useCallback(() => {
-    api.listJobs(etat).then(setJobs).catch((e) => setErreur(e.message));
-  }, [etat]);
+    api.listJobs(etat, { sort: COLONNES_SERVEUR[tri.champ] || 'date', order: tri.sens, page, perPage: PAR_PAGE })
+      .then(({ items, total: n }) => { setJobs(items); setTotal(n); })
+      .catch((e) => setErreur(e.message));
+  }, [etat, tri, page]);
 
+  useEffect(() => { setPage(1); }, [etat, tri]);
   useEffect(() => { setJobs(null); recharger(); }, [recharger]);
 
   // Tant qu'une réunion tourne, la liste se rafraîchit seule : on doit
@@ -78,18 +91,12 @@ export function Bibliotheque({ surOuvrir, surLancer, surVue }) {
     });
   }, [jobs]);
 
-  const triees = useMemo(() => {
-    if (!jobs) return [];
-    // La date qui compte est celle de la réunion ; à défaut, celle du dépôt.
-    const copie = jobs.map((j) => ({ ...j, quand: j.meeting_date || j.created_at }));
-    copie.sort((a, b) => {
-      const ga = a[tri.champ] ?? '';
-      const gb = b[tri.champ] ?? '';
-      const comparaison = typeof ga === 'number' ? ga - gb : String(ga).localeCompare(String(gb), 'fr');
-      return tri.sens === 'asc' ? comparaison : -comparaison;
-    });
-    return copie;
-  }, [jobs, tri]);
+  // Déjà dans l'ordre du serveur ; la date affichée est celle de la
+  // réunion, à défaut celle du dépôt.
+  const triees = useMemo(
+    () => (jobs || []).map((j) => ({ ...j, quand: j.meeting_date || j.created_at })),
+    [jobs],
+  );
 
   useRaccourcis({
     'mod+f': chercher,
@@ -129,7 +136,12 @@ export function Bibliotheque({ surOuvrir, surLancer, surVue }) {
   const colonne = (champ, libelle, classe = '') => (
     <th className={`px-4 py-2 text-left text-[0.8125rem] font-medium text-fonce/60 ${classe}`}>
       <button
-        onClick={() => setTri((t) => ({ champ, sens: t.champ === champ && t.sens === 'desc' ? 'asc' : 'desc' }))}
+        onClick={() => setTri((t) => {
+          // Un titre se lit de A à Z ; le reste, du plus récent ou du plus gros.
+          const premier = champ === 'title' ? 'asc' : 'desc';
+          const autre = premier === 'asc' ? 'desc' : 'asc';
+          return { champ, sens: t.champ === champ && t.sens === premier ? autre : premier };
+        })}
         className="hover:text-fonce"
       >
         {libelle}
@@ -184,7 +196,7 @@ export function Bibliotheque({ surOuvrir, surLancer, surVue }) {
                 // Ici, et seulement ici, on confirme : c'est le seul
                 // geste de la bibliothèque qui ne se défait pas.
                 if (!window.confirm(
-                  `Supprimer définitivement ${jobs.length} réunion(s) ? `
+                  `Supprimer définitivement ${total} réunion(s) ? `
                   + 'Cette fois, rien ne sera récupérable.',
                 )) return;
                 try { await api.viderCorbeille(); recharger(); }
@@ -300,6 +312,14 @@ export function Bibliotheque({ surOuvrir, surLancer, surVue }) {
           </table>
         </div>
       )}
+      {jobs !== null && total > PAR_PAGE && !resultats ? (
+        <Pagination
+          page={page}
+          total={total}
+          parPage={PAR_PAGE}
+          surPage={(numero) => { setPage(numero); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+        />
+      ) : null}
       {choisis.size && !resultats ? (
         <Selection
           jobs={triees.filter((j) => choisis.has(j.job_id))}
@@ -591,5 +611,33 @@ function DeposerIci() {
         </p>
       ) : null}
     </>
+  );
+}
+
+/** Les pages de la bibliothèque : où l'on est, combien il y en a, et de
+ *  quoi passer à la voisine. */
+function Pagination({ page, total, parPage, surPage }) {
+  const pages = Math.ceil(total / parPage);
+  const debut = (page - 1) * parPage + 1;
+  const fin = Math.min(page * parPage, total);
+  const bouton = (libelle, cible, actif) => (
+    <button
+      type="button"
+      disabled={!actif}
+      onClick={() => surPage(cible)}
+      className="rounded-md px-3 py-1.5 text-[0.875rem] text-fonce/70 ring-1 ring-bord transition-colors hover:bg-white/60 disabled:opacity-30"
+    >
+      {libelle}
+    </button>
+  );
+  return (
+    <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-[0.875rem]">
+      <span className="tabular-nums text-fonce/55">{debut}–{fin} sur {total} réunions</span>
+      <div className="flex items-center gap-2">
+        {bouton('← Précédente', page - 1, page > 1)}
+        <span className="px-2 tabular-nums text-fonce/60">Page {page} / {pages}</span>
+        {bouton('Suivante →', page + 1, page < pages)}
+      </div>
+    </div>
   );
 }

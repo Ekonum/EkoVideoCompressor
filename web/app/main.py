@@ -979,8 +979,19 @@ def create_app(
 
     @app.get("/api/jobs")
     def list_jobs(
-        etat: str = "actif", owner_id: int = Depends(current_user)
+        response: Response,
+        etat: str = "actif",
+        sort: str = "date",
+        order: str = "desc",
+        page: int = 1,
+        per_page: int = 100,
+        owner_id: int = Depends(current_user),
     ) -> list[dict]:
+        """Une page de la bibliothèque. La réponse reste une liste — les
+        appels existants n'ont rien à changer — et le total arrive dans
+        l'en-tête `X-Total-Count`, pour paginer."""
+        per_page = min(max(per_page, 1), 200)
+        page = max(page, 1)
         # La purge se fait ici plutôt que par une tâche planifiée : le
         # serveur tient dans 256 Mo et n'a pas d'ordonnanceur, et une
         # corbeille qu'on consulte est une corbeille qu'on peut vider.
@@ -991,6 +1002,7 @@ def create_app(
                     log.info("corbeille : réunion %s purgée", perime)
                 except StockageIndisponible as exc:
                     log.warning("corbeille : réunion %s gardée : %s", perime, exc)
+        response.headers["X-Total-Count"] = str(db.count_jobs(owner_id, etat))
         return [
             {
                 "job_id": job["id"],
@@ -1010,7 +1022,10 @@ def create_app(
                 # lance une autre.
                 "progress": _avancement(job) if job["status"] not in ("termine",) else None,
             }
-            for job in db.list_jobs(owner_id, etat=etat)
+            for job in db.list_jobs(
+                owner_id, limit=per_page, etat=etat, sort=sort,
+                descending=order != "asc", offset=(page - 1) * per_page,
+            )
         ]
 
     def _avancement(job: dict) -> dict:

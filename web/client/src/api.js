@@ -21,7 +21,14 @@ async function call(method, url, body) {
 }
 
 export const api = {
-  listJobs: (etat = 'actif') => call('GET', `/api/jobs?etat=${etat}`),
+  /** Une page de la bibliothèque, triée par le serveur, et son total. */
+  listJobs: async (etat = 'actif', { sort = 'date', order = 'desc', page = 1, perPage = 50 } = {}) => {
+    const response = await fetch(
+      `/api/jobs?etat=${etat}&sort=${sort}&order=${order}&page=${page}&per_page=${perPage}`,
+    );
+    if (!response.ok) throw new Error(await detail(response));
+    return { items: await response.json(), total: Number(response.headers.get('X-Total-Count') || 0) };
+  },
   jeter: (id) => call('DELETE', `/api/jobs/${id}`),
   archiver: (id) => call('POST', `/api/jobs/${id}/archive`, {}),
   restaurer: (id) => call('POST', `/api/jobs/${id}/restore`, {}),
