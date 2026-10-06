@@ -1120,6 +1120,40 @@ class SondeTestCase(_Fixture):
 
 
 
+class LibraryPagingTestCase(_Fixture):
+    """La bibliothèque se trie et se pagine côté serveur."""
+
+    def _reunion(self, nom, quand):
+        vue = self.client.post("/api/jobs/import", json={
+            "filename": nom, "created_at": "2026-10-05 08:00:00", "title": nom,
+            "transcript": "Robin : bonjour.", "meeting_date": quand,
+            "segments": [{"start": 0, "end": 3, "speaker": "Robin", "text": "bonjour"}],
+        }).json()
+        return vue["job_id"]
+
+    def test_la_date_de_reunion_commande_l_ordre_et_les_pages(self):
+        """Créées dans le désordre — comme cent fichiers récupérés d'un coup
+        après des mois d'historique — elles sortent dans l'ordre des
+        réunions, et page par page."""
+        ancienne = self._reunion("ancienne.m4a", "2025-03-01T10:00:00")
+        recente = self._reunion("recente.m4a", "2026-09-30T10:00:00")
+        milieu = self._reunion("milieu.m4a", "2026-01-15T10:00:00")
+
+        page1 = self.client.get("/api/jobs", params={"per_page": 2, "page": 1})
+        self.assertEqual(page1.headers["X-Total-Count"], "3")
+        self.assertEqual([j["job_id"] for j in page1.json()], [recente, milieu])
+        page2 = self.client.get("/api/jobs", params={"per_page": 2, "page": 2}).json()
+        self.assertEqual([j["job_id"] for j in page2], [ancienne])
+        croissant = self.client.get("/api/jobs", params={"order": "asc"}).json()
+        self.assertEqual([j["job_id"] for j in croissant], [ancienne, milieu, recente])
+
+    def test_un_tri_inconnu_retombe_sur_la_date(self):
+        self._reunion("a.m4a", "2025-03-01T10:00:00")
+        reponse = self.client.get("/api/jobs", params={"sort": "id; DROP TABLE jobs"})
+        self.assertEqual(reponse.status_code, 200)
+        self.assertEqual(len(reponse.json()), 1)
+
+
 class CancelTestCase(_Fixture):
     """Interrompre une transcription qu'on vient de lancer."""
 

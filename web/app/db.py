@@ -431,17 +431,51 @@ class Database:
         "tout": "1 = 1",
     }
 
+    # Les colonnes par lesquelles la bibliothèque se trie. La date qui compte
+    # est celle de la réunion ; à défaut, celle du dépôt. Une liste fermée :
+    # le nom de colonne vient de la requête, il ne doit pas pouvoir être
+    # autre chose.
+    SORTS = {
+        "date": "COALESCE(meeting_date, created_at)",
+        "title": "COALESCE(NULLIF(title, ''), filename) COLLATE NOCASE",
+        "duration": "duration_seconds",
+        "status": "status",
+        "cost": "cloud_cost_usd",
+    }
+
     def list_jobs(
-        self, owner_id: int, limit: int = 100, etat: str = "actif"
+        self,
+        owner_id: int,
+        limit: int = 100,
+        etat: str = "actif",
+        *,
+        sort: str = "date",
+        descending: bool = True,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
+        """Une page de la bibliothèque, triée par le serveur.
+
+        Trier côté navigateur ne marchait qu'en apparence : le serveur ne
+        rendait que les 100 dernières réunions *créées*, et cent fichiers
+        récupérés d'un coup suffisaient à faire disparaître tout le reste.
+        """
         filtre = self.ETATS.get(etat, self.ETATS["actif"])
+        ordre = self.SORTS.get(sort, self.SORTS["date"])
+        sens = "DESC" if descending else "ASC"
         with self.connect() as conn:
             rows = conn.execute(
                 f"SELECT * FROM jobs WHERE owner_id = ? AND {filtre} "
-                "ORDER BY id DESC LIMIT ?",
-                (owner_id, limit),
+                f"ORDER BY {ordre} {sens}, id {sens} LIMIT ? OFFSET ?",
+                (owner_id, limit, max(0, offset)),
             ).fetchall()
             return [dict(r) for r in rows]
+
+    def count_jobs(self, owner_id: int, etat: str = "actif") -> int:
+        filtre = self.ETATS.get(etat, self.ETATS["actif"])
+        with self.connect() as conn:
+            return int(conn.execute(
+                f"SELECT COUNT(*) FROM jobs WHERE owner_id = ? AND {filtre}", (owner_id,)
+            ).fetchone()[0])
 
     # -- corbeille et archives -------------------------------------------
 

@@ -5,6 +5,7 @@ import { horodatage, usd, jour, mo } from '../format.js';
 import { useArchivage } from '../archivage.js';
 import { AvancementArchivage } from './Nouveau.jsx';
 import { MOD, useRaccourcis } from '../raccourcis.js';
+import { MediaPlayer } from './MediaPlayer.jsx';
 import { plier, surligner } from '../surlignage.jsx';
 
 /** Fiche d'une transcription : la lire, la corriger, la relancer.
@@ -18,6 +19,10 @@ export function Detail({ jobId, recherche = '', surRetour }) {
   const [erreur, setErreur] = useState('');
   const [note, setNote] = useState('');
   const [surlignee, setSurlignee] = useState(null);
+  // Pendant l'écoute : l'instant entendu, pour suivre la réplique en cours
+  // dans la transcription, et le lecteur, pour y sauter depuis un horodatage.
+  const [ecoute, setEcoute] = useState(null);
+  const lecteur = useRef(null);
   // Le mot douteux reste marqué dans sa réplique jusqu'au clic suivant :
   // le temps de le lire, et de le corriger.
   const [marque, setMarque] = useState(null);
@@ -141,7 +146,8 @@ export function Detail({ jobId, recherche = '', surRetour }) {
               <Copier texte={fiche.transcript} />
             </div>
           </div>
-          <Video jobId={jobId} video={fiche.video} surMaj={recharger} />
+          <Video jobId={jobId} video={fiche.video} filename={fiche.filename} surMaj={recharger}
+                 lecteur={lecteur} surTemps={setEcoute} />
           {trouver ? (
             <div className="mt-3 flex items-center gap-2 rounded-lg border border-bord bg-white px-3 py-1.5">
               <input
@@ -182,12 +188,26 @@ export function Detail({ jobId, recherche = '', surRetour }) {
                     key={rang}
                     id={`segment-${rang}`}
                     className={`flex gap-4 px-4 py-2 transition-colors duration-700 ${
-                      surlignee === rang ? 'bg-turquoise/25' : ''
+                      surlignee === rang
+                        ? 'bg-turquoise/25'
+                        : enCours(fiche.segments, rang, ecoute) ? 'bg-turquoise/10 shadow-[inset_3px_0_0_#2AD39F]' : ''
                     }`}
                   >
-                    <span className="w-12 shrink-0 pt-0.5 text-[0.8125rem] tabular-nums text-fonce/40">
-                      {horodatage(s.start_second)}
-                    </span>
+                    {ecoute !== null ? (
+                      // Pendant l'écoute, l'horodatage mène à cet instant.
+                      <button
+                        type="button"
+                        onClick={() => lecteur.current?.seek(s.start_second)}
+                        title="Écouter à partir d’ici"
+                        className="w-12 shrink-0 pt-0.5 text-left text-[0.8125rem] tabular-nums text-turquoise-sombre hover:underline"
+                      >
+                        {horodatage(s.start_second)}
+                      </button>
+                    ) : (
+                      <span className="w-12 shrink-0 pt-0.5 text-[0.8125rem] tabular-nums text-fonce/40">
+                        {horodatage(s.start_second)}
+                      </span>
+                    )}
                     <span>
                       {s.speaker ? (
                         <span className="titre mr-2 font-medium text-turquoise-sombre">{s.speaker}</span>
@@ -286,7 +306,18 @@ function DateReunion({ jobId, valeur, deduite, surMaj, surErreur }) {
  *  l'habitude dès maintenant, avant que GCS ne rende ce coût réel — d'où
  *  une question avant chaque lecture, et rien qui se charge tout seul.
  */
-function Video({ jobId, video, surMaj }) {
+/** La réplique qu'on entend : la dernière commencée à cet instant. */
+function enCours(segments, rang, instant) {
+  if (instant === null) return false;
+  const debut = segments[rang].start_second;
+  const suivante = segments[rang + 1]?.start_second ?? Infinity;
+  return instant >= debut && instant < suivante;
+}
+
+const AUDIO = /\.(m4a|mp3|wav|aac|flac|ogg|opus|amr|weba)$/i;
+
+function Video({ jobId, video, filename, surMaj, lecteur, surTemps }) {
+  const audio = AUDIO.test(filename || '');
   const tache = useArchivage(jobId);
   const [etape, setEtape] = useState('repos'); // repos → question → lecture
 
@@ -308,12 +339,11 @@ function Video({ jobId, video, surMaj }) {
 
   if (etape === 'lecture') {
     return (
-      <video
-        className="mt-3 w-full rounded-xl bg-fonce"
+      <MediaPlayer
+        ref={lecteur}
         src={`/api/jobs/${jobId}/video`}
-        controls
         autoPlay
-        preload="metadata"
+        onTime={surTemps}
       />
     );
   }
@@ -322,14 +352,14 @@ function Video({ jobId, video, surMaj }) {
     <div className="verre mt-3 rounded-xl p-4">
       {etape === 'question' ? (
         <>
-          <p className="titre text-[0.9375rem] font-medium">Relire la vidéo ?</p>
+          <p className="titre text-[0.9375rem] font-medium">{audio ? 'Réécouter l’enregistrement ?' : 'Relire la vidéo ?'}</p>
           <p className="mt-1 text-[0.875rem] text-fonce/70">
-            Elle est en <strong>stockage froid</strong> : la conserver ne coûte
-            presque rien, la relire coûte davantage. On ne la charge que si tu
-            en as besoin.
+            {audio ? 'Il' : 'Elle'} est en <strong>stockage froid</strong> : {audio ? 'le' : 'la'} conserver
+            ne coûte presque rien, {audio ? 'le réécouter' : 'la relire'} coûte davantage. On ne{' '}
+            {audio ? 'le' : 'la'} charge que si tu en as besoin.
           </p>
           <div className="mt-3 flex gap-2">
-            <Bouton onClick={() => setEtape('lecture')}>Lire la vidéo</Bouton>
+            <Bouton onClick={() => setEtape('lecture')}>{audio ? 'Écouter' : 'Lire la vidéo'}</Bouton>
             <button
               type="button"
               onClick={() => setEtape('repos')}
@@ -342,7 +372,7 @@ function Video({ jobId, video, surMaj }) {
       ) : (
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-[0.875rem] text-fonce/70">
-            Vidéo archivée{video.octets ? ` — ${mo(video.octets)}` : ''}, en
+            {audio ? 'Enregistrement archivé' : 'Vidéo archivée'}{video.octets ? ` — ${mo(video.octets)}` : ''}, en
             stockage froid.
           </p>
           <button
@@ -350,7 +380,7 @@ function Video({ jobId, video, surMaj }) {
             onClick={() => setEtape('question')}
             className="rounded-md px-3 py-1.5 text-[0.8125rem] text-fonce/70 ring-1 ring-bord hover:bg-white/60 hover:text-fonce"
           >
-            Regarder
+            {audio ? 'Écouter' : 'Regarder'}
           </button>
         </div>
       )}
