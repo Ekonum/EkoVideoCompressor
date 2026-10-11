@@ -106,6 +106,9 @@ export function Detail({ jobId, recherche = '', surRetour, surRetraiter }) {
 
   if (erreur && !fiche) return <div className="mx-auto max-w-4xl px-6 py-10"><Erreur>{erreur}</Erreur></div>;
   if (!fiche) return <p className="py-16 text-center text-ekn-text-muted">Chargement…</p>;
+  // Une transcription collée dans Odoo n'a souvent pas d'horodatage : une
+  // colonne de « 00:00 » n'apprendrait rien.
+  const horodatee = fiche.segments.some((s) => s.start_second > 0);
 
   return (
     <section className="mx-auto max-w-6xl px-6 py-10">
@@ -115,7 +118,7 @@ export function Detail({ jobId, recherche = '', surRetour, surRetraiter }) {
 
       <h1 className="titre mt-3 text-[1.5rem] font-semibold">{fiche.title || fiche.filename}</h1>
       <p className="mt-1 text-ekn-sm text-ekn-text-muted">
-        {fiche.filename} · {fiche.model} · {usd(fiche.cost_usd)}
+        {[fiche.filename, fiche.model, fiche.model ? usd(fiche.cost_usd) : ''].filter(Boolean).join(' · ')}
       </p>
       <DateReunion
         jobId={jobId}
@@ -198,7 +201,7 @@ export function Detail({ jobId, recherche = '', surRetour, surRetraiter }) {
                         : enCours(fiche.segments, rang, ecoute) ? 'bg-turquoise/10 shadow-[inset_3px_0_0_var(--color-turquoise)]' : ''
                     }`}
                   >
-                    {ecoute !== null ? (
+                    {!horodatee ? null : ecoute !== null ? (
                       // Pendant l'écoute, l'horodatage mène à cet instant.
                       <button
                         type="button"

@@ -797,7 +797,7 @@ class Database:
         with self.connect() as conn:
             rows = conn.execute(
                 "SELECT start_second, end_second, speaker, text FROM "
-                "transcription_segments WHERE job_id = ? ORDER BY start_second",
+                "transcription_segments WHERE job_id = ? ORDER BY start_second, id",
                 (job_id,),
             ).fetchall()
             return [dict(r) for r in rows]
@@ -1132,6 +1132,31 @@ class Database:
                 "COALESCE(meeting_date, created_at) AS quand FROM jobs"
             ).fetchall()
         return [dict(r) for r in rows]
+
+    def library_transcripts(self, known: dict[int, str]) -> list[dict[str, Any]]:
+        """Les réunions transcrites, tous comptes confondus, avec leur
+        texte — sauf pour celles que l'appelant connaît déjà à cette
+        version (`known` : identifiant → `updated_at`). De quoi reconnaître
+        une transcription collée dans Odoo sans relire toute la
+        bibliothèque à chaque inventaire."""
+        with self.connect() as conn:
+            rows = [dict(r) for r in conn.execute(
+                "SELECT j.id, j.owner_id, u.email AS owner_email, j.title, j.odoo_message_id, "
+                "j.updated_at FROM jobs j JOIN users u ON u.id = j.owner_id "
+                "WHERE j.deleted_at IS NULL "
+                "AND (COALESCE(j.transcript, '') != '' OR j.odoo_message_id IS NOT NULL)"
+            ).fetchall()]
+            a_lire = [r["id"] for r in rows if r["id"] not in known or known[r["id"]] != r["updated_at"]]
+            textes = {
+                r["id"]: r["transcript"] or ""
+                for r in conn.execute(
+                    f"SELECT id, transcript FROM jobs WHERE id IN ({','.join('?' * len(a_lire))})", a_lire,
+                ).fetchall()
+            } if a_lire else {}
+        for row in rows:
+            if row["id"] in textes:
+                row["transcript"] = textes[row["id"]]
+        return rows
 
     def set_odoo_link(
         self, job_id: int, *, model: str, record_id: int, message_id: int | None

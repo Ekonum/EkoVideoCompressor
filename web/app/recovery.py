@@ -46,8 +46,10 @@ from .google_account import (
     email_from_id_token,
     pkce_pair,
 )
+from .notes import SAME_MEETING, author_name, best_match, fingerprint, overlap, read_note, words
 from .odoo import OdooGateway, OdooUnavailable
 from .stockage import MORCEAU, StockageIndisponible
+from .transcription import transcript_text
 
 log = logging.getLogger("ekovideo.web")
 
@@ -364,6 +366,88 @@ def odoo_record(piece: dict[str, Any]) -> tuple[str, int] | None:
     l'enregistrement était joint — une discussion n'en est pas une."""
     modele, fiche = str(piece.get("res_model") or ""), int(piece.get("res_id") or 0)
     return (modele, fiche) if modele in OdooGateway.MODELES and fiche else None
+
+
+def odoo_moment(date: Any) -> str:
+    """Une date d'Odoo — UTC, sans le dire — sous la forme qu'attend
+    `recording_date`."""
+    texte = str(date or "").replace(" ", "T")
+    return f"{texte}Z" if texte else ""
+
+
+def note_excerpt(note: dict[str, Any], longueur: int = 160) -> str:
+    """De quoi reconnaître une note sans l'ouvrir : son en-tête s'il y en
+    a un, sinon le début du texte."""
+    texte = " ".join((note["header"] or note["text"]).split())
+    return texte if len(texte) <= longueur else texte[:longueur].rsplit(" ", 1)[0] + " …"
+
+
+def build_note_inventory(
+    messages: list[dict[str, Any]],
+    *,
+    user_id: int,
+    recovered: dict[str, dict[str, Any]],
+    library: list[dict[str, Any]],
+    odoo_url: str,
+) -> list[dict[str, Any]]:
+    """Les transcriptions collées dans Odoo, chacune avec son statut.
+
+    Une note est reconnue par son texte, pas par son nom : celle que
+    transcript a déposée, celle déjà récupérée, celle dont la réunion est
+    déjà dans la bibliothèque — même transcrite par un autre moteur — et
+    celle collée deux fois ne sont jamais proposées comme nouvelles."""
+    base = odoo_url.rstrip("/")
+    deposees = {int(j["odoo_message_id"]): j for j in library if j.get("odoo_message_id")}
+    vues: list[tuple[str, frozenset[int]]] = []
+    items: list[dict[str, Any]] = []
+    for message in sorted(messages, key=lambda m: str(m.get("date") or "")):
+        note = read_note(message)
+        ident = str(message["id"])
+        modele, fiche = str(message.get("model") or ""), int(message.get("res_id") or 0)
+        date, _ = recording_date({"createdTime": odoo_moment(message.get("date"))})
+        item: dict[str, Any] = {
+            "id": ident,
+            "name": note["title"],
+            "excerpt": note_excerpt(note),
+            "recorded_at": date,
+            "recorded_at_from_name": False,
+            "words": len(words(note["text"])),
+            "author": author_name(message),
+            "kind": note["kind"],
+            "location": {
+                "kind": "odoo",
+                "name": " · ".join(x for x in (ODOO_PLACES.get(modele, modele), message.get("record_name") or "") if x),
+            },
+            "web_link": f"{base}/odoo/{modele}/{fiche}" if base and fiche else "",
+            "status": "new",
+        }
+        deja = recovered.get(ident)
+        deposee = deposees.get(int(message["id"]))
+        if deja:
+            item["status"] = "recovered"
+            item["recovered_by"] = deja.get("user_email", "")
+            if deja.get("user_id") == user_id and deja.get("job_id"):
+                item["job_id"] = deja["job_id"]
+        elif deposee:
+            item["status"] = "published"
+            if deposee.get("owner_id") == user_id:
+                item["job_id"] = deposee["id"]
+        else:
+            job = best_match(note["fingerprint"], library)
+            double = next((i for i, fp in vues if overlap(note["fingerprint"], fp) >= SAME_MEETING), None)
+            if job and job.get("owner_id") == user_id:
+                item["status"] = "in_library"
+                item["job_id"] = job["id"]
+            elif job:
+                item["status"] = "colleague"
+                item["recovered_by"] = job.get("owner_email", "")
+            elif double:
+                item["status"] = "duplicate"
+                item["duplicate_of"] = double
+        vues.append((ident, note["fingerprint"]))
+        items.append(item)
+    items.sort(key=lambda i: i["recorded_at"], reverse=True)
+    return items
 
 
 class DriveImport(BaseModel):
@@ -821,3 +905,121 @@ def register_recovery_routes(
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Copie impossible : l'envoi n'a pas abouti.")
         db.ouvrir_envoi_video(job_id, "", len(octets))
         db.terminer_envoi_video(job_id, fichier_id)
+
+    # -- Transcriptions collées dans Odoo ------------------------------------
+
+    empreintes: dict[int, tuple[str, frozenset[int]]] = {}
+
+    def note_library() -> list[dict[str, Any]]:
+        """La bibliothèque de toute l'équipe, chaque réunion avec
+        l'empreinte de son texte. Les empreintes sont gardées d'un
+        inventaire à l'autre et recalculées pour les seules réunions
+        modifiées depuis."""
+        connues = {i: v[0] for i, v in empreintes.items()}
+        reunions = db.library_transcripts(connues)
+        for reunion in reunions:
+            if "transcript" in reunion:
+                empreintes[reunion["id"]] = (reunion["updated_at"], fingerprint(reunion["transcript"]))
+            reunion["fingerprint"] = empreintes[reunion["id"]][1]
+        for disparue in set(empreintes) - {r["id"] for r in reunions}:
+            empreintes.pop(disparue, None)
+        return reunions
+
+    def odoo_note(odoo: OdooGateway, message_id: int) -> dict[str, Any]:
+        try:
+            return odoo.transcript_note(message_id)
+        except OdooUnavailable as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+    @app.get("/api/recovery/odoo-notes")
+    def odoo_notes_inventory(owner_id: int = Depends(human_user)) -> dict:
+        odoo = odoo_ready(owner_id)
+        try:
+            messages = odoo.transcript_notes()
+        except OdooUnavailable as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+        items = build_note_inventory(
+            messages,
+            user_id=owner_id,
+            recovered=db.recovered_sources("odoo_note"),
+            library=note_library(),
+            odoo_url=config.odoo_url,
+        )
+        return {"items": items}
+
+    @app.post("/api/recovery/odoo-notes/{message_id}")
+    def odoo_note_import(message_id: int, owner_id: int = Depends(human_user)) -> dict:
+        """Récupère une transcription collée dans Odoo : une réunion
+        terminée, à la date de la note, rattachée à sa fiche.
+
+        La réunion est liée à la note elle-même : transcript la sait déjà
+        dans Odoo et ne proposera pas de l'y déposer une seconde fois. La
+        note, elle, reste où elle est."""
+        odoo = odoo_ready(owner_id)
+        if db.recovered_sources("odoo_note").get(str(message_id)):
+            raise HTTPException(status.HTTP_409_CONFLICT, "Cette transcription a déjà été récupérée.")
+        message = odoo_note(odoo, message_id)
+        note = read_note(message)
+        bibliotheque = note_library()
+        if any(j.get("odoo_message_id") == message_id for j in bibliotheque) or best_match(
+            note["fingerprint"], bibliotheque
+        ):
+            raise HTTPException(status.HTTP_409_CONFLICT, "Cette transcription est déjà dans la bibliothèque.")
+        repliques = note["segments"]
+        if not repliques:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Cette note ne contient aucun texte à récupérer.")
+
+        modele, fiche = str(message.get("model") or ""), int(message.get("res_id") or 0)
+        date, _ = recording_date({"createdTime": odoo_moment(message.get("date"))})
+        voix = sorted({r["speaker"] for r in repliques if r["speaker"]})
+        job_id = db.create_job(
+            owner_id=owner_id, filename=str(message.get("record_name") or note["title"]),
+            duration_seconds=max(r["start"] for r in repliques), model="", language="fr",
+            context={"recovered_from": "odoo_note", "odoo_note_header": note["header"]}, chunks=[],
+        )
+        try:
+            db.replace_segments(job_id, repliques)
+            db.finish_job(
+                job_id, title=note["title"], transcript=transcript_text(repliques),
+                speakers={v: v for v in voix}, technical_terms=[], cost_usd=0,
+            )
+            db.set_meeting_date(job_id, date or None)
+            if modele in OdooGateway.MODELES and fiche:
+                db.set_odoo_link(job_id, model=modele, record_id=fiche, message_id=message_id)
+            db.record_recovered(
+                source="odoo_note", external_id=str(message_id), checksum=None,
+                size_bytes=len(note["text"].encode()), name=note["title"], job_id=job_id, user_id=owner_id,
+            )
+        except Exception:
+            db.supprimer_job(job_id)
+            raise
+        return {"job_id": job_id, "original": "left_in_odoo", "linked": bool(fiche), "recorded_at": date}
+
+    @app.post("/api/recovery/odoo-notes/{message_id}/attach")
+    def odoo_note_attach(message_id: int, payload: DriveAttach, owner_id: int = Depends(human_user)) -> dict:
+        """Relie une transcription collée dans Odoo à la réunion déjà dans
+        transcript qu'elle reprend : la réunion gagne sa fiche, et la note
+        compte comme son dépôt."""
+        odoo = odoo_ready(owner_id)
+        if db.recovered_sources("odoo_note").get(str(message_id)):
+            raise HTTPException(status.HTTP_409_CONFLICT, "Cette transcription a déjà été récupérée.")
+        job = db.get_job(payload.job_id)
+        if not job or job["owner_id"] != owner_id or job["deleted_at"]:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Réunion introuvable.")
+        message = odoo_note(odoo, message_id)
+        note = read_note(message)
+        if overlap(note["fingerprint"], fingerprint(job["transcript"] or "")) < SAME_MEETING:
+            raise HTTPException(status.HTTP_409_CONFLICT, "Cette note ne reprend pas la transcription de cette réunion.")
+        modele, fiche = str(message.get("model") or ""), int(message.get("res_id") or 0)
+        meme_fiche = (job["odoo_model"], job["odoo_record_id"]) == (modele, fiche)
+        relie = False
+        if modele in OdooGateway.MODELES and fiche and (
+            not job["odoo_model"] or (meme_fiche and not job["odoo_message_id"])
+        ):
+            db.set_odoo_link(job["id"], model=modele, record_id=fiche, message_id=message_id)
+            relie = True
+        db.record_recovered(
+            source="odoo_note", external_id=str(message_id), checksum=None,
+            size_bytes=len(note["text"].encode()), name=note["title"], job_id=job["id"], user_id=owner_id,
+        )
+        return {"job_id": job["id"], "video": "kept", "original": "left_in_odoo", "linked": relie}

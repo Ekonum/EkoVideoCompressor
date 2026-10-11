@@ -32,11 +32,35 @@ const LOCATION_LABELS = {
   shared_with_me: 'Partagé avec moi',
 };
 
+const plural = (n, singulier, pluriel) => `${n.toLocaleString('fr-FR')} ${n > 1 ? pluriel : singulier}`;
+
+// Ce qu'on montre d'un enregistrement : sa durée et son poids.
+const FILE_COLUMNS = [
+  { label: 'Durée', cell: (item) => (item.duration_seconds ? duree(item.duration_seconds) : '—') },
+  { label: 'Taille', right: true, cell: (item) => fileSize(item.size) },
+];
+
+const FILE_STATUS = {
+  recovered: (item) => (item.recovered_by ? `déjà récupéré${item.job_id ? '' : ` par ${item.recovered_by}`}` : 'déjà récupéré'),
+  duplicate: () => 'copie d’un autre fichier de la liste',
+  in_library: (item) => (item.job_id
+    ? 'déjà transcrite : sera rangée avec la réunion existante'
+    : 'semble déjà transcrite par un collègue'),
+};
+
 /** Ce qui distingue une source dans l'inventaire : comment récupérer un
- *  fichier, comment le ranger avec sa réunion, et ce que devient
- *  l'original. */
+ *  élément, comment le ranger avec sa réunion, ce que devient l'original,
+ *  et comment le dire. */
 const DRIVE = {
   name: 'Drive',
+  item: 'Fichier',
+  dateLabel: 'date du Drive',
+  needsStorage: true,
+  columns: FILE_COLUMNS,
+  status: FILE_STATUS,
+  selection: (chosen) => `${plural(chosen.length, 'fichier', 'fichiers')} · ${fileSize(chosen.reduce((sum, i) => sum + (i.size || 0), 0))}`,
+  recovered: (n) => `${plural(n, 'fichier rangé', 'fichiers rangés')} à leur date dans ta bibliothèque`,
+  prompt: 'Coche les fichiers à récupérer',
   empty: 'Aucun fichier audio ou vidéo dans ce Drive.',
   trash: 'Mettre les originaux à la corbeille du Drive une fois copiés (30 jours pour se raviser)',
   import: (item, trash) => api.driveImport(item.id, trash),
@@ -46,11 +70,56 @@ const DRIVE = {
 // Odoo n'a pas de corbeille, et l'enregistrement fait partie du dossier :
 // l'original reste sur sa fiche.
 const ODOO = {
+  ...DRIVE,
   name: 'Odoo',
+  title: 'Odoo',
+  dateLabel: 'date d’Odoo',
+  intro: 'Les enregistrements joints à tes fiches et à tes discussions. Une réunion récupérée depuis une fiche y reste liée, et l’original ne quitte pas Odoo.',
+  noKey: 'Les enregistrements joints à tes fiches et à tes discussions. Il faut d’abord ta clé Odoo personnelle : transcript ne voit que ce que tu vois dans Odoo.',
+  start: 'Faire l’inventaire d’Odoo',
+  loading: 'Inventaire d’Odoo…',
+  inventory: () => api.odooInventory(),
   empty: 'Aucun enregistrement audio ou vidéo joint à tes fiches Odoo.',
+  trash: '',
   note: 'Les originaux restent sur leur fiche Odoo.',
+  left: (linked) => (linked ? 'liée à sa fiche Odoo, où l’original reste' : 'original laissé dans Odoo'),
   import: (item) => api.odooImport(item.id),
   attach: (item) => api.odooAttach(item.id, item.job_id),
+};
+
+// Le texte d'une réunion, collé dans une note avant transcript. Rien à
+// stocker : la réunion arrive transcrite, liée à sa fiche, et la note
+// compte comme son dépôt — transcript ne la redéposera pas.
+const ODOO_NOTES = {
+  ...ODOO,
+  title: 'Transcriptions collées dans Odoo',
+  item: 'Transcription',
+  dateLabel: 'date de la note',
+  needsStorage: false,
+  intro: 'Les transcriptions déposées en note sur tes fiches, « Transcription complète (cliquer pour dérouler) ». Celles déjà dans transcript sont reconnues à leur texte, même transcrites par un autre outil.',
+  noKey: 'Les transcriptions déposées en note sur tes fiches. Il faut d’abord ta clé Odoo personnelle : transcript ne voit que ce que tu vois dans Odoo.',
+  start: 'Retrouver les transcriptions d’Odoo',
+  loading: 'Lecture des notes d’Odoo…',
+  inventory: () => api.odooNotes(),
+  columns: [
+    { label: 'Longueur', right: true, cell: (item) => plural(item.words, 'mot', 'mots') },
+    { label: 'Collée par', cell: (item) => item.author || '—' },
+  ],
+  status: {
+    recovered: (item) => (item.job_id || !item.recovered_by ? 'déjà récupérée' : `déjà récupérée par ${item.recovered_by}`),
+    published: () => 'déposée par transcript',
+    colleague: (item) => `déjà dans la bibliothèque de ${item.recovered_by}`,
+    duplicate: () => 'la même transcription qu’une autre note de la liste',
+    in_library: () => 'déjà dans ta bibliothèque : la réunion sera liée à cette note',
+  },
+  selection: (chosen) => `${plural(chosen.length, 'transcription', 'transcriptions')} · ${plural(chosen.reduce((sum, i) => sum + (i.words || 0), 0), 'mot', 'mots')}`,
+  recovered: (n) => `${plural(n, 'transcription rangée', 'transcriptions rangées')} à leur date dans ta bibliothèque`,
+  prompt: 'Coche les transcriptions à récupérer',
+  empty: 'Aucune transcription collée dans tes fiches Odoo.',
+  note: 'Les notes restent sur leur fiche Odoo.',
+  left: (linked) => (linked ? 'liée à sa fiche Odoo, où la note reste' : 'la note reste dans Odoo'),
+  import: (item) => api.odooNoteImport(item.id),
+  attach: (item) => api.odooNoteAttach(item.id, item.job_id),
 };
 
 export function Recovery({ connection, onOpen, onAccount }) {
@@ -91,7 +160,10 @@ export function Recovery({ connection, onOpen, onAccount }) {
           <p className="text-ekn-text-muted">Chargement…</p>
         )}
         {state ? (
-          <OdooSource configured={state.odoo} storage={state.storage} onOpen={onOpen} onAccount={onAccount} />
+          <OdooSource source={ODOO} configured={state.odoo} storage={state.storage} onOpen={onOpen} onAccount={onAccount} />
+        ) : null}
+        {state ? (
+          <OdooSource source={ODOO_NOTES} configured={state.odoo} storage={state.storage} onOpen={onOpen} onAccount={onAccount} />
         ) : null}
         <UpcomingSource
           title="Ton Mac"
@@ -114,7 +186,7 @@ function UpcomingSource({ title, text }) {
   );
 }
 
-function OdooSource({ configured, storage, onOpen, onAccount }) {
+function OdooSource({ source, configured, storage, onOpen, onAccount }) {
   const [items, setItems] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -124,7 +196,7 @@ function OdooSource({ configured, storage, onOpen, onAccount }) {
     setOpen(true);
     setLoading(true);
     setError('');
-    api.odooInventory()
+    source.inventory()
       .then((vue) => setItems(vue.items))
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
@@ -132,36 +204,28 @@ function OdooSource({ configured, storage, onOpen, onAccount }) {
 
   return (
     <div className="verre rounded-xl p-5">
-      <h2 className="titre text-[1.0625rem] font-medium">Odoo</h2>
+      <h2 className="titre text-[1.0625rem] font-medium">{source.title}</h2>
       {!configured ? (
         <div className="mt-2">
-          <p className="text-ekn-sm text-ekn-text/60">
-            Les enregistrements joints à tes fiches et à tes discussions. Il
-            faut d’abord ta clé Odoo personnelle : transcript ne voit que ce
-            que tu vois dans Odoo.
-          </p>
+          <p className="text-ekn-sm text-ekn-text/60">{source.noKey}</p>
           <button type="button" className="ekn-button ekn-button--subtle mt-3" onClick={onAccount}>
             Ajouter ma clé Odoo
           </button>
         </div>
       ) : !open ? (
         <div className="mt-2">
-          <p className="text-ekn-sm text-ekn-text/60">
-            Les enregistrements joints à tes fiches et à tes discussions. Une
-            réunion récupérée depuis une fiche y reste liée, et l’original ne
-            quitte pas Odoo.
-          </p>
+          <p className="text-ekn-sm text-ekn-text/60">{source.intro}</p>
           <button type="button" className="ekn-button mt-3" onClick={load}>
-            Faire l’inventaire d’Odoo
+            {source.start}
           </button>
         </div>
       ) : loading && !items ? (
-        <p className="mt-3 text-ekn-sm text-ekn-text-muted">Inventaire d’Odoo…</p>
+        <p className="mt-3 text-ekn-sm text-ekn-text-muted">{source.loading}</p>
       ) : (
         <>
           <Erreur>{error}</Erreur>
           {items ? (
-            <Inventory items={items} source={ODOO} storage={storage} onReload={load} onOpen={onOpen} />
+            <Inventory items={items} source={source} storage={storage} onReload={load} onOpen={onOpen} />
           ) : null}
         </>
       )}
@@ -258,7 +322,7 @@ function Inventory({ items, source, storage, onReload, onOpen }) {
   const visible = groups[filter];
   // Un échec reste coché : un second clic sur « Récupérer » le retente.
   const chosen = items.filter((i) => selected.has(i.id) && (!results[i.id] || results[i.id].state === 'error'));
-  const totalSize = chosen.reduce((sum, i) => sum + (i.size || 0), 0);
+  const ready = storage || !source.needsStorage;
 
   const toggle = (id) => setSelected((current) => {
     const next = new Set(current);
@@ -278,7 +342,7 @@ function Inventory({ items, source, storage, onReload, onOpen }) {
           : await source.import(item, trashOriginals);
         setResults((r) => ({
           ...r,
-          [item.id]: { state: 'done', jobId: vue.job_id, message: resultMessage(vue) },
+          [item.id]: { state: 'done', jobId: vue.job_id, message: resultMessage(vue, source) },
         }));
       } catch (e) {
         setResults((r) => ({ ...r, [item.id]: { state: 'error', message: e.message } }));
@@ -319,10 +383,11 @@ function Inventory({ items, source, storage, onReload, onOpen }) {
             <thead className="border-b border-bord text-left text-ekn-sm text-ekn-text-muted">
               <tr>
                 <th className="w-10 px-3 py-2" />
-                <th className="px-3 py-2 font-medium">Fichier</th>
+                <th className="px-3 py-2 font-medium">{source.item}</th>
                 <th className="px-3 py-2 font-medium">Date</th>
-                <th className="px-3 py-2 font-medium">Durée</th>
-                <th className="px-3 py-2 text-right font-medium">Taille</th>
+                {source.columns.map((c) => (
+                  <th key={c.label} className={`px-3 py-2 font-medium ${c.right ? 'text-right' : ''}`}>{c.label}</th>
+                ))}
                 <th className="px-3 py-2 font-medium">Emplacement</th>
               </tr>
             </thead>
@@ -351,10 +416,10 @@ function Inventory({ items, source, storage, onReload, onOpen }) {
           {running
             ? `Récupération… ${recoveredCount}/${recoveredCount + chosen.length}`
             : chosen.length
-              ? `${chosen.length} fichier${chosen.length > 1 ? 's' : ''} · ${fileSize(totalSize)}`
+              ? source.selection(chosen)
               : recoveredCount
-                ? `${recoveredCount} fichier${recoveredCount > 1 ? 's' : ''} rangé${recoveredCount > 1 ? 's' : ''} à leur date dans ta bibliothèque`
-                : 'Coche les fichiers à récupérer'}
+                ? source.recovered(recoveredCount)
+                : source.prompt}
         </span>
         {source.trash ? (
           <label className="flex items-center gap-2 text-ekn-sm text-clair/80">
@@ -372,9 +437,9 @@ function Inventory({ items, source, storage, onReload, onOpen }) {
         ) : null}
         <button
           type="button"
-          disabled={running || !chosen.length || !storage}
+          disabled={running || !chosen.length || !ready}
           onClick={recover}
-          title={storage ? '' : 'Le stockage vidéo n’est pas configuré'}
+          title={ready ? '' : 'Le stockage vidéo n’est pas configuré'}
           className="ml-auto rounded-lg bg-turquoise px-4 py-1.5 text-ekn-sm font-medium text-fonce hover:bg-turquoise/90 disabled:opacity-40"
         >
           Récupérer
@@ -388,7 +453,7 @@ function Inventory({ items, source, storage, onReload, onOpen }) {
 // range avec elle plutôt que d'en créer une seconde.
 const attachable = (item) => item.status === 'in_library' && Boolean(item.job_id);
 
-function resultMessage(vue) {
+function resultMessage(vue, source) {
   const rangement = vue.video === 'attached'
     ? 'rangée avec la réunion existante, qui garde désormais son enregistrement'
     : vue.video === 'kept' ? 'rangée avec la réunion existante' : 'récupérée';
@@ -396,19 +461,13 @@ function resultMessage(vue) {
     trashed: 'original à la corbeille du Drive',
     kept: 'original gardé (droits insuffisants pour le retirer)',
     kept_different: 'original gardé : il diffère de l’enregistrement déjà conservé',
-    left_in_odoo: vue.linked ? 'liée à sa fiche Odoo, où l’original reste' : 'original laissé dans Odoo',
+    left_in_odoo: source.left?.(vue.linked),
   }[vue.original];
   return original ? `${rangement} · ${original}` : rangement;
 }
 
 function Row({ item, checked, result, disabled, onToggle, onOpen, source }) {
-  const status = {
-    recovered: item.recovered_by ? `déjà récupéré${item.job_id ? '' : ` par ${item.recovered_by}`}` : 'déjà récupéré',
-    duplicate: 'copie d’un autre fichier de la liste',
-    in_library: item.job_id
-      ? 'déjà transcrite : sera rangée avec la réunion existante'
-      : 'semble déjà transcrite par un collègue',
-  }[item.status];
+  const status = source.status[item.status]?.(item);
 
   return (
     <tr className="border-b border-bord/50 last:border-0">
@@ -432,6 +491,9 @@ function Row({ item, checked, result, disabled, onToggle, onOpen, source }) {
         <a href={item.web_link} target="_blank" rel="noreferrer" className="ekn-link">
           {item.name}
         </a>
+        {item.excerpt ? (
+          <span className="max-w-xl text-ekn-sm text-ekn-text/60 line-clamp-2">{item.excerpt}</span>
+        ) : null}
         {status || result ? (
           <span className={`block text-ekn-sm ${result?.state === 'error' ? 'text-ekn-tone-error' : 'text-ekn-text-muted'}`}>
             {result?.message || status}
@@ -450,15 +512,16 @@ function Row({ item, checked, result, disabled, onToggle, onOpen, source }) {
       <td className="whitespace-nowrap px-3 py-2 text-ekn-text/70">
         {jour(item.recorded_at)}
         {!item.recorded_at_from_name ? (
-          <span className="block text-ekn-xs text-ekn-text-muted" title={`Date du dépôt dans ${source.name} : l’enregistrement peut être un peu plus ancien.`}>
-            date {source.name === 'Odoo' ? 'd’Odoo' : 'du Drive'}
+          <span className="block text-ekn-xs text-ekn-text-muted" title={`Date du dépôt dans ${source.name} : la réunion peut être un peu plus ancienne.`}>
+            {source.dateLabel}
           </span>
         ) : null}
       </td>
-      <td className="px-3 py-2 tabular-nums text-ekn-text/70">
-        {item.duration_seconds ? duree(item.duration_seconds) : '—'}
-      </td>
-      <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-ekn-text/70">{fileSize(item.size)}</td>
+      {source.columns.map((c) => (
+        <td key={c.label} className={`whitespace-nowrap px-3 py-2 tabular-nums text-ekn-text/70 ${c.right ? 'text-right' : ''}`}>
+          {c.cell(item)}
+        </td>
+      ))}
       <td className="px-3 py-2 text-ekn-text/60">
         {LOCATION_LABELS[item.location.kind] || item.location.name}
       </td>
