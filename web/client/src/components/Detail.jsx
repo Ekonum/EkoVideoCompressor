@@ -128,7 +128,7 @@ export function Detail({ jobId, recherche = '', surRetour, surRetraiter }) {
       <Erreur>{erreur}</Erreur>
       {note ? <p className="mt-4 text-ekn-sm text-ekn-tone-success">{note}</p> : null}
 
-      <div className="mt-8 grid grid-cols-1 gap-10 lg:grid-cols-[minmax(0,1fr)_20rem]">
+      <div className="mt-8 grid gap-10 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <div>
           <div className="flex items-center justify-between gap-3">
             <h2 className="titre text-[1.0625rem] font-medium">Transcription</h2>
@@ -324,7 +324,7 @@ function DateReunion({ jobId, valeur, deduite, surMaj, surErreur }) {
         } catch (erreur) { surErreur(erreur.message); }
       }}
     >
-      <DateHeure valeur={saisie} surChange={setSaisie} />
+      <DateHeure valeur={saisie} surChange={setSaisie} label="Date de la réunion" />
       <Bouton type="submit">Enregistrer</Bouton>
       <button type="button" onClick={() => setEdition(false)}
               className="text-ekn-sm text-ekn-text-muted hover:text-ekn-text">

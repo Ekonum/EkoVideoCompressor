@@ -25,11 +25,7 @@ const RACCOURCIS = [
 /** La liste des raccourcis, derrière « ? » : ils ne s'imposent à
  *  personne, mais qui les cherche les trouve. Un <dialog> natif : le
  *  navigateur garde le focus dedans, ferme sur Échap et rend le focus au
- *  bouton qui l'a ouvert.
- *
- *  m-auto : .ekn-dialog compte sur la marge auto du navigateur pour se
- *  centrer, que le preflight de Tailwind remet à zéro (signalé à
- *  ekonum-ui). En dessous de 40rem, sa règle de feuille du bas l'emporte. */
+ *  bouton qui l'a ouvert. */
 export function Aide({ surFermer }) {
   const boite = useRef(null);
 
@@ -47,7 +43,7 @@ export function Aide({ surFermer }) {
   return (
     <dialog
       ref={boite}
-      className="ekn-dialog m-auto"
+      className="ekn-dialog"
       aria-labelledby="aide-titre"
       onClose={surFermer}
       onMouseDown={(e) => { if (e.target === e.currentTarget && horsCadre(e)) surFermer(); }}

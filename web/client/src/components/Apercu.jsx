@@ -49,6 +49,7 @@ export function Apercu({ fichier, duree, debut, fin, surDebut, surFin, actif }) 
         label="Écouter et rogner"
         start={debut}
         end={fin}
+        duration={duree}
         onTrim={rogner}
         onUnreadable={() => setLisible(false)}
         inert={actif}
@@ -57,7 +58,7 @@ export function Apercu({ fichier, duree, debut, fin, surDebut, surFin, actif }) 
       <p className="mt-2 text-ekn-sm text-ekn-text-muted">
         {lisible
           ? 'Seule la partie surlignée sera transcrite — et payée. La lecture part de la dernière poignée touchée.'
-          : 'Ce navigateur ne lit pas ce format : l’enregistrement sera transcrit en entier.'}
+          : 'Seule la partie surlignée sera transcrite — et payée.'}
       </p>
     </div>
   );

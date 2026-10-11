@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef } from 'react';
 
 /** Le peu de vocabulaire visuel partagé.
  *
@@ -22,15 +22,18 @@ export function Bouton({ variante = 'primaire', className = '', ...props }) {
   return <button {...props} className={`${variantes[variante]} ${className}`} />;
 }
 
-/** Le libellé à côté du champ plutôt qu'autour : enveloppé dans
- *  .ekn-label, le champ en hériterait la graisse (signalé à ekonum-ui). */
+/** Le champ dans son libellé, comme le veut ekonum-ui : un clic sur le
+ *  libellé y mène, sans id à tenir. L'aide reste dehors, liée par
+ *  aria-describedby, pour ne pas allonger le nom du champ. */
 export function Champ({ label, aide, id, ...props }) {
   const auto = useId();
   const cle = id || auto;
   return (
     <div className="flex flex-col gap-1">
-      <label htmlFor={cle} className="ekn-label">{label}</label>
-      <input {...props} id={cle} aria-describedby={aide ? `${cle}-aide` : undefined} className="ekn-input" />
+      <label className="ekn-label">
+        {label}
+        <input {...props} id={cle} aria-describedby={aide ? `${cle}-aide` : undefined} className="ekn-input" />
+      </label>
       {aide ? <span id={`${cle}-aide`} className="ekn-help">{aide}</span> : null}
     </div>
   );
@@ -69,130 +72,40 @@ export function Vide({ titre, children }) {
   );
 }
 
-const MOIS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet',
-  'août', 'septembre', 'octobre', 'novembre', 'décembre'];
-const JOURS = ['L', 'M', 'M', 'J', 'V', 'S', 'D'];
-
-/** « 2026-09-25T08:10 » ↔ Date locale, sans passer par l'UTC. */
-function lireLocal(valeur) {
-  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(valeur || '');
-  return m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]) : null;
-}
-function ecrireLocal(d) {
-  const deux = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${deux(d.getMonth() + 1)}-${deux(d.getDate())}T${deux(d.getHours())}:${deux(d.getMinutes())}`;
-}
-
-/** Date et heure d'une réunion, sans le sélecteur natif du navigateur.
+/** Date et heure d'une réunion : le <ekn-date-picker> d'ekonum-ui autour
+ *  d'un champ datetime-local, dont il garde le format de valeur.
  *
- *  Le natif dépareille et varie d'un navigateur à l'autre. Ici : la date
- *  écrite en toutes lettres, qu'on ouvre sur un petit calendrier et deux
- *  champs d'heure. Même format de valeur qu'un champ datetime-local.
- */
-export function DateHeure({ valeur, surChange, disabled = false }) {
-  const [ouvert, setOuvert] = useState(false);
-  const date = lireLocal(valeur) || new Date();
-  const [mois, setMois] = useState(new Date(date.getFullYear(), date.getMonth(), 1));
-  const boite = useRef(null);
+ *  Le calendrier écrit dans le champ puis émet `input` et `change` natifs,
+ *  que React ne voit pas : il croit la valeur déjà à jour. On écoute donc
+ *  `change` sur le champ lui-même ; onChange ne sert qu'à la saisie au
+ *  clavier. Sur écran tactile, c'est le calendrier du téléphone.
+ *
+ *  inert quand le champ est désactivé : le bouton du calendrier, lui, ne
+ *  l'est pas (signalé à ekonum-ui). */
+export function DateHeure({ valeur, surChange, disabled = false, id, label }) {
+  const champ = useRef(null);
+  const rappel = useRef(surChange);
+  rappel.current = surChange;
 
   useEffect(() => {
-    if (!ouvert) return undefined;
-    const fermer = (e) => { if (!boite.current?.contains(e.target)) setOuvert(false); };
-    const echap = (e) => { if (e.key === 'Escape') setOuvert(false); };
-    document.addEventListener('pointerdown', fermer);
-    document.addEventListener('keydown', echap);
-    return () => {
-      document.removeEventListener('pointerdown', fermer);
-      document.removeEventListener('keydown', echap);
-    };
-  }, [ouvert]);
-
-  const changer = (champs) => {
-    const d = new Date(date);
-    if ('jour' in champs) d.setFullYear(champs.jour.getFullYear(), champs.jour.getMonth(), champs.jour.getDate());
-    if ('heure' in champs) d.setHours(champs.heure);
-    if ('minute' in champs) d.setMinutes(champs.minute);
-    surChange(ecrireLocal(d));
-  };
-
-  const premier = (mois.getDay() + 6) % 7; // lundi en tête
-  const nbJours = new Date(mois.getFullYear(), mois.getMonth() + 1, 0).getDate();
-  const cases = [...Array(premier).fill(null), ...Array.from({ length: nbJours }, (_, i) => i + 1)];
-  const memeJour = (j) => j && date.getFullYear() === mois.getFullYear()
-    && date.getMonth() === mois.getMonth() && date.getDate() === j;
-
-  const champHeure = (valeurCourante, max, cle) => (
-    <input
-      type="number"
-      min={0}
-      max={max}
-      value={String(valeurCourante).padStart(2, '0')}
-      onChange={(e) => {
-        const n = Math.min(Math.max(parseInt(e.target.value || '0', 10), 0), max);
-        changer({ [cle]: n });
-      }}
-      className="w-14 rounded-md border border-bord bg-ekn-field px-2 py-1 text-center tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
-    />
-  );
+    const el = champ.current;
+    const suivre = () => rappel.current(el.value);
+    el.addEventListener('change', suivre);
+    return () => el.removeEventListener('change', suivre);
+  }, []);
 
   return (
-    <div ref={boite} className="relative inline-block">
-      <button
-        type="button"
+    <ekn-date-picker inert={disabled || undefined}>
+      <input
+        ref={champ}
+        id={id}
+        aria-label={label}
+        type="datetime-local"
+        className="ekn-input"
+        value={valeur || ''}
+        onChange={(e) => surChange(e.target.value)}
         disabled={disabled}
-        onClick={() => {
-          setMois(new Date(date.getFullYear(), date.getMonth(), 1));
-          setOuvert((o) => !o);
-        }}
-        className="rounded-md border border-bord bg-ekn-field px-3 py-1.5 text-left text-ekn-sm hover:border-ekn-text/40 disabled:opacity-50"
-      >
-        {lireLocal(valeur)
-          ? date.toLocaleString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
-            + ' · ' + date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
-          : 'Choisir une date'}
-      </button>
-      {ouvert ? (
-        <div className="absolute left-0 z-30 mt-2 w-72 rounded-xl border border-bord bg-carte p-3 shadow-lg">
-          <div className="flex items-center justify-between">
-            <button type="button" aria-label="Mois précédent"
-                    onClick={() => setMois(new Date(mois.getFullYear(), mois.getMonth() - 1, 1))}
-                    className="rounded px-2 py-1 text-ekn-text/60 hover:bg-papier">‹</button>
-            <span className="titre text-ekn-sm font-medium">
-              {MOIS[mois.getMonth()]} {mois.getFullYear()}
-            </span>
-            <button type="button" aria-label="Mois suivant"
-                    onClick={() => setMois(new Date(mois.getFullYear(), mois.getMonth() + 1, 1))}
-                    className="rounded px-2 py-1 text-ekn-text/60 hover:bg-papier">›</button>
-          </div>
-          <div className="mt-2 grid grid-cols-7 gap-1 text-center text-ekn-xs text-ekn-text-muted">
-            {JOURS.map((j, i) => <span key={i}>{j}</span>)}
-          </div>
-          <div className="mt-1 grid grid-cols-7 gap-1">
-            {cases.map((j, i) => (j ? (
-              <button
-                key={i}
-                type="button"
-                onClick={() => changer({ jour: new Date(mois.getFullYear(), mois.getMonth(), j) })}
-                className={`rounded-md py-1 text-ekn-sm tabular-nums ${
-                  memeJour(j) ? 'bg-ekn-action text-ekn-on-action' : 'hover:bg-turquoise/15'
-                }`}
-              >
-                {j}
-              </button>
-            ) : <span key={i} />))}
-          </div>
-          <div className="mt-3 flex items-center justify-between border-t border-bord pt-3 text-ekn-sm">
-            <span className="text-ekn-text/60">Heure</span>
-            <span className="flex items-center gap-1">
-              {champHeure(date.getHours(), 23, 'heure')}
-              <span className="text-ekn-text-muted">:</span>
-              {champHeure(date.getMinutes(), 59, 'minute')}
-            </span>
-            <button type="button" onClick={() => setOuvert(false)}
-                    className="ekn-button ekn-button--compact">OK</button>
-          </div>
-        </div>
-      ) : null}
-    </div>
+      />
+    </ekn-date-picker>
   );
 }
