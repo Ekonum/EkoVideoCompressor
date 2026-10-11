@@ -1,4 +1,4 @@
-/*! ekonum-ui 3.10.0 — optional components. Without this file, every native element still works. */
+/*! ekonum-ui 3.11.1 — optional components. Without this file, every native element still works. */
 
 /* ── src/js/audio.js ── */
 /* <ekn-audio> — an audio (or video) player in the brand's colours, with an optional
@@ -357,6 +357,10 @@
  * the time and moves focus to the time field; each change is written at once, and Enter in
  * the time field or « Valider » closes. An empty field starts at the current time. The
  * value is kept within min and max, time included.
+ *
+ * A disabled or read-only field (or one inside a disabled fieldset) keeps its button
+ * disabled, and nothing is written into it; the state is followed while the page runs —
+ * transcript locks its fields during an upload.
  */
 (() => {
   if (typeof customElements === "undefined" || customElements.get("ekn-date-picker")) return;
@@ -420,6 +424,10 @@
       this.dataset.enhanced = "";
 
       this.toggle.addEventListener("click", () => this.open());
+      // The field's disabled and readonly attributes, and those of a fieldset around it.
+      new MutationObserver(() => this.sync()).observe(this.input.form ?? this,
+        { attributes: true, attributeFilter: ["disabled", "readonly"], subtree: true });
+      this.sync();
       this.calendar.addEventListener("toggle", (e) => {
         this.toggle.setAttribute("aria-expanded", String(e.newState === "open"));
         // Closed by Escape or a click outside: focus goes back to the button, not to <body>.
@@ -447,6 +455,18 @@
       });
     }
 
+    locked() {
+      return this.input.matches(":disabled") || this.input.readOnly;
+    }
+
+    // The button follows the field; a calendar open when the field locks closes.
+    // Written only when it changes: the observer sees the button's own attribute too.
+    sync() {
+      const locked = this.locked();
+      if (this.toggle.disabled !== locked) this.toggle.disabled = locked;
+      if (locked && this.calendar.matches(":popover-open")) this.calendar.hidePopover();
+    }
+
     bounds() {
       return { min: fromISO(this.input.min), max: fromISO(this.input.max) };
     }
@@ -457,6 +477,7 @@
     }
 
     open() {
+      if (this.locked()) return;
       const { min, max } = this.bounds();
       let start = fromISO(this.input.value) || today();
       if (min && start < min) start = min;
@@ -567,7 +588,7 @@
       const { min, max } = this.input;
       if (min && value < min) value = min;
       if (max && value > max) value = max;
-      if (value === this.input.value) return;
+      if (value === this.input.value || this.locked()) return;
       this.input.value = value;
       this.input.dispatchEvent(new Event("input", { bubbles: true }));
       this.input.dispatchEvent(new Event("change", { bubbles: true }));

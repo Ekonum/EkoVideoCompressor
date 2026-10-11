@@ -78,10 +78,8 @@ export function Vide({ titre, children }) {
  *  Le calendrier écrit dans le champ puis émet `input` et `change` natifs,
  *  que React ne voit pas : il croit la valeur déjà à jour. On écoute donc
  *  `change` sur le champ lui-même ; onChange ne sert qu'à la saisie au
- *  clavier. Sur écran tactile, c'est le calendrier du téléphone.
- *
- *  inert quand le champ est désactivé : le bouton du calendrier, lui, ne
- *  l'est pas (signalé à ekonum-ui). */
+ *  clavier. Sur écran tactile, c'est le calendrier du téléphone. Le
+ *  bouton du calendrier suit seul l'état désactivé du champ. */
 export function DateHeure({ valeur, surChange, disabled = false, id, label }) {
   const champ = useRef(null);
   const rappel = useRef(surChange);
@@ -95,7 +93,7 @@ export function DateHeure({ valeur, surChange, disabled = false, id, label }) {
   }, []);
 
   return (
-    <ekn-date-picker inert={disabled || undefined}>
+    <ekn-date-picker>
       <input
         ref={champ}
         id={id}

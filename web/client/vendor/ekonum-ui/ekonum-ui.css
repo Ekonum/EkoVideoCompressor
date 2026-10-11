@@ -1,6 +1,6 @@
-/*! ekonum-ui 3.10.0 — Ekonum brand (Brand Guidelines, BolimDesign 2025) */
+/*! ekonum-ui 3.11.1 — Ekonum brand (Brand Guidelines, BolimDesign 2025) */
 /*  Fonts are separate: fonts/fonts.css, to be served by the application. */
-:root { --ekn-version: "3.10.0"; }
+:root { --ekn-version: "3.11.1"; }
 
 /* ── src/tokens.css ── */
 /* ──────────────────────────────────────────────────────────────────────────
@@ -82,6 +82,18 @@
   --ekn-on-tile:      var(--ekn-turquoise);   /* pictogram on the icon tile */
   --ekn-halo:         rgba(2, 26, 26, 0);   /* hairline that detaches a thin mark from the bright colour it crosses (the audio playhead over the kept part): none on light, dark green on dark */
   --ekn-underline:    var(--ekn-success-dark);   /* underline of a link, which keeps the text colour: turquoise's dark shade on light (4.5:1; turquoise itself 1.6:1), turquoise on dark */
+
+  /* categorical series of a chart: one colour per category, always in this
+     order, never a meaning of state (that is status). Measured against both
+     page grounds of each theme (≥ 3:1) and between each other under normal,
+     protan, deutan and tritan vision (CIEDE2000, Machado 2009): four series
+     and 'other' stay apart (ΔE ≥ 11 light, ≥ 15 dark). A fifth category goes
+     into 'other' or into small multiples. */
+  --ekn-series-1:     #0E8A73;   /* first series: a teal one step lighter than the success shade, 3.56:1 on the light ground */
+  --ekn-series-2:     var(--ekn-violet);   /* second series: the brand violet, 4.24:1 on the light ground */
+  --ekn-series-3:     #C2571A;   /* third series: a burnt orange, away from the warning amber and the error red */
+  --ekn-series-4:     var(--ekn-hover-dark);   /* fourth series: the ink of each theme, deep green on light, off-white on dark; it differs from the others by lightness, which no colour blindness erases */
+  --ekn-series-other: #525C5C;   /* the grouped remainder ('Autres'): a neutral grey, between the ink and the colours in lightness */
 
   /* Typography: Chillax (headings) and Synonym (body), as in the guidelines. */
   --ekn-font-heading: 'Chillax', system-ui, sans-serif;   /* headings, buttons, labels of states and badges */
@@ -181,6 +193,11 @@
   --ekn-on-tile:        var(--ekn-dark-green);
   --ekn-halo:           var(--ekn-dark-green);
   --ekn-underline:      var(--ekn-turquoise);
+  --ekn-series-1:       var(--ekn-turquoise);
+  --ekn-series-2:       #B98AE8;
+  --ekn-series-3:       #F08A4B;
+  --ekn-series-4:       var(--ekn-off-white);
+  --ekn-series-other:   #7E9090;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -212,6 +229,11 @@
     --ekn-on-tile:        var(--ekn-dark-green);
     --ekn-halo:           var(--ekn-dark-green);
     --ekn-underline:      var(--ekn-turquoise);
+    --ekn-series-1:       var(--ekn-turquoise);
+    --ekn-series-2:       #B98AE8;
+    --ekn-series-3:       #F08A4B;
+    --ekn-series-4:       var(--ekn-off-white);
+    --ekn-series-other:   #7E9090;
   }
 }
 
@@ -245,6 +267,11 @@
   --ekn-on-tile:        var(--ekn-turquoise);
   --ekn-halo:           rgba(2, 26, 26, 0);
   --ekn-underline:      var(--ekn-success-dark);
+  --ekn-series-1:       #0E8A73;
+  --ekn-series-2:       var(--ekn-violet);
+  --ekn-series-3:       #C2571A;
+  --ekn-series-4:       var(--ekn-hover-dark);
+  --ekn-series-other:   #525C5C;
 }
 
 /* ── src/base.css ── */
@@ -752,6 +779,158 @@ input.ekn-input::-webkit-calendar-picker-indicator { cursor: pointer; opacity: .
 .ekn-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ekn-space-2) var(--ekn-space-3); }
 .ekn-row > :first-child { flex: 1 1 var(--ekn-row-label, 16rem); min-width: 0; }
 
+/* ── Indicators and charts ──────────────────────────────────────────────────
+   Rebuilt in partners (indicator tiles, bar chart), sync-hub (activity, share
+   bar) and the broker (quota gauges). The package draws no chart: the
+   application draws its SVG, these classes give it the colours, the type and the
+   behaviour of the other screens.
+     <div class="ekn-metrics">
+       <div class="ekn-card ekn-metric">
+         <span class="ekn-metric__label">Réunions traitées</span>
+         <span class="ekn-metric__value">1 284</span>
+         <span class="ekn-metric__hint">+12 % sur 30 jours</span>
+       </div>
+       …
+     </div> */
+
+/* A row of indicators: four go 4 → 2 × 2 → 1 and three go 3 → 1, never a lone
+   tile on the last row (partners' rule). 11rem minimum per tile: two of them do
+   not fit a 375 px phone. The `(threshold - 100%) * 9999` term switches the
+   minimum without a breakpoint: below the width of a full row, it becomes
+   large enough to forbid the in-between column counts. Other counts fill as
+   many columns as fit. */
+.ekn-metrics {
+  --ekn-metric-min: 11rem; --ekn-metric-gap: var(--ekn-space-4);
+  display: grid; gap: var(--ekn-metric-gap);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--ekn-metric-min)), 1fr));
+}
+.ekn-metrics:has(> :nth-child(4):last-child) {
+  grid-template-columns: repeat(auto-fit, minmax(max(var(--ekn-metric-min), min(
+    (100% - 2 * var(--ekn-metric-gap)) / 3 + 1px,
+    (4 * var(--ekn-metric-min) + 3 * var(--ekn-metric-gap) - 100%) * 9999)), 1fr));
+}
+.ekn-metrics:has(> :nth-child(3):last-child) {
+  grid-template-columns: repeat(auto-fit, minmax(max(var(--ekn-metric-min), min(100%,
+    (3 * var(--ekn-metric-min) + 2 * var(--ekn-metric-gap) - 100%) * 9999)), 1fr));
+}
+/* Inline: one card, the indicators separated by hairlines rather than gaps — for
+   a summary at the top of a screen. Each indicator draws its rule on its left and
+   top; the card clips those of the first column and the first row, wherever the
+   row wraps. */
+.ekn-metrics--inline {
+  --ekn-metric-gap: 0px;
+  overflow: hidden;
+  background: var(--ekn-surface); border: 1px solid var(--ekn-border);
+  border-radius: var(--ekn-radius-card); box-shadow: var(--ekn-shadow-1);
+}
+.ekn-metrics--inline > * {
+  padding: var(--ekn-space-4) var(--ekn-space-5);
+  box-shadow: -1px 0 0 var(--ekn-border), 0 -1px 0 var(--ekn-border);
+}
+
+/* One indicator: what it counts, the figure, then what the figure means
+   (period, comparison, threshold). The figure alone is not enough. */
+.ekn-metric { display: flex; flex-direction: column; gap: var(--ekn-space-1); min-width: 0; }
+.ekn-metric__label {
+  font-family: var(--ekn-font-heading); font-weight: 600; font-size: var(--ekn-text-xs);
+  letter-spacing: var(--ekn-tracking); line-height: 1.3; color: var(--ekn-text-muted);
+}
+.ekn-metric__value {
+  font-family: var(--ekn-font-heading); font-weight: 600; font-size: var(--ekn-text-xl);
+  letter-spacing: var(--ekn-tracking); line-height: var(--ekn-leading-heading);
+  font-variant-numeric: tabular-nums; color: var(--ekn-text); overflow-wrap: anywhere;
+}
+.ekn-metric__hint { font-size: var(--ekn-text-sm); color: var(--ekn-text-muted); }
+
+/* Gauge: the native <meter>, read out by screen readers with its value. Its
+   low, high and optimum attributes say which part of the scale is good; the
+   fill takes the tone of the region the value falls in (broker's quotas: a
+   warning from 70 %, an error at 100 %):
+     <meter class="ekn-meter" min="0" max="100" low="70" high="99.9" optimum="0" value="82">82 %</meter>
+   Without low or high, it only measures: the fill takes the action colour.
+   The tone is never alone: the figure is written next to the gauge. */
+.ekn-meter {
+  -webkit-appearance: none; appearance: none; display: block; box-sizing: border-box;
+  --ekn-meter-height: 8px;
+  width: 100%; height: var(--ekn-meter-height); margin: 0; border: 0; border-radius: var(--ekn-radius-pill);
+  background: var(--ekn-border); overflow: hidden;
+}
+/* The element itself draws the track, in every engine: WebKit's bar stays clear.
+   Heights in length, not in %: Chromium resolves neither against the meter and
+   would draw a 4 px fill in the middle of the track. */
+.ekn-meter::-webkit-meter-bar { box-sizing: border-box; height: var(--ekn-meter-height); border: 0; border-radius: var(--ekn-radius-pill); background: transparent; }
+.ekn-meter::-webkit-meter-optimum-value { height: var(--ekn-meter-height); border-radius: var(--ekn-radius-pill); background: var(--ekn-meter-fill, var(--ekn-tone-success)); }
+.ekn-meter::-webkit-meter-suboptimum-value { height: var(--ekn-meter-height); border-radius: var(--ekn-radius-pill); background: var(--ekn-meter-fill, var(--ekn-tone-warning)); }
+.ekn-meter::-webkit-meter-even-less-good-value { height: var(--ekn-meter-height); border-radius: var(--ekn-radius-pill); background: var(--ekn-meter-fill, var(--ekn-tone-error)); }
+.ekn-meter::-moz-meter-bar { border-radius: var(--ekn-radius-pill); background: var(--ekn-meter-fill, var(--ekn-tone-success)); }
+.ekn-meter:-moz-meter-sub-optimum::-moz-meter-bar { background: var(--ekn-meter-fill, var(--ekn-tone-warning)); }
+.ekn-meter:-moz-meter-sub-sub-optimum::-moz-meter-bar { background: var(--ekn-meter-fill, var(--ekn-tone-error)); }
+.ekn-meter:not([low], [high]) { --ekn-meter-fill: var(--ekn-action); }
+
+/* Share bar: the parts of a whole side by side (sync-hub: share of each engine).
+   Each part sets its weight, any unit, and its series; a 2 px gap of the card's
+   colour separates them. role="img" and an aria-label that states the figures:
+     <div class="ekn-proportion" role="img" aria-label="Claude 62 %, Gemini 38 %">
+       <span class="ekn-series-1" style="--ekn-share: 62"></span>
+       <span class="ekn-series-2" style="--ekn-share: 38"></span>
+     </div> */
+.ekn-proportion { display: flex; gap: 2px; height: 8px; border-radius: var(--ekn-radius-pill); overflow: hidden; background: var(--ekn-border); }
+.ekn-proportion > * { flex: var(--ekn-share, 1) 1 0; min-width: 2px; background: var(--ekn-series, var(--ekn-action)); }
+
+/* Series: the categorical palette, in its order. A class on any element (a <g>
+   of the chart, a legend item, a part of a share bar) sets --ekn-series for
+   everything inside. A fifth category goes into "Autres" (--other). */
+.ekn-series-1 { --ekn-series: var(--ekn-series-1); }
+.ekn-series-2 { --ekn-series: var(--ekn-series-2); }
+.ekn-series-3 { --ekn-series: var(--ekn-series-3); }
+.ekn-series-4 { --ekn-series: var(--ekn-series-4); }
+.ekn-series-other { --ekn-series: var(--ekn-series-other); }
+
+/* Chart: an SVG drawn by the application at its container's width — never scaled
+   down, or its 12 px labels shrink to 6 px on a phone. Without a viewBox, x in
+   percentages and y in pixels need no script; a line chart is redrawn on resize.
+   It carries role="img" and an aria-label that sums it up, or sits next to the
+   table of its figures; the legend names each series in words.
+     <svg class="ekn-chart" height="200" role="img" aria-label="…">
+       <g class="ekn-chart__grid"><line x1="8%" x2="100%" y1="60" y2="60"/>…</g>
+       <g class="ekn-chart__axis"><text x="14%" y="192" text-anchor="middle">lun.</text>…</g>
+       <g class="ekn-series-1"><rect class="ekn-chart__bar" x="11%" width="7%" y="124" height="48"/>…</g>
+     </svg> */
+.ekn-chart {
+  display: block; width: 100%; overflow: visible;
+  font-family: var(--ekn-font-body); font-size: var(--ekn-text-xs); font-variant-numeric: tabular-nums;
+}
+.ekn-chart__grid { stroke: var(--ekn-border); stroke-width: 1; shape-rendering: crispEdges; }
+.ekn-chart__axis { stroke: var(--ekn-border-strong); stroke-width: 1; shape-rendering: crispEdges; }
+.ekn-chart text, .ekn-chart__axis text { fill: var(--ekn-text-muted); stroke: none; }
+.ekn-chart__bar, .ekn-chart__area { fill: var(--ekn-series, var(--ekn-action)); stroke: none; }
+.ekn-chart__area { fill-opacity: .16; }
+.ekn-chart__line { fill: none; stroke: var(--ekn-series, var(--ekn-action)); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.ekn-chart__dot { fill: var(--ekn-series, var(--ekn-action)); stroke: var(--ekn-surface); stroke-width: 2; }
+/* A transparent column over each period: hovering it highlights the period and
+   the application shows the tooltip. */
+.ekn-chart__hit { fill: transparent; }
+.ekn-chart__hit:hover { fill: var(--ekn-hover); }
+
+/* Legend: a 12 px swatch then the name of the series. */
+.ekn-legend {
+  display: flex; flex-wrap: wrap; gap: var(--ekn-space-1) var(--ekn-space-4); margin: 0; padding: 0; list-style: none;
+  font-size: var(--ekn-text-sm); color: var(--ekn-text-muted);
+}
+.ekn-legend > * { display: inline-flex; align-items: center; gap: var(--ekn-space-2); }
+.ekn-swatch { width: 12px; height: 12px; flex: none; border-radius: 3px; background: var(--ekn-series, var(--ekn-action)); }
+
+/* Tooltip: the figures of the hovered period, placed by the application
+   (position: absolute in a positioned parent). Decorative: the same figures must
+   be reachable without a mouse, in the chart's label or its table. */
+.ekn-tooltip {
+  position: absolute; z-index: 1; pointer-events: none; box-sizing: border-box; max-width: 16rem;
+  padding: var(--ekn-space-2) var(--ekn-space-3); border: 1px solid var(--ekn-border); border-radius: var(--ekn-radius-field);
+  background: var(--ekn-surface); color: var(--ekn-text); box-shadow: var(--ekn-shadow-2);
+  font-size: var(--ekn-text-sm); line-height: 1.4; font-variant-numeric: tabular-nums;
+}
+.ekn-tooltip .ekn-legend { flex-direction: column; color: var(--ekn-text); }
+
 /* ── Page structure ─────────────────────────────────────────────────────────
    Rebuilt in transcript, the portal, sync-hub and partners. The header is the
    screen's dark band — only one, the guidelines warn against stacked dark areas:
@@ -1113,7 +1292,8 @@ ekn-date-picker[data-enhanced] > input::-webkit-calendar-picker-indicator { disp
   display: grid; place-items: center; width: 2.25rem; height: 2.25rem; padding: 0;
   border: 0; border-radius: var(--ekn-radius-field); background: none; color: var(--ekn-text); cursor: pointer;
 }
-.ekn-date-picker__toggle:hover { background: var(--ekn-hover); }
+.ekn-date-picker__toggle:hover:not(:disabled) { background: var(--ekn-hover); }
+.ekn-date-picker__toggle:disabled { opacity: .45; cursor: not-allowed; }
 .ekn-date-picker__toggle:focus-visible { outline: 2px solid var(--ekn-focus); outline-offset: 0; }
 .ekn-date-picker__toggle > svg { width: 1.25rem; height: 1.25rem; }
 
