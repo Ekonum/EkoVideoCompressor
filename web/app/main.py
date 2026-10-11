@@ -1856,6 +1856,7 @@ def create_app(
         human_user=human_user,
         storage=stockage,
         google_secret=lambda: google_secret.get(),
+        odoo_for=odoo_pour,
         oauth_opener=google_opener,
     )
 

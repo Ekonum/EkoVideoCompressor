@@ -82,6 +82,10 @@ export const api = {
       job_id: jobId,
       trash_original: trashOriginal,
     }),
+  odooInventory: () => call('GET', '/api/recovery/odoo'),
+  odooImport: (attachmentId) => call('POST', `/api/recovery/odoo/${encodeURIComponent(attachmentId)}`, {}),
+  odooAttach: (attachmentId, jobId) =>
+    call('POST', `/api/recovery/odoo/${encodeURIComponent(attachmentId)}/attach`, { job_id: jobId }),
   odooMeetings: () => call('GET', '/api/odoo/meetings'),
   odooContext: (model, id) =>
     call('GET', `/api/odoo/context?model=${encodeURIComponent(model)}&record_id=${id}`),

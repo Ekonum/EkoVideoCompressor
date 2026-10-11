@@ -29,6 +29,7 @@ import secrets
 import time
 import unicodedata
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from pathlib import PurePosixPath
 from typing import Any, Callable
 
@@ -45,9 +46,12 @@ from .google_account import (
     email_from_id_token,
     pkce_pair,
 )
-from .stockage import StockageIndisponible
+from .odoo import OdooGateway, OdooUnavailable
+from .stockage import MORCEAU, StockageIndisponible
 
 log = logging.getLogger("ekovideo.web")
+
+PARIS = ZoneInfo("Europe/Paris")
 
 # Ce qui, dans un nom de fichier, désigne presque sûrement autre chose
 # qu'une réunion. La liste reste courte : dans le doute, on propose, et la
@@ -82,8 +86,9 @@ ISO_DATE = re.compile(
 CALL_RECORDER = re.compile(r"_(\d{2})-(\d{2})-(\d{2})_(\d{2})(\d{2})([AP]M)\b", re.IGNORECASE)
 # Ce que l'ancienne app macOS laissait derrière elle en transcrivant : la
 # piste extraite, sa version sans silences, ses morceaux. Pas une réunion
-# de plus — au mieux, la seule trace audio d'une réunion déjà là.
-ARTIFACT = re.compile(r"^audio(?:\.vad|_partie_\d+)?\.(?:wav|m4a|mp3|flac)$", re.IGNORECASE)
+# de plus — au mieux, la seule trace audio d'une réunion déjà là. Odoo,
+# lui, nomme « audio » tout court les messages vocaux de ses discussions.
+ARTIFACT = re.compile(r"^audio(?:(?:\.vad|_partie_\d+)?\.(?:wav|m4a|mp3|flac))?$", re.IGNORECASE)
 # Les caractères invisibles que l'iPhone glisse dans ses noms (« 14.03\u200b »)
 # ou qui entourent un numéro de téléphone (« \u202a03 27… \u202c »).
 INVISIBLE = re.compile(r"[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]")
@@ -165,7 +170,8 @@ def recording_date(file: dict[str, Any]) -> tuple[str, bool]:
         except ValueError:
             pass
     if reference:
-        return reference.astimezone().replace(tzinfo=None).isoformat(timespec="minutes"), False
+        # Heure de Paris, pas celle du serveur : le conteneur vit en UTC.
+        return reference.astimezone(PARIS).replace(tzinfo=None).isoformat(timespec="minutes"), False
     return "", False
 
 
@@ -262,7 +268,9 @@ def build_inventory(
         if file.get("driveId") in excluded_drives:
             continue
         date, date_sure = recording_date(file)
-        checksum = file.get("md5Checksum") or None
+        # Drive donne un MD5, Odoo un SHA-1 : les deux ne se confondent
+        # jamais, et chacun dédoublonne sa source.
+        checksum = file.get("md5Checksum") or file.get("checksum") or None
         item: dict[str, Any] = {
             "id": file["id"],
             "name": file.get("name", ""),
@@ -272,7 +280,7 @@ def build_inventory(
             "recorded_at": date,
             "recorded_at_from_name": date_sure,
             "duration_seconds": duration_seconds(file),
-            "location": _location(file, shared_drives),
+            "location": file.get("location") or _location(file, shared_drives),
             "web_link": file.get("webViewLink", ""),
             "kind": classify(file),
             "status": "new",
@@ -315,6 +323,49 @@ def _location(file: dict[str, Any], shared_drives: dict[str, str]) -> dict[str, 
     return {"kind": "shared_with_me", "name": proprietaire.get("emailAddress", "")}
 
 
+# Où vivent les pièces jointes d'Odoo, dit comme la personne le dit.
+ODOO_PLACES = {
+    **{modele: libelle for modele, (libelle, _) in OdooGateway.MODELES.items()},
+    "discuss.channel": "discussion",
+    "helpdesk.ticket": "ticket",
+    "project.update": "point d'avancement",
+}
+
+
+def odoo_file(piece: dict[str, Any], odoo_url: str) -> dict[str, Any]:
+    """Une pièce jointe d'Odoo, sous la forme d'un fichier de l'inventaire.
+
+    Odoo date en UTC, sans le dire ; la date de dépôt sert comme celle du
+    Drive, faute de mieux dans le nom."""
+    modele, fiche = str(piece.get("res_model") or ""), int(piece.get("res_id") or 0)
+    base = odoo_url.rstrip("/")
+    lien = ""
+    if base and fiche:
+        lien = (f"{base}/odoo/discuss?active_id=discuss.channel_{fiche}" if modele == "discuss.channel"
+                else f"{base}/odoo/{modele}/{fiche}")
+    depot = str(piece.get("create_date") or "").replace(" ", "T")
+    return {
+        "id": str(piece["id"]),
+        "name": piece.get("name") or "",
+        "mimeType": piece.get("mimetype") or "",
+        "size": piece.get("file_size") or 0,
+        "checksum": piece.get("checksum") or None,
+        "createdTime": f"{depot}Z" if depot else "",
+        "webViewLink": lien,
+        "location": {
+            "kind": "odoo",
+            "name": " · ".join(x for x in (ODOO_PLACES.get(modele, modele), piece.get("res_name") or "") if x),
+        },
+    }
+
+
+def odoo_record(piece: dict[str, Any]) -> tuple[str, int] | None:
+    """La fiche à laquelle la réunion récupérée se rattache : celle où
+    l'enregistrement était joint — une discussion n'en est pas une."""
+    modele, fiche = str(piece.get("res_model") or ""), int(piece.get("res_id") or 0)
+    return (modele, fiche) if modele in OdooGateway.MODELES and fiche else None
+
+
 class DriveImport(BaseModel):
     trash_original: bool = False
 
@@ -334,6 +385,7 @@ def register_recovery_routes(
     human_user: Callable[..., int],
     storage: Callable[[], Any],
     google_secret: Callable[[], str],
+    odoo_for: Callable[[int], OdooGateway],
     oauth_opener: Callable[..., Any] | None = None,
 ) -> None:
     oauth = GoogleOAuth(
@@ -462,6 +514,7 @@ def register_recovery_routes(
             "prompt": google["available"] and stockage_pret and not db.recovery_dismissed(owner_id),
             "google": google,
             "storage": stockage_pret,
+            "odoo": odoo_for(owner_id).configured,
         }
 
     def storage_available() -> bool:
@@ -628,3 +681,143 @@ def register_recovery_routes(
             # Copie faite, original gardé : rien n'est perdu, on le dit.
             log.info("original gardé (%s) : %s", file_id, exc)
             return "kept"
+
+    # -- Odoo ---------------------------------------------------------------
+
+    def odoo_ready(owner_id: int) -> OdooGateway:
+        require_enabled(owner_id)
+        odoo = odoo_for(owner_id)
+        if not odoo.configured:
+            raise HTTPException(status.HTTP_409_CONFLICT, "Enregistre d'abord ta clé Odoo dans Réglages.")
+        return odoo
+
+    @app.get("/api/recovery/odoo")
+    def odoo_inventory(owner_id: int = Depends(human_user)) -> dict:
+        odoo = odoo_ready(owner_id)
+        try:
+            pieces = odoo.media_attachments()
+        except OdooUnavailable as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+        items = build_inventory(
+            [odoo_file(p, config.odoo_url) for p in pieces],
+            user_id=owner_id,
+            shared_drives={},
+            recovered=db.recovered_sources("odoo"),
+            recovered_checksums=db.recovered_checksums(),
+            library=db.library_fingerprints(),
+            excluded_drives=set(),
+        )
+        return {"items": items}
+
+    def odoo_piece(odoo: OdooGateway, attachment_id: int) -> dict[str, Any]:
+        try:
+            return odoo.attachment(attachment_id, contenu=True)
+        except OdooUnavailable as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+    @app.post("/api/recovery/odoo/{attachment_id}")
+    def odoo_import(attachment_id: int, owner_id: int = Depends(human_user)) -> dict:
+        """Récupère une pièce jointe d'Odoo : une réunion à sa date, son
+        enregistrement en stockage froid, et rattachée à la fiche où il
+        était joint.
+
+        L'original reste sur sa fiche : il fait partie du dossier, et
+        Odoo n'a pas de corbeille d'où le rattraper."""
+        odoo = odoo_ready(owner_id)
+        if db.recovered_sources("odoo").get(str(attachment_id)):
+            raise HTTPException(status.HTTP_409_CONFLICT, "Ce fichier a déjà été récupéré.")
+        try:
+            stockage = storage()
+        except StockageIndisponible as exc:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+        piece = odoo_piece(odoo, attachment_id)
+        fichier = odoo_file(piece, config.odoo_url)
+        if fichier["checksum"] and db.recovered_checksums().get(fichier["checksum"]):
+            raise HTTPException(status.HTTP_409_CONFLICT, "Le même contenu a déjà été récupéré.")
+        cle = same_file_key(fichier["name"], fichier["size"])
+        if cle and cle in recovered_by_name(db.recovered_sources("odoo")):
+            raise HTTPException(status.HTTP_409_CONFLICT, "Le même fichier a déjà été récupéré.")
+
+        date, _ = recording_date(fichier)
+        job_id = db.create_job(
+            owner_id=owner_id, filename=fichier["name"] or f"odoo-{attachment_id}",
+            duration_seconds=0, model="", language="fr",
+            context={"recovered_from": "odoo"}, chunks=[],
+        )
+        try:
+            send_bytes(stockage, job_id, piece)
+        except HTTPException:
+            db.supprimer_job(job_id)
+            raise
+        db.set_meeting_date(job_id, date or None)
+        db.set_job_status(job_id, "recovered")
+        fiche = odoo_record(piece)
+        if fiche:
+            db.set_odoo_link(job_id, model=fiche[0], record_id=fiche[1], message_id=None)
+        db.record_recovered(
+            source="odoo", external_id=str(attachment_id), checksum=fichier["checksum"],
+            size_bytes=len(piece["bytes"]), name=fichier["name"], job_id=job_id, user_id=owner_id,
+        )
+        return {"job_id": job_id, "original": "left_in_odoo", "linked": bool(fiche), "recorded_at": date}
+
+    @app.post("/api/recovery/odoo/{attachment_id}/attach")
+    def odoo_attach(attachment_id: int, payload: DriveAttach, owner_id: int = Depends(human_user)) -> dict:
+        """Range une pièce jointe avec la réunion déjà transcrite qu'elle
+        enregistre. La réunion gagne l'enregistrement si elle n'en avait
+        pas, et la fiche si elle n'était liée à aucune."""
+        odoo = odoo_ready(owner_id)
+        if db.recovered_sources("odoo").get(str(attachment_id)):
+            raise HTTPException(status.HTTP_409_CONFLICT, "Ce fichier a déjà été récupéré.")
+        job = db.get_job(payload.job_id)
+        if not job or job["owner_id"] != owner_id or job["deleted_at"]:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Réunion introuvable.")
+        if job["video_file_id"]:
+            piece = odoo_piece_meta(odoo, attachment_id)
+            video = "kept"
+        else:
+            try:
+                stockage = storage()
+            except StockageIndisponible as exc:
+                raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+            piece = odoo_piece(odoo, attachment_id)
+            send_bytes(stockage, job["id"], piece)
+            video = "attached"
+        fichier = odoo_file(piece, config.odoo_url)
+        date, depuis_le_nom = recording_date(fichier)
+        if depuis_le_nom and not job["meeting_date"]:
+            db.set_meeting_date(job["id"], date)
+        fiche = odoo_record(piece)
+        if fiche and not job["odoo_model"]:
+            db.set_odoo_link(job["id"], model=fiche[0], record_id=fiche[1], message_id=None)
+        db.record_recovered(
+            source="odoo", external_id=str(attachment_id), checksum=fichier["checksum"],
+            size_bytes=int(fichier["size"] or 0), name=fichier["name"], job_id=job["id"], user_id=owner_id,
+        )
+        return {"job_id": job["id"], "video": video, "original": "left_in_odoo"}
+
+    def odoo_piece_meta(odoo: OdooGateway, attachment_id: int) -> dict[str, Any]:
+        try:
+            return odoo.attachment(attachment_id)
+        except OdooUnavailable as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+
+    def send_bytes(stockage, job_id: int, piece: dict[str, Any]) -> None:
+        """Envoie au stockage un enregistrement déjà en mémoire, par
+        morceaux, et le donne pour vidéo à la réunion."""
+        octets: bytes = piece["bytes"]
+        if not octets:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Odoo a rendu une pièce jointe vide.")
+        extension = PurePosixPath(str(piece.get("name") or "")).suffix or ""
+        try:
+            session = stockage.ouvrir_envoi(
+                f"transcript-{job_id}{extension}", len(octets), piece.get("mimetype") or "application/octet-stream",
+            )
+            fichier_id = None
+            for debut in range(0, len(octets), MORCEAU):
+                fichier_id = stockage.envoyer_morceau(session, debut, octets[debut:debut + MORCEAU], len(octets))
+        except StockageIndisponible as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Copie impossible : {exc}") from exc
+        if not fichier_id:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Copie impossible : l'envoi n'a pas abouti.")
+        db.ouvrir_envoi_video(job_id, "", len(octets))
+        db.terminer_envoi_video(job_id, fichier_id)

@@ -68,7 +68,7 @@ export default function App() {
         ) : vue === 'compte' ? (
           <Compte />
         ) : vue === 'recuperation' ? (
-          <Recovery connection={connexionGoogle} onOpen={ouvrir} />
+          <Recovery connection={connexionGoogle} onOpen={ouvrir} onAccount={() => setVue('compte')} />
         ) : vue === 'nouveau' ? (
           <Nouveau
             surTermine={(id) => { setVue('bibliotheque'); ouvrir(id); }}
