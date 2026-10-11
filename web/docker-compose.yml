@@ -4,7 +4,7 @@
 # accès broker, même application Cloudflare Access, même plafond mémoire.
 services:
   transcript:
-    image: registry.robin-joseph.fr/transcript:preprod
+    image: registre.ekonum.fr/transcript:latest
     container_name: transcript
     restart: unless-stopped
     pull_policy: always

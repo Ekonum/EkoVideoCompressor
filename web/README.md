@@ -254,7 +254,7 @@ renvoie 404, pas 403, qui révélerait son existence).
 ## Mise en production
 
 ```bash
-docker build --platform linux/amd64 -f web/Dockerfile -t registry.robin-joseph.fr/transcript:latest .
+docker build --platform linux/amd64 -f web/Dockerfile -t registre.ekonum.fr/transcript:latest .
 ```
 
 Image de **65 Mo** : Vite construit le client dans une première étape, et
