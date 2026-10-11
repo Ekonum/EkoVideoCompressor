@@ -9,7 +9,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
  *  chargement.
  */
 export const EknAudio = forwardRef(function EknAudio(
-  { src, trim = false, start, end, label, autoPlay = false, onTrim, onTime, onUnreadable, className = '', inert },
+  { src, trim = false, start, end, duration, label, autoPlay = false, onTrim, onTime, onUnreadable, className = '', inert },
   ref,
 ) {
   const hote = useRef(null);
@@ -28,6 +28,9 @@ export const EknAudio = forwardRef(function EknAudio(
     if (label) el.setAttribute('label', label);
     if (start != null) el.setAttribute('start', String(start));
     if (end != null) el.setAttribute('end', String(end));
+    // Rogner reste possible quand le navigateur ne lit pas le média : la
+    // durée sondée par Mediabunny tient lieu de la sienne.
+    if (duration) el.setAttribute('duration', String(duration));
     const media = document.createElement('video');
     media.preload = 'metadata';
     media.playsInline = true;
@@ -50,7 +53,7 @@ export const EknAudio = forwardRef(function EknAudio(
     };
     // start / end ne valent qu'au chargement : les suivre recréerait le
     // lecteur à chaque poignée déplacée.
-  }, [src, trim, label, autoPlay]);
+  }, [src, trim, duration, label, autoPlay]);
 
   return <div ref={hote} className={className} inert={inert} />;
 });

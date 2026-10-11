@@ -414,8 +414,8 @@ export function Nouveau({ surTermine, surBibliotheque }) {
           {lecture ? <p className="mt-2 text-ekn-sm text-ekn-text/60">{lecture}</p> : null}
           {fichier ? (
             <div className="mt-3 flex flex-wrap items-center gap-3 text-ekn-sm">
-              <span className="text-ekn-text/70">Date de la réunion</span>
-              <DateHeure valeur={dateReunion} surChange={setDateReunion} disabled={enCours} />
+              <label htmlFor="date-reunion" className="text-ekn-text/70">Date de la réunion</label>
+              <DateHeure id="date-reunion" valeur={dateReunion} surChange={setDateReunion} disabled={enCours} />
               <span className="text-ekn-sm text-ekn-text-muted">
                 {fichier.remote
                   ? 'celle de la réunion récupérée'
