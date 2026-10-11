@@ -86,6 +86,10 @@ export const api = {
   odooImport: (attachmentId) => call('POST', `/api/recovery/odoo/${encodeURIComponent(attachmentId)}`, {}),
   odooAttach: (attachmentId, jobId) =>
     call('POST', `/api/recovery/odoo/${encodeURIComponent(attachmentId)}/attach`, { job_id: jobId }),
+  odooNotes: () => call('GET', '/api/recovery/odoo-notes'),
+  odooNoteImport: (messageId) => call('POST', `/api/recovery/odoo-notes/${encodeURIComponent(messageId)}`, {}),
+  odooNoteAttach: (messageId, jobId) =>
+    call('POST', `/api/recovery/odoo-notes/${encodeURIComponent(messageId)}/attach`, { job_id: jobId }),
   odooMeetings: () => call('GET', '/api/odoo/meetings'),
   odooContext: (model, id) =>
     call('GET', `/api/odoo/context?model=${encodeURIComponent(model)}&record_id=${id}`),

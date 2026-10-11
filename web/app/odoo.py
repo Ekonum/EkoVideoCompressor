@@ -311,6 +311,40 @@ class OdooGateway:
             piece["bytes"] = base64.b64decode(piece.pop("raw") or "")
         return piece
 
+    # Ce qu'une note dit d'elle-même dans l'inventaire.
+    NOTE = ["model", "res_id", "record_name", "date", "author_id", "body"]
+
+    def transcript_notes(self, limit: int = 1000) -> list[dict[str, Any]]:
+        """Les notes qui portent une transcription collée — l'accordéon
+        « cliquer pour dérouler » —, sur les fiches que cette personne
+        voit. Les discussions n'en sont pas : une réunion récupérée se
+        rattache à un dossier."""
+        from odoo_client import _json2_call
+
+        try:
+            return _json2_call(
+                self._config(), "mail.message", "search_read",
+                {"domain": [["body", "ilike", "cliquer pour dérouler"], ["model", "in", list(self.MODELES)]],
+                 "fields": self.NOTE, "limit": limit, "order": "date desc"},
+            ) or []
+        except OdooError as exc:
+            raise OdooUnavailable(_lisible(exc, self._database)) from exc
+
+    def transcript_note(self, message_id: int) -> dict[str, Any]:
+        from odoo_client import _json2_call
+
+        try:
+            lignes = _json2_call(
+                self._config(), "mail.message", "search_read",
+                {"domain": [["id", "=", int(message_id)], ["model", "in", list(self.MODELES)]],
+                 "fields": self.NOTE, "limit": 1},
+            )
+        except OdooError as exc:
+            raise OdooUnavailable(_lisible(exc, self._database)) from exc
+        if not lignes:
+            raise OdooUnavailable("Note introuvable dans Odoo.")
+        return dict(lignes[0])
+
     def chatter(self):
         """Client d'écriture dans le chatter, sous la même identité."""
         from .chatter import OdooChatter
