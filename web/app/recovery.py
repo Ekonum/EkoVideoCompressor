@@ -29,6 +29,7 @@ import secrets
 import time
 import unicodedata
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from pathlib import PurePosixPath
 from typing import Any, Callable
 
@@ -49,6 +50,8 @@ from .odoo import OdooGateway, OdooUnavailable
 from .stockage import MORCEAU, StockageIndisponible
 
 log = logging.getLogger("ekovideo.web")
+
+PARIS = ZoneInfo("Europe/Paris")
 
 # Ce qui, dans un nom de fichier, désigne presque sûrement autre chose
 # qu'une réunion. La liste reste courte : dans le doute, on propose, et la
@@ -167,7 +170,8 @@ def recording_date(file: dict[str, Any]) -> tuple[str, bool]:
         except ValueError:
             pass
     if reference:
-        return reference.astimezone().replace(tzinfo=None).isoformat(timespec="minutes"), False
+        # Heure de Paris, pas celle du serveur : le conteneur vit en UTC.
+        return reference.astimezone(PARIS).replace(tzinfo=None).isoformat(timespec="minutes"), False
     return "", False
 
 

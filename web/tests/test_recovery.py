@@ -447,7 +447,7 @@ class OdooRecoveryTestCase(unittest.TestCase):
         items = self._items()
         self.assertEqual(items["11"]["kind"], "meeting")
         self.assertEqual(items["11"]["location"], {"kind": "odoo", "name": "opportunité · Mairie de Cambon"})
-        self.assertEqual(items["11"]["recorded_at"], "2026-09-21T18:34", "Odoo date en UTC")
+        self.assertEqual(items["11"]["recorded_at"], "2026-09-21T18:34", "Odoo date en UTC, on lit l'heure de Paris")
         self.assertEqual(items["11"]["web_link"], "https://ekonum.odoo.com/odoo/crm.lead/640")
         self.assertEqual(items["12"]["kind"], "other")
         self.assertEqual(items["12"]["location"]["name"], "discussion · Robin, Izaak")
