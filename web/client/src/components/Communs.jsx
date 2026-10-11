@@ -131,7 +131,7 @@ export function DateHeure({ valeur, surChange, disabled = false }) {
         const n = Math.min(Math.max(parseInt(e.target.value || '0', 10), 0), max);
         changer({ [cle]: n });
       }}
-      className="w-14 rounded-md border border-bord bg-white px-2 py-1 text-center tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
+      className="w-14 rounded-md border border-bord bg-ekn-field px-2 py-1 text-center tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
     />
   );
 
@@ -144,7 +144,7 @@ export function DateHeure({ valeur, surChange, disabled = false }) {
           setMois(new Date(date.getFullYear(), date.getMonth(), 1));
           setOuvert((o) => !o);
         }}
-        className="rounded-md border border-bord bg-white px-3 py-1.5 text-left text-ekn-sm hover:border-fonce/40 disabled:opacity-50"
+        className="rounded-md border border-bord bg-ekn-field px-3 py-1.5 text-left text-ekn-sm hover:border-ekn-text/40 disabled:opacity-50"
       >
         {lireLocal(valeur)
           ? date.toLocaleString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
@@ -152,17 +152,17 @@ export function DateHeure({ valeur, surChange, disabled = false }) {
           : 'Choisir une date'}
       </button>
       {ouvert ? (
-        <div className="absolute left-0 z-30 mt-2 w-72 rounded-xl border border-bord bg-white p-3 shadow-lg">
+        <div className="absolute left-0 z-30 mt-2 w-72 rounded-xl border border-bord bg-carte p-3 shadow-lg">
           <div className="flex items-center justify-between">
             <button type="button" aria-label="Mois précédent"
                     onClick={() => setMois(new Date(mois.getFullYear(), mois.getMonth() - 1, 1))}
-                    className="rounded px-2 py-1 text-fonce/60 hover:bg-papier">‹</button>
+                    className="rounded px-2 py-1 text-ekn-text/60 hover:bg-papier">‹</button>
             <span className="titre text-ekn-sm font-medium">
               {MOIS[mois.getMonth()]} {mois.getFullYear()}
             </span>
             <button type="button" aria-label="Mois suivant"
                     onClick={() => setMois(new Date(mois.getFullYear(), mois.getMonth() + 1, 1))}
-                    className="rounded px-2 py-1 text-fonce/60 hover:bg-papier">›</button>
+                    className="rounded px-2 py-1 text-ekn-text/60 hover:bg-papier">›</button>
           </div>
           <div className="mt-2 grid grid-cols-7 gap-1 text-center text-ekn-xs text-ekn-text-muted">
             {JOURS.map((j, i) => <span key={i}>{j}</span>)}
@@ -174,7 +174,7 @@ export function DateHeure({ valeur, surChange, disabled = false }) {
                 type="button"
                 onClick={() => changer({ jour: new Date(mois.getFullYear(), mois.getMonth(), j) })}
                 className={`rounded-md py-1 text-ekn-sm tabular-nums ${
-                  memeJour(j) ? 'bg-fonce text-clair' : 'hover:bg-turquoise/15'
+                  memeJour(j) ? 'bg-ekn-action text-ekn-on-action' : 'hover:bg-turquoise/15'
                 }`}
               >
                 {j}
@@ -182,7 +182,7 @@ export function DateHeure({ valeur, surChange, disabled = false }) {
             ) : <span key={i} />))}
           </div>
           <div className="mt-3 flex items-center justify-between border-t border-bord pt-3 text-ekn-sm">
-            <span className="text-fonce/60">Heure</span>
+            <span className="text-ekn-text/60">Heure</span>
             <span className="flex items-center gap-1">
               {champHeure(date.getHours(), 23, 'heure')}
               <span className="text-ekn-text-muted">:</span>

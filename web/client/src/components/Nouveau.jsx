@@ -244,7 +244,7 @@ export function Nouveau({ surTermine, surBibliotheque }) {
     return (
       <section className="mx-auto max-w-2xl px-6 py-16">
         <h1 className="titre text-[1.5rem] font-semibold">Navigateur non supporté</h1>
-        <p className="mt-3 text-fonce/70">
+        <p className="mt-3 text-ekn-text/70">
           Le découpage se fait sur ton poste, ce qui demande WebCodecs et une
           connexion sécurisée. Chrome, Edge ou Safari 26 et plus conviennent.
         </p>
@@ -322,7 +322,7 @@ export function Nouveau({ surTermine, surBibliotheque }) {
   return (
     <section className="mx-auto max-w-3xl px-6 py-10">
       <h1 className="titre text-[1.5rem] font-semibold">Nouvelle transcription</h1>
-      <p className="mt-2 max-w-xl text-fonce/70">
+      <p className="mt-2 max-w-xl text-ekn-text/70">
         Le découpage et l'encodage se font sur ce poste. Seules des fenêtres
         audio de quelques mégaoctets partent au serveur — ta vidéo, elle, ne
         quitte pas ta machine.
@@ -359,15 +359,15 @@ export function Nouveau({ surTermine, surBibliotheque }) {
             <label
               htmlFor="champ-fichier"
               className={`verre flex items-center gap-4 rounded-xl border-dashed px-4 py-5 transition-opacity ${
-                enCours ? 'cursor-not-allowed' : 'cursor-pointer hover:bg-white/50'
+                enCours ? 'cursor-not-allowed' : 'cursor-pointer hover:bg-voile/50'
               } ${glisse ? 'opacity-0' : ''}`}
             >
               <span className={`shrink-0 rounded-md px-3 py-1.5 text-ekn-sm ${
-                enCours ? 'bg-fonce/30 text-clair' : 'bg-fonce text-clair'
+                enCours ? 'bg-ekn-action/30 text-ekn-on-action' : 'bg-ekn-action text-ekn-on-action'
               }`}>
                 Choisir des fichiers
               </span>
-              <span className="min-w-0 truncate text-[0.9375rem] text-fonce/65">
+              <span className="min-w-0 truncate text-[0.9375rem] text-ekn-text/65">
                 {fichier ? fichier.name : 'ou glisse un ou plusieurs enregistrements ici'}
               </span>
             </label>
@@ -375,8 +375,8 @@ export function Nouveau({ surTermine, surBibliotheque }) {
               <div
                 className={`pointer-events-none absolute inset-0 flex flex-col items-center justify-center rounded-xl border-2 border-dashed transition-all ${
                   surZone
-                    ? 'scale-[1.02] border-turquoise-sombre bg-turquoise/25 text-fonce shadow-lg'
-                    : 'border-turquoise bg-turquoise/10 text-fonce/75'
+                    ? 'scale-[1.02] border-turquoise-sombre bg-turquoise/25 text-ekn-text shadow-lg'
+                    : 'border-turquoise bg-turquoise/10 text-ekn-text/75'
                 }`}
               >
                 <span className="titre text-[0.9375rem] font-medium">
@@ -397,13 +397,13 @@ export function Nouveau({ surTermine, surBibliotheque }) {
             <div className="mt-2 flex flex-wrap items-center gap-1.5 text-ekn-sm">
               <span className="text-ekn-text-muted">Ensuite :</span>
               {enAttente.map((entree) => (
-                <span key={entree.id} className="inline-flex items-center gap-1 rounded-full bg-white/70 px-2.5 py-0.5 text-fonce/75 ring-1 ring-bord">
+                <span key={entree.id} className="inline-flex items-center gap-1 rounded-full bg-voile/70 px-2.5 py-0.5 text-ekn-text/75 ring-1 ring-bord">
                   {entree.file.name}
                   <button
                     type="button"
                     onClick={() => removeFromQueue(entree.id)}
                     aria-label={`Retirer ${entree.file.name} de la file`}
-                    className="text-ekn-text-muted hover:text-fonce"
+                    className="text-ekn-text-muted hover:text-ekn-text"
                   >
                     ×
                   </button>
@@ -411,10 +411,10 @@ export function Nouveau({ surTermine, surBibliotheque }) {
               ))}
             </div>
           ) : null}
-          {lecture ? <p className="mt-2 text-ekn-sm text-fonce/60">{lecture}</p> : null}
+          {lecture ? <p className="mt-2 text-ekn-sm text-ekn-text/60">{lecture}</p> : null}
           {fichier ? (
             <div className="mt-3 flex flex-wrap items-center gap-3 text-ekn-sm">
-              <span className="text-fonce/70">Date de la réunion</span>
+              <span className="text-ekn-text/70">Date de la réunion</span>
               <DateHeure valeur={dateReunion} surChange={setDateReunion} disabled={enCours} />
               <span className="text-ekn-sm text-ekn-text-muted">
                 {fichier.remote
@@ -451,8 +451,8 @@ export function Nouveau({ surTermine, surBibliotheque }) {
                 aria-pressed={mode === cle}
                 className={`titre rounded-lg px-3 py-1.5 text-[0.9375rem] font-medium transition-colors ${
                   mode === cle
-                    ? 'bg-fonce text-clair'
-                    : 'border border-bord bg-white hover:border-fonce/40'
+                    ? 'bg-ekn-action text-ekn-on-action'
+                    : 'border border-bord bg-ekn-field hover:border-ekn-text/40'
                 }`}
               >
                 {libelle}
@@ -487,7 +487,7 @@ export function Nouveau({ surTermine, surBibliotheque }) {
 
         <div className={mode === 'compresser' ? 'hidden' : undefined}>
           <h2 className="titre text-[1.0625rem] font-medium">3. Le contexte</h2>
-          <p className="mt-1 text-ekn-sm text-fonce/60">
+          <p className="mt-1 text-ekn-sm text-ekn-text/60">
             Facultatif, mais c'est ce qui fait la différence entre « Réunion du
             3 juillet » et un titre utile.
           </p>
@@ -564,7 +564,7 @@ export function Nouveau({ surTermine, surBibliotheque }) {
         </div>
 
         {dossier && mode !== 'compresser' ? (
-          <div className="rounded-xl border border-turquoise/40 bg-white/80 px-4 py-3">
+          <div className="rounded-xl border border-turquoise/40 bg-voile/80 px-4 py-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-ekn-sm">
                 <span className="text-ekn-text-muted">Dossier Odoo : </span>
@@ -575,12 +575,12 @@ export function Nouveau({ surTermine, surBibliotheque }) {
                 type="button"
                 disabled={enCours}
                 onClick={retirer}
-                className="text-ekn-sm text-ekn-text-muted hover:text-fonce"
+                className="text-ekn-sm text-ekn-text-muted hover:text-ekn-text"
               >
                 retirer
               </button>
             </div>
-            <label className="mt-2 flex items-center gap-2 text-ekn-sm text-fonce/80">
+            <label className="mt-2 flex items-center gap-2 text-ekn-sm text-ekn-text/80">
               <input
                 type="checkbox"
                 checked={Boolean(dossier.auto)}
@@ -650,7 +650,7 @@ export function Nouveau({ surTermine, surBibliotheque }) {
                   : 'Lancer la transcription'}
           </Bouton>
           {pipeline.estimation !== null ? (
-            <span className="text-ekn-sm text-fonce/60">
+            <span className="text-ekn-sm text-ekn-text/60">
               Coût estimé {usd(pipeline.estimation)}
             </span>
           ) : null}
@@ -681,7 +681,7 @@ export function Nouveau({ surTermine, surBibliotheque }) {
 
         {pipeline.etat === 'traitement' || pipeline.etat === 'interrompu' ? (
           <div className="verre rounded-xl p-4">
-            <p className="text-ekn-sm text-fonce/75">
+            <p className="text-ekn-sm text-ekn-text/75">
               {pipeline.etat === 'interrompu'
                 ? 'Transcription interrompue. La réunion est dans la corbeille, si tu veux la récupérer.'
                 : pipeline.envoiTermine
@@ -761,18 +761,18 @@ function Avancement({ numero, fenetres, message }) {
         {/* Le contexte est masqué en simple compression : la numérotation suit
             ce qui est affiché, sans doublon ni trou. */}
         <h2 className="titre text-[1.0625rem] font-medium">{numero}. Avancement</h2>
-        <span className="text-ekn-sm text-fonce/60">
+        <span className="text-ekn-sm text-ekn-text/60">
           {finies} / {fenetres.length} fenêtres
         </span>
       </div>
 
-      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-fonce/10">
+      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-ekn-text/10">
         <div
           className="h-full rounded-full bg-turquoise transition-[width] duration-500"
           style={{ width: `${(finies / fenetres.length) * 100}%` }}
         />
       </div>
-      {message ? <p className="mt-2 text-ekn-sm text-fonce/60">{message}</p> : null}
+      {message ? <p className="mt-2 text-ekn-sm text-ekn-text/60">{message}</p> : null}
 
       <ul className="verre mt-4 divide-y divide-bord/60 rounded-xl">
         {fenetres.map((f) => (
@@ -780,7 +780,7 @@ function Avancement({ numero, fenetres, message }) {
             <span className="w-16 shrink-0 text-ekn-sm tabular-nums text-ekn-text-muted">
               {horodatage(f.start)}
             </span>
-            <span className={`flex-1 text-[0.9375rem] ${f.etat === 'erreur' ? 'text-ekn-error-dark' : ''}`}>
+            <span className={`flex-1 text-[0.9375rem] ${f.etat === 'erreur' ? 'text-ekn-tone-error' : ''}`}>
               {f.etat === 'erreur' ? f.erreur : LIBELLES[f.etat]}
               {f.etat === 'encodage' && f.progression
                 ? ` ${Math.round(f.progression * 100)} %`
@@ -825,7 +825,7 @@ function Suggestions({ choisis, surAjout }) {
           key={t.term}
           type="button"
           onClick={() => surAjout(t.term)}
-          className="rounded-md border border-bord bg-white px-2 py-0.5 text-ekn-sm hover:border-ekn-border-control"
+          className="rounded-md border border-bord bg-ekn-field px-2 py-0.5 text-ekn-sm hover:border-ekn-border-control"
         >
           {t.term}
         </button>
@@ -919,7 +919,7 @@ export function AvancementArchivage({ tache }) {
   }[tache.etape] || 'Archivage';
   return (
     <div className="mt-2">
-      <p className="text-ekn-sm text-fonce/70">
+      <p className="text-ekn-sm text-ekn-text/70">
         {libelle}
         {tache.etape === 'compression' || tache.etape === 'envoi'
           ? ` — ${Math.round((tache.progression || 0) * 100)} %. Tu peux continuer à travailler, mais garde cet onglet ouvert.`
@@ -933,8 +933,8 @@ export function AvancementArchivage({ tache }) {
           />
         </div>
       ) : null}
-      {tache.note ? <p className="mt-1 text-ekn-sm text-fonce/60">{tache.note}</p> : null}
-      {tache.erreur ? <p className="mt-1 text-ekn-sm text-violet">{tache.erreur}</p> : null}
+      {tache.note ? <p className="mt-1 text-ekn-sm text-ekn-text/60">{tache.note}</p> : null}
+      {tache.erreur ? <p className="mt-1 text-ekn-sm text-lien">{tache.erreur}</p> : null}
     </div>
   );
 }
@@ -961,13 +961,13 @@ function Compression({ compression }) {
         </p>
       ) : (
         <>
-          <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-fonce/10">
+          <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-ekn-text/10">
             <div
               className="h-full rounded-full bg-turquoise transition-[width] duration-500"
               style={{ width: `${compression.progression * 100}%` }}
             />
           </div>
-          <p className="mt-2 text-ekn-sm text-fonce/60">
+          <p className="mt-2 text-ekn-sm text-ekn-text/60">
             Encodage sur ce poste — {Math.round(compression.progression * 100)} %.
             Garde cet onglet ouvert.
           </p>
