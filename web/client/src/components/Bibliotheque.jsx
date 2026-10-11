@@ -16,6 +16,15 @@ import {
  *  encadrer une à une ajouterait des contenants sans rien clarifier.
  */
 const PAR_PAGE = 50;
+// Le filtre « Afficher » : les états qu'on cherche vraiment. Les
+// réunions récupérées sans transcription sont les plus nombreuses à
+// retraiter, d'où leur place.
+const STATUTS = {
+  '': 'Toutes',
+  recovered: 'Récupérées',
+  termine: 'Terminées',
+  erreur: 'En erreur',
+};
 const COLONNES_SERVEUR = {
   quand: 'date', title: 'title', duration_seconds: 'duration', status: 'status', cost_usd: 'cost',
 };
@@ -27,6 +36,7 @@ export function Bibliotheque({ surOuvrir, surLancer, surVue }) {
   const [recherche, setRecherche] = useState('');
   const [resultats, setResultats] = useState(null);
   const [etat, setEtat] = useState('actif');
+  const [statut, setStatut] = useState('');
   const [retention, setRetention] = useState(30);
   const champRecherche = useRef(null);
 
@@ -45,12 +55,14 @@ export function Bibliotheque({ surOuvrir, surLancer, surVue }) {
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const recharger = useCallback(() => {
-    api.listJobs(etat, { sort: COLONNES_SERVEUR[tri.champ] || 'date', order: tri.sens, page, perPage: PAR_PAGE })
+    api.listJobs(etat, {
+      sort: COLONNES_SERVEUR[tri.champ] || 'date', order: tri.sens, page, perPage: PAR_PAGE, status: statut,
+    })
       .then(({ items, total: n }) => { setJobs(items); setTotal(n); })
       .catch((e) => setErreur(e.message));
-  }, [etat, tri, page]);
+  }, [etat, statut, tri, page]);
 
-  useEffect(() => { setPage(1); }, [etat, tri]);
+  useEffect(() => { setPage(1); }, [etat, statut, tri]);
   useEffect(() => { setJobs(null); recharger(); }, [recharger]);
 
   // Tant qu'une réunion tourne, la liste se rafraîchit seule : on doit
@@ -80,7 +92,7 @@ export function Bibliotheque({ surOuvrir, surLancer, surVue }) {
     return () => clearTimeout(attente);
   }, [recherche]);
 
-  useEffect(() => { vider(); }, [etat]);
+  useEffect(() => { vider(); }, [etat, statut]);
   // Une réunion sortie de la liste (jetée, archivée) sort de la sélection.
   useEffect(() => {
     if (!jobs) return;
@@ -154,7 +166,9 @@ export function Bibliotheque({ surOuvrir, surLancer, surVue }) {
     <section className="mx-auto max-w-6xl px-6 py-10">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <h1 className="titre text-[1.5rem] font-semibold">Bibliothèque</h1>
-        <div className="w-full sm:w-80">
+        {/* La barre de filtres d'ekonum-ui : « Récupérées » y resserre la
+            liste sans en faire une couleur ni un onglet de plus. */}
+        <div className="ekn-filters w-full sm:w-[32rem]">
           <Champ
             ref={champRecherche}
             label="Rechercher dans les transcriptions"
@@ -162,10 +176,18 @@ export function Bibliotheque({ surOuvrir, surLancer, surVue }) {
             value={recherche}
             onChange={(e) => setRecherche(e.target.value)}
           />
+          <label className="ekn-label sm:max-w-44">
+            Afficher
+            <select className="ekn-input" value={statut} onChange={(e) => setStatut(e.target.value)}>
+              {Object.entries(STATUTS).map(([cle, libelle]) => (
+                <option key={cle} value={cle}>{libelle}</option>
+              ))}
+            </select>
+          </label>
         </div>
       </div>
 
-      <div className="mt-4 flex gap-1 text-ekn-sm">
+      <nav className="ekn-tabs mt-4" aria-label="Rangement">
         {[
           ['actif', 'Bibliothèque'],
           ['archive', 'Archives'],
@@ -175,14 +197,12 @@ export function Bibliotheque({ surOuvrir, surLancer, surVue }) {
             key={cle}
             type="button"
             onClick={() => setEtat(cle)}
-            className={`rounded-md px-3 py-1.5 transition-colors ${
-              etat === cle ? 'bg-voile/60 font-medium' : 'text-ekn-text-muted hover:bg-voile/35'
-            }`}
+            aria-current={etat === cle ? 'page' : undefined}
           >
             {libelle}
           </button>
         ))}
-      </div>
+      </nav>
       {etat === 'corbeille' ? (
         <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
           <p className="text-ekn-sm text-ekn-text-muted">
@@ -221,7 +241,12 @@ export function Bibliotheque({ surOuvrir, surLancer, surVue }) {
       ) : jobs === null ? (
         <p className="py-16 text-center text-ekn-text-muted">Chargement…</p>
       ) : jobs.length === 0 ? (
-        etat === 'corbeille' ? (
+        statut ? (
+          <Vide titre="Rien à afficher">
+            Aucune réunion ne correspond à ce filtre. « Afficher : Toutes »
+            ramène la liste entière.
+          </Vide>
+        ) : etat === 'corbeille' ? (
           <Vide titre="Corbeille vide">Rien à récupérer.</Vide>
         ) : etat === 'archive' ? (
           <Vide titre="Aucune archive">

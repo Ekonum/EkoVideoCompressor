@@ -725,7 +725,7 @@ export function Nouveau({ surTermine, surBibliotheque }) {
                       + 'et la réunion part à la corbeille.',
                     )) interrompre(pipeline.cle);
                   }}
-                  className="ekn-button ekn-button--danger ml-auto"
+                  className="ekn-button ekn-button--subtle ml-auto"
                 >
                   Interrompre
                 </button>

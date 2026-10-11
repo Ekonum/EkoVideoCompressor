@@ -1036,6 +1036,7 @@ def create_app(
         order: str = "desc",
         page: int = 1,
         per_page: int = 100,
+        status: str | None = None,
         owner_id: int = Depends(current_user),
     ) -> list[dict]:
         """Une page de la bibliothèque. La réponse reste une liste — les
@@ -1053,7 +1054,7 @@ def create_app(
                     log.info("corbeille : réunion %s purgée", perime)
                 except StockageIndisponible as exc:
                     log.warning("corbeille : réunion %s gardée : %s", perime, exc)
-        response.headers["X-Total-Count"] = str(db.count_jobs(owner_id, etat))
+        response.headers["X-Total-Count"] = str(db.count_jobs(owner_id, etat, status))
         return [
             {
                 "job_id": job["id"],
@@ -1079,7 +1080,7 @@ def create_app(
             }
             for job in db.list_jobs(
                 owner_id, limit=per_page, etat=etat, sort=sort,
-                descending=order != "asc", offset=(page - 1) * per_page,
+                descending=order != "asc", offset=(page - 1) * per_page, status=status,
             )
         ]
 

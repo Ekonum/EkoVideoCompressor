@@ -496,6 +496,7 @@ class Database:
         sort: str = "date",
         descending: bool = True,
         offset: int = 0,
+        status: str | None = None,
     ) -> list[dict[str, Any]]:
         """Une page de la bibliothèque, triée par le serveur.
 
@@ -503,23 +504,32 @@ class Database:
         rendait que les 100 dernières réunions *créées*, et cent fichiers
         récupérés d'un coup suffisaient à faire disparaître tout le reste.
         """
-        filtre = self.ETATS.get(etat, self.ETATS["actif"])
+        filtre, valeurs = self._filtre(owner_id, etat, status)
         ordre = self.SORTS.get(sort, self.SORTS["date"])
         sens = "DESC" if descending else "ASC"
         with self.connect() as conn:
             rows = conn.execute(
-                f"SELECT * FROM jobs WHERE owner_id = ? AND {filtre} "
+                f"SELECT * FROM jobs WHERE {filtre} "
                 f"ORDER BY {ordre} {sens}, id {sens} LIMIT ? OFFSET ?",
-                (owner_id, limit, max(0, offset)),
+                (*valeurs, limit, max(0, offset)),
             ).fetchall()
             return [dict(r) for r in rows]
 
-    def count_jobs(self, owner_id: int, etat: str = "actif") -> int:
-        filtre = self.ETATS.get(etat, self.ETATS["actif"])
+    def count_jobs(self, owner_id: int, etat: str = "actif", status: str | None = None) -> int:
+        filtre, valeurs = self._filtre(owner_id, etat, status)
         with self.connect() as conn:
             return int(conn.execute(
-                f"SELECT COUNT(*) FROM jobs WHERE owner_id = ? AND {filtre}", (owner_id,)
+                f"SELECT COUNT(*) FROM jobs WHERE {filtre}", valeurs
             ).fetchone()[0])
+
+    def _filtre(self, owner_id: int, etat: str, status: str | None) -> tuple[str, tuple]:
+        """Le WHERE d'une page de la bibliothèque. Le statut, s'il y en a
+        un, resserre l'état : « Récupérées » se lit dans la bibliothèque,
+        pas à côté."""
+        filtre = f"owner_id = ? AND {self.ETATS.get(etat, self.ETATS['actif'])}"
+        if not status:
+            return filtre, (owner_id,)
+        return f"{filtre} AND status = ?", (owner_id, status)
 
     # -- corbeille et archives -------------------------------------------
 
