@@ -1122,6 +1122,19 @@ class Database:
                 (datetime.now().isoformat(timespec="seconds"), source, external_id),
             )
 
+    def unfinished_mac_job(self, owner_id: int, checksum: str) -> dict[str, Any] | None:
+        """La réunion créée pour un envoi depuis le Mac et restée sans
+        vidéo : onglet fermé, réseau perdu."""
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM jobs WHERE owner_id = ? AND deleted_at IS NULL "
+                "AND status = 'recovered' AND video_file_id IS NULL "
+                "AND json_extract(context_json, '$.recovered_from') = 'mac' "
+                "AND json_extract(context_json, '$.checksum') = ? ORDER BY id LIMIT 1",
+                (owner_id, checksum),
+            ).fetchone()
+        return dict(row) if row else None
+
     def library_fingerprints(self) -> list[dict[str, Any]]:
         """Nom de fichier, durée et date de toutes les réunions, tous comptes
         confondus : de quoi reconnaître un enregistrement déjà transcrit

@@ -90,6 +90,11 @@ export const api = {
   odooNoteImport: (messageId) => call('POST', `/api/recovery/odoo-notes/${encodeURIComponent(messageId)}`, {}),
   odooNoteAttach: (messageId, jobId) =>
     call('POST', `/api/recovery/odoo-notes/${encodeURIComponent(messageId)}/attach`, { job_id: jobId }),
+  macInventory: (files) => call('POST', '/api/recovery/mac', { files }),
+  macImport: (file) => call('POST', '/api/recovery/mac/import', { file }),
+  macAttach: (file, jobId) => call('POST', '/api/recovery/mac/attach', { file, job_id: jobId }),
+  macDone: (file, jobId) => call('POST', '/api/recovery/mac/done', { file, job_id: jobId }),
+  macAbandon: (file, jobId) => call('POST', '/api/recovery/mac/abandon', { file, job_id: jobId }),
   odooMeetings: () => call('GET', '/api/odoo/meetings'),
   odooContext: (model, id) =>
     call('GET', `/api/odoo/context?model=${encodeURIComponent(model)}&record_id=${id}`),

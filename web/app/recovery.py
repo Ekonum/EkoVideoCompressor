@@ -18,11 +18,14 @@ copies du même fichier n'en font qu'une.
 
 **L'original ne part qu'après une copie vérifiée**, et vers la corbeille
 du Drive : trente jours pour se raviser. La copie, elle, se fait chez
-Google — pas un octet ne passe par le serveur ni par le poste.
+Google — pas un octet ne passe par le serveur ni par le poste. Le Mac
+seul fait exception : ses fichiers n'existent que là, le navigateur les
+envoie, et l'original ne bouge pas.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import secrets
@@ -35,7 +38,7 @@ from typing import Any, Callable
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import RedirectResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .coffre import Coffre, CoffreIndisponible
 from .google_account import (
@@ -457,6 +460,51 @@ class DriveImport(BaseModel):
 class DriveAttach(BaseModel):
     job_id: int
     trash_original: bool = False
+
+
+class MacFile(BaseModel):
+    """Un fichier du Mac tel que le navigateur le décrit : il n'envoie
+    que ça pour l'inventaire, pas le fichier lui-même."""
+
+    id: str = Field(max_length=2000)  # chemin dans le dossier choisi
+    checksum: str = Field(pattern=r"^[0-9a-f]{64}$")
+    name: str = Field(max_length=500)
+    size: int = Field(gt=0)
+    modified: int = 0  # millisecondes depuis 1970
+    mime_type: str = Field(default="", max_length=200)
+
+
+class MacInventory(BaseModel):
+    files: list[MacFile] = Field(max_length=5000)
+
+
+class MacImport(BaseModel):
+    file: MacFile
+    job_id: int | None = None
+
+
+def mac_file(fichier: MacFile) -> dict[str, Any]:
+    """Un fichier du Mac, décrit comme un fichier du Drive : les règles de
+    date, de tri et de dédoublonnage sont les mêmes.
+
+    Le navigateur ne donne pas la date de création, seulement celle de
+    dernière modification : pour un enregistrement, c'est la fin de la
+    réunion. L'empreinte porte la taille et les deux bouts du fichier —
+    de quoi le reconnaître d'un poste à l'autre sans tout relire."""
+    dossier = str(PurePosixPath(fichier.id).parent)
+    modifie = (
+        datetime.fromtimestamp(fichier.modified / 1000, timezone.utc).isoformat()
+        if fichier.modified > 0 else ""
+    )
+    return {
+        "id": fichier.id,
+        "name": fichier.name,
+        "mimeType": fichier.mime_type,
+        "size": fichier.size,
+        "checksum": f"mac:{fichier.checksum}",
+        "createdTime": modifie,
+        "location": {"kind": "mac", "name": "" if dossier == "." else dossier},
+    }
 
 
 def register_recovery_routes(
@@ -1023,3 +1071,137 @@ def register_recovery_routes(
             size_bytes=len(note["text"].encode()), name=note["title"], job_id=job["id"], user_id=owner_id,
         )
         return {"job_id": job["id"], "video": "kept", "original": "left_in_odoo", "linked": relie}
+
+    # -- Le Mac -------------------------------------------------------------
+
+    def recovered_everywhere() -> dict[str, dict[str, Any]]:
+        """Tout ce qui a été récupéré, d'où que ce soit : la même réunion
+        a souvent été gardée sur le Mac et déposée dans le Drive."""
+        tout: dict[str, dict[str, Any]] = {}
+        for source in ("drive", "odoo"):
+            tout.update({f"{source}:{cle}": ligne for cle, ligne in db.recovered_sources(source).items()})
+        tout.update(db.recovered_sources("mac"))
+        return tout
+
+    def mac_conflict(fichier: dict[str, Any]) -> str | None:
+        if db.recovered_checksums().get(fichier["checksum"]):
+            return "Ce fichier a déjà été récupéré."
+        cle = same_file_key(fichier["name"], fichier["size"])
+        if cle and cle in recovered_by_name(recovered_everywhere()):
+            return "Le même fichier a déjà été récupéré."
+        return None
+
+    def mac_upload(job_id: int, fichier: dict[str, Any]) -> dict[str, Any]:
+        """Ouvre l'envoi de l'enregistrement : le navigateur envoie ensuite
+        ses morceaux par la route de la vidéo, comme pour une nouvelle
+        transcription."""
+        try:
+            stockage = storage()
+            extension = PurePosixPath(fichier["name"]).suffix or ""
+            session = stockage.ouvrir_envoi(
+                f"transcript-{job_id}{extension}", fichier["size"],
+                fichier["mimeType"] or "application/octet-stream",
+            )
+        except StockageIndisponible as exc:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+        db.ouvrir_envoi_video(job_id, session, fichier["size"])
+        return {"job_id": job_id, "upload": True, "morceau": MORCEAU}
+
+    @app.post("/api/recovery/mac")
+    def mac_inventory(payload: MacInventory, owner_id: int = Depends(human_user)) -> dict:
+        """L'inventaire d'un dossier du Mac : le navigateur l'a parcouru,
+        transcript dit ce qui est déjà là."""
+        require_enabled(owner_id)
+        items = build_inventory(
+            [mac_file(f) for f in payload.files],
+            user_id=owner_id,
+            shared_drives={},
+            recovered=recovered_everywhere(),
+            recovered_checksums=db.recovered_checksums(),
+            library=db.library_fingerprints(),
+            excluded_drives=set(),
+        )
+        return {"items": items}
+
+    @app.post("/api/recovery/mac/import")
+    def mac_import(payload: MacImport, owner_id: int = Depends(human_user)) -> dict:
+        """Prépare la récupération d'un fichier du Mac : la réunion, à la
+        date de l'enregistrement, et l'envoi de sa vidéo. Elle ne compte
+        comme récupérée qu'une fois l'envoi vérifié."""
+        require_enabled(owner_id)
+        fichier = mac_file(payload.file)
+        conflit = mac_conflict(fichier)
+        if conflit:
+            raise HTTPException(status.HTTP_409_CONFLICT, conflit)
+        date, _ = recording_date(fichier)
+        job = db.unfinished_mac_job(owner_id, fichier["checksum"])
+        if job:
+            job_id = int(job["id"])
+        else:
+            job_id = db.create_job(
+                owner_id=owner_id, filename=fichier["name"], duration_seconds=0, model="", language="fr",
+                context={"recovered_from": "mac", "checksum": fichier["checksum"]}, chunks=[],
+            )
+            db.set_meeting_date(job_id, date or None)
+            db.set_job_status(job_id, "recovered")
+        try:
+            return {**mac_upload(job_id, fichier), "recorded_at": date}
+        except HTTPException:
+            if not job:
+                db.supprimer_job(job_id)
+            raise
+
+    @app.post("/api/recovery/mac/attach")
+    def mac_attach(payload: MacImport, owner_id: int = Depends(human_user)) -> dict:
+        """Range un fichier du Mac avec la réunion déjà transcrite qu'il
+        enregistre : elle gagne sa vidéo si elle n'en avait pas, sinon le
+        fichier est seulement retenu comme récupéré."""
+        require_enabled(owner_id)
+        fichier = mac_file(payload.file)
+        conflit = mac_conflict(fichier)
+        if conflit:
+            raise HTTPException(status.HTTP_409_CONFLICT, conflit)
+        job = db.get_job(payload.job_id or 0)
+        if not job or job["owner_id"] != owner_id or job["deleted_at"]:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Réunion introuvable.")
+        date, depuis_le_nom = recording_date(fichier)
+        if depuis_le_nom and not job["meeting_date"]:
+            db.set_meeting_date(job["id"], date)
+        if not job["video_file_id"]:
+            return mac_upload(int(job["id"]), fichier)
+        db.record_recovered(
+            source="mac", external_id=fichier["checksum"], checksum=fichier["checksum"],
+            size_bytes=fichier["size"], name=fichier["name"], job_id=job["id"], user_id=owner_id,
+        )
+        return {"job_id": job["id"], "upload": False, "video": "kept", "original": "left_on_mac"}
+
+    @app.post("/api/recovery/mac/done")
+    def mac_done(payload: MacImport, owner_id: int = Depends(human_user)) -> dict:
+        """L'envoi est fini : la réunion a sa vidéo, entière, et le fichier
+        compte désormais comme récupéré pour toute l'équipe."""
+        require_enabled(owner_id)
+        fichier = mac_file(payload.file)
+        job = db.get_job(payload.job_id or 0)
+        if not job or job["owner_id"] != owner_id or job["deleted_at"]:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Réunion introuvable.")
+        if not job["video_file_id"] or job["video_session"] or int(job["video_bytes"] or 0) != fichier["size"]:
+            raise HTTPException(status.HTTP_409_CONFLICT, "L'envoi de ce fichier n'est pas terminé.")
+        if not db.recovered_checksums().get(fichier["checksum"]):
+            db.record_recovered(
+                source="mac", external_id=fichier["checksum"], checksum=fichier["checksum"],
+                size_bytes=fichier["size"], name=fichier["name"], job_id=job["id"], user_id=owner_id,
+            )
+        contexte = json.loads(job["context_json"] or "{}")
+        nouvelle = contexte.get("recovered_from") == "mac" and contexte.get("checksum") == fichier["checksum"]
+        return {"job_id": job["id"], "video": None if nouvelle else "attached", "original": "left_on_mac"}
+
+    @app.post("/api/recovery/mac/abandon", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
+    def mac_abandon(payload: MacImport, owner_id: int = Depends(human_user)) -> Response:
+        """Un envoi qui n'aboutit pas ne laisse pas de réunion vide dans la
+        bibliothèque. Seule une réunion créée pour cet envoi, et restée
+        sans vidéo, est retirée."""
+        job = db.unfinished_mac_job(owner_id, mac_file(payload.file)["checksum"])
+        if job and int(job["id"]) == payload.job_id:
+            db.supprimer_job(int(job["id"]))
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
