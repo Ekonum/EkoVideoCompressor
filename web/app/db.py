@@ -20,9 +20,28 @@ import sqlite3
 import unicodedata
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
+from zoneinfo import ZoneInfo
+
+PARIS = ZoneInfo("Europe/Paris")
+
+
+def meeting_date_utc(value: str | None) -> str | None:
+    """Une date de réunion, toujours rangée de la même façon : en UTC, à
+    la minute, fuseau écrit.
+
+    Une date sans fuseau est une heure de Paris : celle qu'on lit dans le
+    nom d'un fichier, « 21 mai à 09-11 ». La ranger telle quelle la
+    ferait lire comme de l'UTC, deux heures plus tôt l'été."""
+    if not value:
+        return None
+    lu = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if lu.tzinfo is None:
+        lu = lu.replace(tzinfo=PARIS)
+    return lu.astimezone(timezone.utc).isoformat(timespec="minutes")
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -252,6 +271,17 @@ class Database:
             ("deleted_at", "TEXT"),
         ):
             self._ensure_column(conn, "jobs", colonne, ddl)
+
+        # Les réunions récupérées avant le 11/10/2026 portaient leur date
+        # sans fuseau, à l'heure de Paris : on les range comme les autres.
+        for row in conn.execute(
+            "SELECT id, meeting_date FROM jobs WHERE meeting_date IS NOT NULL "
+            "AND meeting_date NOT LIKE '%+%' AND meeting_date NOT LIKE '%Z'"
+        ).fetchall():
+            conn.execute(
+                "UPDATE jobs SET meeting_date = ? WHERE id = ?",
+                (meeting_date_utc(row["meeting_date"]), row["id"]),
+            )
 
     def _ensure_column(self, conn, table: str, column: str, ddl: str) -> None:
         """Ajout de colonne idempotent — le pendant du helper de sync-hub.
@@ -671,7 +701,7 @@ class Database:
         with self.connect() as conn:
             conn.execute(
                 "UPDATE jobs SET meeting_date = ?, updated_at = ? WHERE id = ?",
-                (date_iso, datetime.now().isoformat(timespec="seconds"), job_id),
+                (meeting_date_utc(date_iso), datetime.now().isoformat(timespec="seconds"), job_id),
             )
 
     def noter_depot_odoo(self, job_id: int, issue: dict[str, Any]) -> None:

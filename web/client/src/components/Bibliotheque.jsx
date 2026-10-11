@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { Bouton, Champ, Etat, Erreur, Vide } from './Communs.jsx';
-import { duree, fileSize, usd, jour, horodatage } from '../format.js';
+import { depuisUtc, duree, fileSize, usd, jour, horodatage } from '../format.js';
 import { MOD, useRaccourcis } from '../raccourcis.js';
 import { surlignerMots } from '../surlignage.jsx';
 import { Welcome } from './Welcome.jsx';
@@ -106,7 +106,7 @@ export function Bibliotheque({ surOuvrir, surLancer, surVue }) {
   // Déjà dans l'ordre du serveur ; la date affichée est celle de la
   // réunion, à défaut celle du dépôt.
   const triees = useMemo(
-    () => (jobs || []).map((j) => ({ ...j, quand: j.meeting_date || j.created_at })),
+    () => (jobs || []).map((j) => ({ ...j, quand: j.meeting_date || depuisUtc(j.created_at) })),
     [jobs],
   );
 

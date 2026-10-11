@@ -186,7 +186,7 @@ class NotesApiTestCase(unittest.TestCase):
         self.assertEqual((vue["original"], vue["linked"]), ("left_in_odoo", True))
         fiche = self.client.get(f"/api/jobs/{vue['job_id']}/detail").json()
         self.assertEqual(fiche["status"], "termine")
-        self.assertEqual(fiche["meeting_date"], "2025-12-02T10:30")
+        self.assertEqual(fiche["meeting_date"], "2025-12-02T09:30+00:00", "10 h 30 à Paris, rangée en UTC")
         self.assertEqual([s["speaker"] for s in fiche["segments"]], [n for n, _ in REPLIQUES])
         self.assertEqual((fiche["odoo"]["model"], fiche["odoo"]["record_id"], fiche["odoo"]["message_id"]),
                          ("crm.lead", 640, 901))
