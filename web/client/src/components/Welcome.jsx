@@ -28,7 +28,7 @@ export function Welcome({ onNavigate }) {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="titre text-[1.0625rem] font-medium">Bienvenue sur transcript</h2>
-          <p className="mt-1 text-ekn-sm text-fonce/60">
+          <p className="mt-1 text-ekn-sm text-ekn-text/60">
             Trois premiers pas, et tes réunions se transcrivent, se rattachent au bon
             dossier Odoo et s’y déposent toutes seules.
           </p>
@@ -36,7 +36,7 @@ export function Welcome({ onNavigate }) {
         <button
           type="button"
           onClick={dismiss}
-          className="shrink-0 text-ekn-sm text-ekn-text-muted hover:text-fonce"
+          className="shrink-0 text-ekn-sm text-ekn-text-muted hover:text-ekn-text"
         >
           Masquer
         </button>
@@ -87,11 +87,11 @@ function Step({ done, optional = false, title, text, action = null }) {
         {done ? '✓' : ''}
       </span>
       <div className="min-w-0 flex-1">
-        <p className={`text-[0.9375rem] ${done ? 'text-ekn-text-muted line-through decoration-fonce/25' : 'font-medium'}`}>
+        <p className={`text-[0.9375rem] ${done ? 'text-ekn-text-muted line-through decoration-ekn-text/25' : 'font-medium'}`}>
           {title}
           {optional && !done ? <span className="ml-2 text-ekn-xs font-normal text-ekn-text-muted">facultatif</span> : null}
         </p>
-        {!done ? <p className="mt-0.5 text-ekn-sm leading-relaxed text-fonce/60">{text}</p> : null}
+        {!done ? <p className="mt-0.5 text-ekn-sm leading-relaxed text-ekn-text/60">{text}</p> : null}
       </div>
       {action ? (
         <button

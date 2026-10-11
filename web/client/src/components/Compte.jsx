@@ -27,7 +27,7 @@ export function Compte() {
     <section className="mx-auto max-w-3xl px-6 py-10">
       <h1 className="titre text-[1.5rem] font-semibold">Mon compte</h1>
       <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
-        <p className="text-fonce/70">
+        <p className="text-ekn-text/70">
           {moi?.email}
           {moi ? <span className="text-ekn-text-muted"> · connecté via {moi.via}</span> : null}
         </p>
@@ -40,19 +40,19 @@ export function Compte() {
       </div>
 
       <Erreur>{erreur}</Erreur>
-      {note ? <p className="mt-4 text-ekn-sm text-ekn-success-dark">{note}</p> : null}
+      {note ? <p className="mt-4 text-ekn-sm text-ekn-tone-success">{note}</p> : null}
 
       <div className="verre mt-8 rounded-xl p-5">
         <h2 className="titre text-[1.0625rem] font-medium">Odoo</h2>
         {odoo?.server ? (
-          <p className="mt-1 text-ekn-sm text-fonce/60">{odoo.server}</p>
+          <p className="mt-1 text-ekn-sm text-ekn-text/60">{odoo.server}</p>
         ) : (
-          <p className="mt-1 text-ekn-sm text-fonce/60">
+          <p className="mt-1 text-ekn-sm text-ekn-text/60">
             Aucun serveur Odoo configuré côté application.
           </p>
         )}
 
-        <p className="mt-3 text-ekn-sm leading-relaxed text-fonce/70">
+        <p className="mt-3 text-ekn-sm leading-relaxed text-ekn-text/70">
           Ta clé est <strong>personnelle</strong> : la transcription déposée dans
           le chatter porte ton nom. Une clé partagée signerait tout du même
           compte, et l'attribution — ce pour quoi le chatter existe — serait

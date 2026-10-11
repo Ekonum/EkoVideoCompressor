@@ -44,14 +44,14 @@ export function Recovery({ connection, onOpen }) {
   return (
     <section className="mx-auto max-w-6xl px-6 py-10">
       <h1 className="titre text-[1.5rem] font-semibold">Récupérer ton historique</h1>
-      <p className="mt-2 max-w-2xl text-fonce/70">
+      <p className="mt-2 max-w-2xl text-ekn-text/70">
         Les réunions enregistrées avant transcript dorment peut-être dans ton
         Drive. On les retrouve, tu choisis lesquelles ranger ici — à la date où
         elles ont eu lieu — et les originaux peuvent partir à la corbeille du
         Drive une fois copiés.
       </p>
       {message ? (
-        <p className={`mt-4 text-ekn-sm ${message[0] === 'ok' ? 'text-ekn-success-dark' : 'text-ekn-error-dark'}`}>
+        <p className={`mt-4 text-ekn-sm ${message[0] === 'ok' ? 'text-ekn-tone-success' : 'text-ekn-tone-error'}`}>
           {message[1]}
         </p>
       ) : null}
@@ -88,7 +88,7 @@ function UpcomingSource({ title, text }) {
         <h2 className="titre text-[1.0625rem] font-medium">{title}</h2>
         <span className="text-ekn-sm text-ekn-text-muted">bientôt</span>
       </div>
-      <p className="mt-1 text-ekn-sm text-fonce/60">{text}</p>
+      <p className="mt-1 text-ekn-sm text-ekn-text/60">{text}</p>
     </div>
   );
 }
@@ -118,7 +118,7 @@ function DriveSource({ google, storage, onGoogle, onOpen }) {
             {google.email} ·{' '}
             <button
               type="button"
-              className="underline-offset-2 hover:text-fonce hover:underline"
+              className="underline-offset-2 hover:text-ekn-text hover:underline"
               onClick={async () => {
                 await api.googleDisconnect();
                 setItems(null);
@@ -132,12 +132,12 @@ function DriveSource({ google, storage, onGoogle, onOpen }) {
       </div>
 
       {!google.available ? (
-        <p className="mt-2 text-ekn-sm text-fonce/60">
+        <p className="mt-2 text-ekn-sm text-ekn-text/60">
           La connexion à Google n’est pas encore configurée sur ce serveur.
         </p>
       ) : !google.connected ? (
         <div className="mt-2">
-          <p className="text-ekn-sm text-fonce/60">
+          <p className="text-ekn-sm text-ekn-text/60">
             Ton Drive, les Drive partagés dont tu es membre, et ce qu’on t’a
             partagé. transcript ne voit que ce que tu vois, et ne déplace un
             fichier qu’en ton nom, quand tu le demandes.
@@ -214,7 +214,7 @@ function Inventory({ items, storage, onReload, onOpen }) {
   const recoveredCount = Object.values(results).filter((r) => r.state === 'done').length;
 
   if (!items.length) {
-    return <p className="mt-3 text-ekn-sm text-fonce/60">Aucun fichier audio ou vidéo dans ce Drive.</p>;
+    return <p className="mt-3 text-ekn-sm text-ekn-text/60">Aucun fichier audio ou vidéo dans ce Drive.</p>;
   }
 
   return (
@@ -226,19 +226,19 @@ function Inventory({ items, storage, onReload, onOpen }) {
             type="button"
             onClick={() => setFilter(key)}
             className={`rounded-md px-3 py-1.5 transition-colors ${
-              filter === key ? 'bg-white/70 font-medium' : 'text-ekn-text-muted hover:bg-white/40'
+              filter === key ? 'bg-voile/70 font-medium' : 'text-ekn-text-muted hover:bg-voile/40'
             }`}
           >
             {label} <span className="tabular-nums text-ekn-text-muted">{groups[key].length}</span>
           </button>
         ))}
-        <button type="button" onClick={onReload} className="ml-auto px-2 text-ekn-sm text-ekn-text-muted hover:text-fonce">
+        <button type="button" onClick={onReload} className="ml-auto px-2 text-ekn-sm text-ekn-text-muted hover:text-ekn-text">
           Relancer l’inventaire
         </button>
       </div>
 
       {visible.length ? (
-        <div className="mt-3 overflow-x-auto rounded-lg border border-bord/70 bg-white/60">
+        <div className="mt-3 overflow-x-auto rounded-lg border border-bord/70 bg-voile/60">
           <table className="w-full min-w-[46rem] border-collapse text-ekn-sm">
             <thead className="border-b border-bord text-left text-ekn-sm text-ekn-text-muted">
               <tr>
@@ -332,9 +332,9 @@ function Row({ item, checked, result, disabled, onToggle, onOpen }) {
     <tr className="border-b border-bord/50 last:border-0">
       <td className="px-3 py-2 align-top">
         {result?.state === 'done' ? (
-          <span className="text-ekn-success-dark">✓</span>
+          <span className="text-ekn-tone-success">✓</span>
         ) : result?.state === 'running' ? (
-          <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-fonce/20 border-t-fonce/70" />
+          <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-ekn-text/20 border-t-fonce/70" />
         ) : (
           <input
             type="checkbox"
@@ -347,17 +347,17 @@ function Row({ item, checked, result, disabled, onToggle, onOpen }) {
         )}
       </td>
       <td className="px-3 py-2">
-        <a href={item.web_link} target="_blank" rel="noreferrer" className="hover:underline">
+        <a href={item.web_link} target="_blank" rel="noreferrer" className="ekn-link">
           {item.name}
         </a>
         {status || result ? (
-          <span className={`block text-ekn-sm ${result?.state === 'error' ? 'text-ekn-error-dark' : 'text-ekn-text-muted'}`}>
+          <span className={`block text-ekn-sm ${result?.state === 'error' ? 'text-ekn-tone-error' : 'text-ekn-text-muted'}`}>
             {result?.message || status}
             {(result?.jobId || item.job_id) ? (
               <button
                 type="button"
                 onClick={() => onOpen(result?.jobId || item.job_id)}
-                className="ml-2 text-violet hover:underline"
+                className="ml-2 ekn-link"
               >
                 ouvrir
               </button>
@@ -365,7 +365,7 @@ function Row({ item, checked, result, disabled, onToggle, onOpen }) {
           </span>
         ) : null}
       </td>
-      <td className="whitespace-nowrap px-3 py-2 text-fonce/70">
+      <td className="whitespace-nowrap px-3 py-2 text-ekn-text/70">
         {jour(item.recorded_at)}
         {!item.recorded_at_from_name ? (
           <span className="block text-ekn-xs text-ekn-text-muted" title="Date du dépôt dans le Drive : l’enregistrement peut être un peu plus ancien.">
@@ -373,11 +373,11 @@ function Row({ item, checked, result, disabled, onToggle, onOpen }) {
           </span>
         ) : null}
       </td>
-      <td className="px-3 py-2 tabular-nums text-fonce/70">
+      <td className="px-3 py-2 tabular-nums text-ekn-text/70">
         {item.duration_seconds ? duree(item.duration_seconds) : '—'}
       </td>
-      <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-fonce/70">{fileSize(item.size)}</td>
-      <td className="px-3 py-2 text-fonce/60">
+      <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-ekn-text/70">{fileSize(item.size)}</td>
+      <td className="px-3 py-2 text-ekn-text/60">
         {item.location.kind === 'shared_drive' ? item.location.name : LOCATION_LABELS[item.location.kind]}
       </td>
     </tr>

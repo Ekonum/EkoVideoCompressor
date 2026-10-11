@@ -32,6 +32,7 @@
   --color-ekn-hover-inverse: var(--ekn-hover-inverse);
   --color-ekn-overlay: var(--ekn-overlay);
   --color-ekn-highlight: var(--ekn-highlight);
+  --color-ekn-mark: var(--ekn-mark);
   --color-ekn-success: var(--ekn-success);
   --color-ekn-success-dark: var(--ekn-success-dark);
   --color-ekn-warning: var(--ekn-warning);
@@ -56,6 +57,7 @@
   --color-ekn-tile: var(--ekn-tile);
   --color-ekn-on-tile: var(--ekn-on-tile);
   --color-ekn-halo: var(--ekn-halo);
+  --color-ekn-underline: var(--ekn-underline);
   --font-ekn-heading: var(--ekn-font-heading);
   --font-ekn-body: var(--ekn-font-body);
   --text-ekn-xs: var(--ekn-text-xs);

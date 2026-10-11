@@ -111,10 +111,10 @@ function Compte({ moi, surVue, surAide, actif }) {
         </span>
       </button>
       {invitation && !ouvert ? (
-        <div data-ekn-theme="light" className="absolute right-0 top-full z-30 mt-3 w-80 rounded-xl bg-white p-4 text-fonce shadow-2xl ring-1 ring-bord">
-          <span aria-hidden className="absolute -top-1.5 right-4 h-3 w-3 rotate-45 bg-white ring-1 ring-bord [clip-path:polygon(0_0,100%_0,0_100%)]" />
+        <div data-ekn-theme="page" className="absolute right-0 top-full z-30 mt-3 w-80 rounded-xl bg-carte p-4 text-ekn-text shadow-2xl ring-1 ring-bord">
+          <span aria-hidden className="absolute -top-1.5 right-4 h-3 w-3 rotate-45 bg-carte ring-1 ring-bord [clip-path:polygon(0_0,100%_0,0_100%)]" />
           <p className="titre text-[0.9375rem] font-medium">Retrouver tes anciens enregistrements</p>
-          <p className="mt-1 text-ekn-sm leading-relaxed text-fonce/65">
+          <p className="mt-1 text-ekn-sm leading-relaxed text-ekn-text/65">
             Des réunions enregistrées avant transcript dorment peut-être dans ton
             Drive. On peut les retrouver et les ranger ici, à leur date — et faire
             le ménage derrière.
@@ -136,12 +136,13 @@ function Compte({ moi, surVue, surAide, actif }) {
         </div>
       ) : null}
       {/* Un popover natif : le navigateur le ferme sur Échap ou sur un clic
-          ailleurs, et le place sous l'avatar. Îlot clair dans l'en-tête foncé. */}
+          ailleurs, et le place sous l'avatar. Îlot au thème de la page dans
+          l'en-tête foncé. */}
       <div
         ref={menu}
         id="menu-compte"
         popover="auto"
-        data-ekn-theme="light"
+        data-ekn-theme="page"
         className="ekn-menu"
         onToggle={(e) => setOuvert(e.newState === 'open')}
       >

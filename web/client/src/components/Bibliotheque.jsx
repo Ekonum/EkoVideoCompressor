@@ -134,7 +134,7 @@ export function Bibliotheque({ surOuvrir, surLancer, surVue }) {
   };
 
   const colonne = (champ, libelle, classe = '') => (
-    <th className={`px-4 py-2 text-left text-ekn-sm font-medium text-fonce/60 ${classe}`}>
+    <th className={`px-4 py-2 text-left text-ekn-sm font-medium text-ekn-text/60 ${classe}`}>
       <button
         onClick={() => setTri((t) => {
           // Un titre se lit de A à Z ; le reste, du plus récent ou du plus gros.
@@ -142,7 +142,7 @@ export function Bibliotheque({ surOuvrir, surLancer, surVue }) {
           const autre = premier === 'asc' ? 'desc' : 'asc';
           return { champ, sens: t.champ === champ && t.sens === premier ? autre : premier };
         })}
-        className="hover:text-fonce"
+        className="hover:text-ekn-text"
       >
         {libelle}
         {tri.champ === champ ? <span aria-hidden> {tri.sens === 'desc' ? '↓' : '↑'}</span> : null}
@@ -176,7 +176,7 @@ export function Bibliotheque({ surOuvrir, surLancer, surVue }) {
             type="button"
             onClick={() => setEtat(cle)}
             className={`rounded-md px-3 py-1.5 transition-colors ${
-              etat === cle ? 'bg-white/60 font-medium' : 'text-ekn-text-muted hover:bg-white/35'
+              etat === cle ? 'bg-voile/60 font-medium' : 'text-ekn-text-muted hover:bg-voile/35'
             }`}
           >
             {libelle}
@@ -258,7 +258,7 @@ export function Bibliotheque({ surOuvrir, surLancer, surVue }) {
                   className={`cursor-pointer border-b border-bord/50 last:border-0 transition-colors ${
                     choisis.has(job.job_id)
                       ? 'bg-turquoise/25 shadow-[inset_3px_0_0_var(--color-turquoise-sombre)] hover:bg-turquoise/30'
-                      : 'hover:bg-white/45'
+                      : 'hover:bg-voile/45'
                   }`}
                 >
                   <td className="px-4 py-3">
@@ -271,13 +271,13 @@ export function Bibliotheque({ surOuvrir, surLancer, surVue }) {
                         {job.title ? job.filename : null}
                         {job.title && job.has_versions ? ' · ' : null}
                         {job.has_versions ? (
-                          <span className="whitespace-nowrap text-violet">version antérieure</span>
+                          <span className="whitespace-nowrap font-medium text-ekn-text">version antérieure</span>
                         ) : null}
                       </span>
                     ) : null}
                   </td>
-                  <td className="whitespace-nowrap px-4 py-3 text-fonce/70">{jour(job.quand)}</td>
-                  <td className="px-4 py-3 tabular-nums text-fonce/70">{duree(job.duration_seconds)}</td>
+                  <td className="whitespace-nowrap px-4 py-3 text-ekn-text/70">{jour(job.quand)}</td>
+                  <td className="px-4 py-3 tabular-nums text-ekn-text/70">{duree(job.duration_seconds)}</td>
                   <td className="px-4 py-3">
                     <Etat valeur={job.status} />
                     {job.progress && job.status !== 'erreur' && job.progress.total ? (
@@ -294,7 +294,7 @@ export function Bibliotheque({ surOuvrir, surLancer, surVue }) {
                       </span>
                     ) : null}
                   </td>
-                  <td className="px-4 py-3 text-right tabular-nums text-fonce/70">{usd(job.cost_usd)}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-ekn-text/70">{usd(job.cost_usd)}</td>
                   <td
                     className="whitespace-nowrap px-4 py-3 text-right"
                     onClick={(e) => e.stopPropagation()}
@@ -482,7 +482,7 @@ function Actions({ job, etat, surFait, surErreur }) {
       title={titre}
       disabled={occupe}
       onClick={() => agir(action)}
-      className="rounded px-2 py-1 text-ekn-sm text-ekn-text-muted transition-colors hover:bg-white/60 hover:text-fonce disabled:opacity-40"
+      className="rounded px-2 py-1 text-ekn-sm text-ekn-text-muted transition-colors hover:bg-voile/60 hover:text-ekn-text disabled:opacity-40"
     >
       {libelle}
     </button>
@@ -531,7 +531,7 @@ function Resultats({ resultats, requete, surOuvrir }) {
         <li key={`${hit.job_id}-${rang}`}>
           <button
             onClick={() => surOuvrir(hit.job_id)}
-            className="block w-full px-4 py-3 text-left transition-colors hover:bg-white/45"
+            className="block w-full px-4 py-3 text-left transition-colors hover:bg-voile/45"
           >
             <span className="text-ekn-sm text-ekn-text-muted">
               {hit.title || hit.filename} · {horodatage(hit.start_second)}
@@ -579,7 +579,7 @@ function ALancer({ surLancer }) {
             <button
               type="button"
               onClick={() => removeFromQueue(entree.id)}
-              className="px-1 text-ekn-sm text-ekn-text-muted hover:text-fonce"
+              className="px-1 text-ekn-sm text-ekn-text-muted hover:text-ekn-text"
             >
               Retirer
             </button>
@@ -618,9 +618,9 @@ function DeposerIci() {
             );
           }}
         >
-          <div className="pointer-events-none rounded-2xl border-2 border-dashed border-turquoise bg-white/90 px-10 py-8 text-center shadow-2xl">
+          <div className="pointer-events-none rounded-2xl border-2 border-dashed border-turquoise bg-carte/90 px-10 py-8 text-center shadow-2xl">
             <p className="titre text-[1.0625rem] font-medium">Dépose tes enregistrements</p>
-            <p className="mt-1 text-ekn-sm text-fonce/60">Ils rejoignent « À lancer », à transcrire quand tu veux.</p>
+            <p className="mt-1 text-ekn-sm text-ekn-text/60">Ils rejoignent « À lancer », à transcrire quand tu veux.</p>
           </div>
         </div>
       ) : null}
@@ -654,7 +654,7 @@ function Pagination({ page, total, parPage, surPage }) {
       <span className="tabular-nums text-ekn-text-muted">{debut}–{fin} sur {total} réunions</span>
       <div className="flex items-center gap-2">
         {bouton('← Précédente', page - 1, page > 1)}
-        <span className="px-2 tabular-nums text-fonce/60">Page {page} / {pages}</span>
+        <span className="px-2 tabular-nums text-ekn-text/60">Page {page} / {pages}</span>
         {bouton('Suivante →', page + 1, page < pages)}
       </div>
     </div>

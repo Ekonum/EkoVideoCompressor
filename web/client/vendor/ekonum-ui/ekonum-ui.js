@@ -1,4 +1,4 @@
-/*! ekonum-ui 3.7.0 — optional components. Without this file, every native element still works. */
+/*! ekonum-ui 3.10.0 — optional components. Without this file, every native element still works. */
 
 /* ── src/js/audio.js ── */
 /* <ekn-audio> — an audio (or video) player in the brand's colours, with an optional
@@ -25,6 +25,10 @@
  * A video shows its picture (above the controls, or beside the timeline with `trim`); an
  * audio file, even in a <video>, reserves no space. A format the browser cannot read is
  * said in words, and play is disabled.
+ * `duration` (in seconds) gives the length when the media element cannot: a format the
+ * browser cannot decode (HEVC in a .mov, .mkv in Safari…), whose length the app read
+ * elsewhere. Trimming then still works, blind — handles, fields, "Tout reprendre" — and
+ * only playback stays off. A duration read from the media itself always wins.
  *
  * Handles and the position slider are native range inputs: a handle's arrows move it by one
  * second (ten with Shift), Page Up / Page Down by a tenth of the length, Home / End to the
@@ -72,12 +76,14 @@
             fromEnd: "Écouter la fin de la partie gardée", position: "Position", speed: "Vitesse de lecture",
             start: "Début de la partie gardée", end: "Fin de la partie gardée", startField: "Début", endField: "Fin",
             kept: (k, d) => `${k} gardées sur ${d}`, all: (d) => `${d} — tout est gardé`, reset: "Tout reprendre",
-            of: "sur", sep: ",", unreadable: "Format non lisible par ce navigateur." }
+            of: "sur", sep: ",", unreadable: "Format non lisible par ce navigateur.",
+            blind: "Format non lisible par ce navigateur : le rognage reste possible, à l'aveugle." }
         : { play: "Play", pause: "Pause", fromStart: "Play from the start of the kept part",
             fromEnd: "Play the end of the kept part", position: "Position", speed: "Playback speed",
             start: "Start of the kept part", end: "End of the kept part", startField: "Start", endField: "End",
             kept: (k, d) => `${k} kept of ${d}`, all: (d) => `${d}, all kept`, reset: "Keep everything",
-            of: "of", sep: ".", unreadable: "This browser cannot read this format." };
+            of: "of", sep: ".", unreadable: "This browser cannot read this format.",
+            blind: "This browser cannot read this format: trimming still works, blind." };
       this.trim = this.hasAttribute("trim");
       this.last = "start";
       this.media.removeAttribute("controls");
@@ -137,7 +143,7 @@
       this.ui.play.addEventListener("click", () => this.toggle());
       if (this.trim) this.wireTrim();
       else this.wireSimple();
-      if (m.readyState >= 1) this.ready();
+      if (m.readyState >= 1 || this.duration > 0) this.ready();
     }
 
     wireSimple() {
@@ -202,14 +208,20 @@
       });
     }
 
-    get duration() { return isFinite(this.media.duration) ? this.media.duration : 0; }
+    // The media's own length; failing that, the `duration` attribute (a format it cannot read).
+    get duration() {
+      const own = this.media.duration;
+      if (isFinite(own) && own > 0) return own;
+      const given = +this.getAttribute("duration");
+      return isFinite(given) && given > 0 ? given : 0;
+    }
 
     ready() {
       const d = this.duration;
       if (d <= 0) return;
       this.max = Math.floor(d);
-      // A <video> holding a sound only has no picture to show.
-      if (this.media.tagName === "VIDEO" && !this.media.videoWidth) {
+      // A <video> holding a sound only has no picture to show (known once its metadata is read).
+      if (this.media.tagName === "VIDEO" && this.media.readyState >= 1 && !this.media.videoWidth) {
         if (this.trim) this.ui.picture.hidden = true;
         else this.media.hidden = true;
       }
@@ -250,8 +262,10 @@
 
     unreadable() {
       this.ui.play.disabled = true;
-      this.ui.error.textContent = this.t.unreadable;
+      this.ui.error.textContent = this.trim && this.duration > 0 ? this.t.blind : this.t.unreadable;
       this.ui.error.hidden = false;
+      // No picture will come: a video's empty frame takes no room.
+      if (this.media.tagName === "VIDEO") (this.trim ? this.ui.picture : this.media).hidden = true;
     }
 
     at(t) {   // timeline position, aligned with the centre of a handle
@@ -320,9 +334,11 @@
 })();
 
 /* ── src/js/date-picker.js ── */
-/* <ekn-date-picker> — a calendar for <input type="date">, on desktop only.
+/* <ekn-date-picker> — a calendar for <input type="date"> or <input type="datetime-local">,
+ * on desktop only.
  *
  *   <ekn-date-picker><input class="ekn-input" type="date" name="day" min="2026-01-01"></ekn-date-picker>
+ *   <ekn-date-picker><input class="ekn-input" type="datetime-local" name="start"></ekn-date-picker>
  *
  * Progressive enhancement: the native input stays the source of truth (its value, its
  * name, its min and max, form submission, typing the date by hand). The element only adds
@@ -335,6 +351,12 @@
  * (with Shift, by year), Home / End to the start / end of the week, Enter picks,
  * Escape closes. Picking fires `input` and `change` on the native input.
  * Month and day names follow the page's lang (French by default).
+ *
+ * With a datetime-local input — transcript's meeting date — the calendar also has a time
+ * field (a native <input type="time">, which follows the input's step). Picking a day keeps
+ * the time and moves focus to the time field; each change is written at once, and Enter in
+ * the time field or « Valider » closes. An empty field starts at the current time. The
+ * value is kept within min and max, time included.
  */
 (() => {
   if (typeof customElements === "undefined" || customElements.get("ekn-date-picker")) return;
@@ -343,10 +365,12 @@
   const pad = (n) => String(n).padStart(2, "0");
   // Dates are handled in UTC: a local midnight can shift a day across a DST change.
   const toISO = (d) => `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+  // The date part of a date or datetime-local value.
   const fromISO = (s) => {
-    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s || "");
+    const m = /^(\d{4})-(\d{2})-(\d{2})(?:T|$)/.exec(s || "");
     return m ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])) : null;
   };
+  const timeOf = (s) => /T(\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)$/.exec(s || "")?.[1] ?? "";
   const addDays = (d, n) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + n));
   const addMonths = (d, n) => {
     const target = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + n, 1));
@@ -354,20 +378,24 @@
     return new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth(), Math.min(d.getUTCDate(), last)));
   };
   const today = () => { const n = new Date(); return new Date(Date.UTC(n.getFullYear(), n.getMonth(), n.getDate())); };
+  const now = () => { const n = new Date(); return `${pad(n.getHours())}:${pad(n.getMinutes())}`; };
 
   let count = 0;
 
   class DatePicker extends HTMLElement {
     connectedCallback() {
       if (this.dataset.enhanced !== undefined) return;
-      this.input = this.querySelector('input[type="date"]');
+      this.input = this.querySelector('input[type="date"], input[type="datetime-local"]');
       const touch = matchMedia("(pointer: coarse)").matches && !this.hasAttribute("always");
       if (!this.input || touch || !HTMLElement.prototype.hasOwnProperty("popover")) return;
+      this.withTime = this.input.type === "datetime-local";
 
       this.lang = (this.closest("[lang]")?.lang || document.documentElement.lang || "fr").trim() || "fr";
       this.labels = this.lang.startsWith("fr")
-        ? { open: "Ouvrir le calendrier", prev: "Mois précédent", next: "Mois suivant", today: "Aujourd'hui", dialog: "Choisir une date" }
-        : { open: "Open the calendar", prev: "Previous month", next: "Next month", today: "Today", dialog: "Choose a date" };
+        ? { open: "Ouvrir le calendrier", prev: "Mois précédent", next: "Mois suivant", today: "Aujourd'hui", dialog: "Choisir une date",
+            dialogTime: "Choisir une date et une heure", time: "Heure", now: "Maintenant", done: "Valider" }
+        : { open: "Open the calendar", prev: "Previous month", next: "Next month", today: "Today", dialog: "Choose a date",
+            dialogTime: "Choose a date and time", time: "Time", now: "Now", done: "Done" };
       // Monday, unless the locale says otherwise (weekInfo: 1 = Monday … 7 = Sunday).
       this.firstDay = 1;
       try {
@@ -387,7 +415,7 @@
       this.calendar = Object.assign(document.createElement("div"), { id, className: "ekn-calendar" });
       this.calendar.setAttribute("popover", "");
       this.calendar.setAttribute("role", "dialog");
-      this.calendar.setAttribute("aria-label", this.labels.dialog);
+      this.calendar.setAttribute("aria-label", this.withTime ? this.labels.dialogTime : this.labels.dialog);
       this.append(this.toggle, this.calendar);
       this.dataset.enhanced = "";
 
@@ -401,6 +429,21 @@
       this.calendar.addEventListener("click", (e) => {
         const day = e.target.closest("[data-date]");
         if (day) this.pick(day.dataset.date);
+        else if (e.target.closest("[data-now]")) this.pickNow();
+        else if (e.target.closest("[data-done]")) this.close();
+      });
+      this.calendar.addEventListener("input", (e) => {
+        if (!e.target.matches(".ekn-calendar__time input") || !e.target.value) return;
+        e.stopPropagation(); // the native field fires its own input event
+        this.time = e.target.value;
+        this.write(`${this.input.value.slice(0, 10) || toISO(this.focused)}T${this.time}`);
+      });
+      this.calendar.addEventListener("change", (e) => {
+        if (!e.target.matches(".ekn-calendar__time input")) return;
+        e.stopPropagation();
+        // Kept within min and max: show the time actually written.
+        const written = timeOf(this.input.value);
+        if (written && written !== e.target.value) e.target.value = this.time = written;
       });
     }
 
@@ -419,10 +462,16 @@
       if (min && start < min) start = min;
       if (max && start > max) start = max;
       this.focused = start;
+      this.time = timeOf(this.input.value) || now();
       this.render();
       this.calendar.showPopover();
       this.place();
       this.calendar.querySelector('[tabindex="0"]')?.focus();
+    }
+
+    close() {
+      this.calendar.hidePopover();
+      this.toggle.focus();
     }
 
     // Under the field, aligned on its right edge, kept inside the screen.
@@ -431,13 +480,15 @@
       const margin = 8;
       let top = r.bottom + 4;
       if (top + c.height > innerHeight - margin && r.top - 4 - c.height > margin) top = r.top - 4 - c.height;
+      // Room neither under nor above the field: slid up just enough, so it is never cut off.
+      top = Math.max(margin, Math.min(top, innerHeight - c.height - margin));
       const left = Math.max(margin, Math.min(r.right - c.width, innerWidth - c.width - margin));
       Object.assign(this.calendar.style, { top: `${top}px`, left: `${left}px` });
     }
 
     render() {
       const f = this.focused, lang = this.lang;
-      const selected = this.input.value, now = toISO(today());
+      const selected = this.input.value.slice(0, 10), todayISO = toISO(today());
       const first = new Date(Date.UTC(f.getUTCFullYear(), f.getUTCMonth(), 1));
       const month = new Intl.DateTimeFormat(lang, { month: "long", year: "numeric", timeZone: "UTC" }).format(first);
       const long = new Intl.DateTimeFormat(lang, { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
@@ -455,13 +506,18 @@
           if (!d) return "<td></td>";
           const iso = toISO(d), ok = this.allowed(d);
           return `<td><button type="button" class="ekn-calendar__day" data-date="${iso}" tabindex="${iso === toISO(f) ? 0 : -1}"`
-            + ` aria-label="${long.format(d)}"${iso === selected ? ' aria-pressed="true"' : ""}${iso === now ? ' aria-current="date"' : ""}`
+            + ` aria-label="${long.format(d)}"${iso === selected ? ' aria-pressed="true"' : ""}${iso === todayISO ? ' aria-current="date"' : ""}`
             + `${ok ? "" : ' aria-disabled="true"'}>${d.getUTCDate()}</button></td>`;
         }).join("")}</tr>`);
       }
       const { min, max } = this.bounds();
       const prevOk = !min || addMonths(first, -1) >= new Date(Date.UTC(min.getUTCFullYear(), min.getUTCMonth(), 1));
       const nextOk = !max || addMonths(first, 1) <= max;
+      const todayOk = this.allowed(today());
+      const foot = this.withTime
+        ? `<label class="ekn-calendar__time">${this.labels.time}<input class="ekn-input" type="time" value="${this.time}"${this.input.step ? ` step="${this.input.step}"` : ""}></label>
+           <div class="ekn-calendar__foot">${todayOk ? `<button type="button" class="ekn-calendar__today" data-now>${this.labels.now}</button>` : ""}<button type="button" class="ekn-button ekn-button--compact ekn-calendar__done" data-done>${this.labels.done}</button></div>`
+        : todayOk ? `<div class="ekn-calendar__foot"><button type="button" class="ekn-calendar__today" data-date="${todayISO}">${this.labels.today}</button></div>` : "";
       this.calendar.innerHTML = `
         <div class="ekn-calendar__head">
           <button type="button" class="ekn-calendar__nav" data-move="-1" aria-label="${this.labels.prev}"${prevOk ? "" : " disabled"}>‹</button>
@@ -472,7 +528,7 @@
           <thead><tr>${days.map((d) => `<th scope="col" abbr="${weekdayLong.format(d)}">${weekday.format(d).replace(".", "")}</th>`).join("")}</tr></thead>
           <tbody>${rows.join("")}</tbody>
         </table>
-        ${this.allowed(today()) ? `<div class="ekn-calendar__foot"><button type="button" class="ekn-calendar__today" data-date="${now}">${this.labels.today}</button></div>` : ""}`;
+        ${foot}`;
       this.calendar.querySelectorAll("[data-move]").forEach((b) => b.addEventListener("click", () => {
         this.focused = addMonths(this.focused, +b.dataset.move);
         this.render();
@@ -483,6 +539,12 @@
     }
 
     key(e) {
+      // Enter in the time field closes, and must not submit the surrounding form.
+      if (e.key === "Enter" && e.target.matches(".ekn-calendar__time input")) {
+        e.preventDefault();
+        this.close();
+        return;
+      }
       const day = e.target.closest(".ekn-calendar__day");
       if (!day) return;
       const f = fromISO(day.dataset.date);
@@ -500,13 +562,36 @@
       this.calendar.querySelector(`[data-date="${toISO(this.focused)}"].ekn-calendar__day`)?.focus();
     }
 
-    pick(iso) {
-      if (!this.allowed(fromISO(iso))) return;
-      this.input.value = iso;
+    // Writes into the native field, kept within its min and max, and tells the page.
+    write(value) {
+      const { min, max } = this.input;
+      if (min && value < min) value = min;
+      if (max && value > max) value = max;
+      if (value === this.input.value) return;
+      this.input.value = value;
       this.input.dispatchEvent(new Event("input", { bubbles: true }));
       this.input.dispatchEvent(new Event("change", { bubbles: true }));
-      this.calendar.hidePopover();
-      this.toggle.focus();
+    }
+
+    pick(iso) {
+      if (!this.allowed(fromISO(iso))) return;
+      if (!this.withTime) {
+        this.write(iso);
+        this.close();
+        return;
+      }
+      // A day, then the time: the calendar stays open on the time field.
+      this.write(`${iso}T${this.time}`);
+      this.focused = fromISO(this.input.value);
+      this.time = timeOf(this.input.value);
+      this.render();
+      this.calendar.querySelector(".ekn-calendar__time input").focus();
+    }
+
+    pickNow() {
+      this.time = now();
+      this.write(`${toISO(today())}T${this.time}`);
+      this.close();
     }
   }
 

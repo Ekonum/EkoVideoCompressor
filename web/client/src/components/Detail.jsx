@@ -109,7 +109,7 @@ export function Detail({ jobId, recherche = '', surRetour, surRetraiter }) {
 
   return (
     <section className="mx-auto max-w-6xl px-6 py-10">
-      <button onClick={surRetour} className="text-ekn-sm text-ekn-text-muted hover:text-fonce">
+      <button onClick={surRetour} className="text-ekn-sm text-ekn-text-muted hover:text-ekn-text">
         ← Bibliothèque
       </button>
 
@@ -126,7 +126,7 @@ export function Detail({ jobId, recherche = '', surRetour, surRetraiter }) {
       />
 
       <Erreur>{erreur}</Erreur>
-      {note ? <p className="mt-4 text-ekn-sm text-ekn-success-dark">{note}</p> : null}
+      {note ? <p className="mt-4 text-ekn-sm text-ekn-tone-success">{note}</p> : null}
 
       <div className="mt-8 grid grid-cols-1 gap-10 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <div>
@@ -150,7 +150,7 @@ export function Detail({ jobId, recherche = '', surRetour, surRetraiter }) {
           <Video jobId={jobId} video={fiche.video} filename={fiche.filename} surMaj={recharger}
                  lecteur={lecteur} surTemps={setEcoute} />
           {trouver ? (
-            <div className="mt-3 flex items-center gap-2 rounded-lg border border-bord bg-white px-3 py-1.5">
+            <div className="mt-3 flex items-center gap-2 rounded-lg border border-bord bg-ekn-field px-3 py-1.5">
               <input
                 ref={champTrouver}
                 autoFocus={!recherche}
@@ -170,13 +170,13 @@ export function Detail({ jobId, recherche = '', surRetour, surRetraiter }) {
               </span>
               <button type="button" onClick={() => avancer(-1)} disabled={!occurrences.length}
                       aria-label="Occurrence précédente" title="Précédente (Maj+Entrée)"
-                      className="rounded px-1.5 text-ekn-text-muted hover:bg-papier hover:text-fonce disabled:opacity-30">↑</button>
+                      className="rounded px-1.5 text-ekn-text-muted hover:bg-papier hover:text-ekn-text disabled:opacity-30">↑</button>
               <button type="button" onClick={() => avancer(1)} disabled={!occurrences.length}
                       aria-label="Occurrence suivante" title="Suivante (Entrée)"
-                      className="rounded px-1.5 text-ekn-text-muted hover:bg-papier hover:text-fonce disabled:opacity-30">↓</button>
+                      className="rounded px-1.5 text-ekn-text-muted hover:bg-papier hover:text-ekn-text disabled:opacity-30">↓</button>
               <button type="button" onClick={() => setTrouver(null)} aria-label="Fermer la recherche"
                       title="Fermer (Échap)"
-                      className="rounded px-1.5 text-[1.125rem] leading-none text-ekn-text-muted hover:bg-papier hover:text-fonce">×</button>
+                      className="rounded px-1.5 text-[1.125rem] leading-none text-ekn-text-muted hover:bg-papier hover:text-ekn-text">×</button>
             </div>
           ) : null}
           <div className="verre mt-3 max-h-[34rem] overflow-y-auto rounded-xl">
@@ -267,7 +267,7 @@ function Retraiter({ fiche, jobId, surRetraiter }) {
   };
   return (
     <div className="px-4 py-6">
-      <p className="text-fonce/70">
+      <p className="text-ekn-text/70">
         {{
           recovered: 'Réunion récupérée : la vidéo est là, mais pas encore de transcription.',
           cancelled: 'Transcription interrompue : la vidéo est toujours stockée.',
@@ -294,7 +294,7 @@ function DateReunion({ jobId, valeur, deduite, surMaj, surErreur }) {
 
   if (!edition) {
     return (
-      <p className="mt-1 text-ekn-sm text-fonce/70">
+      <p className="mt-1 text-ekn-sm text-ekn-text/70">
         Réunion du {lisible}
         {deduite ? <span className="text-ekn-text-muted"> (date du dépôt)</span> : null}
         <button
@@ -305,7 +305,7 @@ function DateReunion({ jobId, valeur, deduite, surMaj, surErreur }) {
             setSaisie(local.toISOString().slice(0, 16));
             setEdition(true);
           }}
-          className="ml-2 text-ekn-sm text-ekn-text underline underline-offset-2"
+          className="ml-2 ekn-link text-ekn-sm"
         >
           modifier
         </button>
@@ -327,7 +327,7 @@ function DateReunion({ jobId, valeur, deduite, surMaj, surErreur }) {
       <DateHeure valeur={saisie} surChange={setSaisie} />
       <Bouton type="submit">Enregistrer</Bouton>
       <button type="button" onClick={() => setEdition(false)}
-              className="text-ekn-sm text-ekn-text-muted hover:text-fonce">
+              className="text-ekn-sm text-ekn-text-muted hover:text-ekn-text">
         Annuler
       </button>
     </form>
@@ -388,7 +388,7 @@ function Video({ jobId, video, filename, surMaj, lecteur, surTemps }) {
       {etape === 'question' ? (
         <>
           <p className="titre text-[0.9375rem] font-medium">{audio ? 'Réécouter l’enregistrement ?' : 'Relire la vidéo ?'}</p>
-          <p className="mt-1 text-ekn-sm text-fonce/70">
+          <p className="mt-1 text-ekn-sm text-ekn-text/70">
             {audio ? 'Il' : 'Elle'} est en <strong>stockage froid</strong> : {audio ? 'le' : 'la'} conserver
             ne coûte presque rien, {audio ? 'le réécouter' : 'la relire'} coûte davantage. On ne{' '}
             {audio ? 'le' : 'la'} charge que si tu en as besoin.
@@ -406,7 +406,7 @@ function Video({ jobId, video, filename, surMaj, lecteur, surTemps }) {
         </>
       ) : (
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-ekn-sm text-fonce/70">
+          <p className="text-ekn-sm text-ekn-text/70">
             {audio ? 'Enregistrement archivé' : 'Vidéo archivée'}{video.octets ? ` — ${mo(video.octets)}` : ''}, en
             stockage froid.
           </p>
@@ -627,7 +627,7 @@ function Termes({ fiche, jobId, surMaj, surNote, surErreur, aCorriger }) {
     <div>
       <h2 className="titre text-[1.0625rem] font-medium">Vocabulaire</h2>
       {fiche.technical_terms.length ? (
-        <p className="mt-2 text-ekn-sm leading-relaxed text-fonce/70">
+        <p className="mt-2 text-ekn-sm leading-relaxed text-ekn-text/70">
           {fiche.technical_terms.join(' · ')}
         </p>
       ) : (
@@ -698,11 +698,11 @@ function Fenetres({ jobId, surNote, surErreur }) {
         {vue.chunks.map((c) => (
           <li key={c.index} className="flex items-center gap-3 px-3 py-2 text-ekn-sm">
             <span className="w-12 shrink-0 tabular-nums text-ekn-text-muted">{horodatage(c.start)}</span>
-            <span className={`flex-1 ${c.status === 'erreur' ? 'text-ekn-error-dark' : 'text-fonce/70'}`}>
+            <span className={`flex-1 ${c.status === 'erreur' ? 'text-ekn-tone-error' : 'text-ekn-text/70'}`}>
               {c.status === 'termine' ? 'terminée' : c.status === 'erreur' ? 'erreur' : c.status}
             </span>
             <button
-              className="text-ekn-text underline underline-offset-2"
+              className="ekn-link"
               onClick={async () => {
                 try {
                   await api.resetChunk(jobId, c.index);
@@ -758,20 +758,20 @@ function Versions({ versions, jobId, surMaj, surNote, surErreur }) {
         type="button"
         onClick={() => setOuvert((o) => !o)}
         aria-expanded={ouvert}
-        className="text-ekn-sm text-ekn-text-muted hover:text-fonce"
+        className="text-ekn-sm text-ekn-text-muted hover:text-ekn-text"
       >
         {ouvert ? '▾' : '▸'} {versions.length} version{versions.length > 1 ? 's' : ''} antérieure{versions.length > 1 ? 's' : ''}
       </button>
       {ouvert ? (
         <ul className="mt-2 space-y-1.5">
           {versions.map((v, rang) => (
-            <li key={v.archived_at + rang} className="rounded-lg bg-white/50 px-3 py-2">
+            <li key={v.archived_at + rang} className="rounded-lg bg-voile/50 px-3 py-2">
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                 <span className="text-ekn-xs tabular-nums text-ekn-text-muted">{jour(v.archived_at)}</span>
                 <span className="min-w-0 flex-1 truncate text-ekn-sm">{v.title || 'Sans titre'}</span>
                 <span className="flex shrink-0 gap-3 text-ekn-sm">
                   <button type="button" onClick={() => setLue(lue === rang ? null : rang)}
-                          className="text-violet hover:underline">
+                          className="ekn-link">
                     {lue === rang ? 'replier' : 'lire'}
                   </button>
                   <button
@@ -781,7 +781,7 @@ function Versions({ versions, jobId, surMaj, surNote, surErreur }) {
                     title={v.restaurable
                       ? 'Remettre cette version en place'
                       : 'Seul le texte de cette version a été gardé : copie-le si besoin.'}
-                    className="text-fonce/60 hover:text-fonce hover:underline disabled:cursor-not-allowed disabled:text-fonce/30 disabled:no-underline"
+                    className="text-ekn-text/60 hover:text-ekn-text hover:underline disabled:cursor-not-allowed disabled:text-ekn-text/30 disabled:no-underline"
                   >
                     y revenir
                   </button>
@@ -789,7 +789,7 @@ function Versions({ versions, jobId, surMaj, surNote, surErreur }) {
               </div>
               {aConfirmer === rang ? (
                 <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md bg-papier px-3 py-2 text-ekn-sm">
-                  <span className="flex-1 text-fonce/70">
+                  <span className="flex-1 text-ekn-text/70">
                     Remettre cette version en place ? La version actuelle sera gardée dans l'historique.
                   </span>
                   <button type="button" disabled={occupe} onClick={() => revenir(rang)}
@@ -797,14 +797,14 @@ function Versions({ versions, jobId, surMaj, surNote, surErreur }) {
                     {occupe ? 'Restauration…' : 'Y revenir'}
                   </button>
                   <button type="button" onClick={() => setAConfirmer(null)}
-                          className="px-2 py-1 text-ekn-text-muted hover:text-fonce">
+                          className="px-2 py-1 text-ekn-text-muted hover:text-ekn-text">
                     Annuler
                   </button>
                 </div>
               ) : null}
               {lue === rang ? (
                 <>
-                  <div className="mt-2 max-h-72 overflow-y-auto whitespace-pre-wrap rounded-md bg-white/80 p-2 text-ekn-sm leading-relaxed text-fonce/80">
+                  <div className="mt-2 max-h-72 overflow-y-auto whitespace-pre-wrap rounded-md bg-voile/80 p-2 text-ekn-sm leading-relaxed text-ekn-text/80">
                     {v.transcript || 'Texte non conservé pour cette version.'}
                   </div>
                   <div className="mt-2 flex justify-end">
@@ -848,7 +848,7 @@ function Odoo({ fiche, jobId, surMaj, surNote, surErreur }) {
     return (
       <div>
         <h2 className="titre text-[1.0625rem] font-medium">Odoo</h2>
-        <p className="mt-2 text-ekn-sm text-ekn-success-dark">
+        <p className="mt-2 text-ekn-sm text-ekn-tone-success">
           Déposée dans le chatter le {jour(lien.published_at)}.
         </p>
         <p className="mt-0.5 text-ekn-sm text-ekn-text-muted">
@@ -939,7 +939,7 @@ function Odoo({ fiche, jobId, surMaj, surNote, surErreur }) {
                   } catch (e) { surErreur(e.message); }
                   finally { setEnvoi(false); setEtape(''); }
                 }}
-                className="w-full rounded-md px-2 py-1.5 text-left text-ekn-sm transition-colors hover:bg-white/60 disabled:opacity-40"
+                className="w-full rounded-md px-2 py-1.5 text-left text-ekn-sm transition-colors hover:bg-voile/60 disabled:opacity-40"
               >
                 <span className="titre font-medium">{c.name}</span>
                 <span className="block text-ekn-sm text-ekn-text-muted">

@@ -45,7 +45,7 @@ consumes:
     - cloudflare-access           # vérification de l'identité
 
 release_notes: https://github.com/Ekonum/EkoVideoCompressor/releases
-design_system: 3.7.0              # épinglé ; scripts/fetch-ekonum-ui.sh lit cette valeur
+design_system: 3.10.0             # épinglé ; scripts/fetch-ekonum-ui.sh lit cette valeur
 
 environments:
   production:

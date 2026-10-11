@@ -14,11 +14,9 @@
   --color-fonce: var(--ekn-dark-green);
   --color-fonce-doux: #0A2726;
   --color-clair: var(--ekn-off-white);
-  --color-papier: #F4F5F4;
   --color-turquoise: var(--ekn-turquoise);
   --color-turquoise-sombre: #14A87B;
   --color-violet: var(--ekn-violet);
-  --color-bord: #D2D8D6;
 
   --font-titre: "Chillax", -apple-system, BlinkMacSystemFont, sans-serif;
   --font-texte: "Synonym", -apple-system, BlinkMacSystemFont, sans-serif;
@@ -31,6 +29,72 @@
   --text-titre: 1.5rem;
 }
 
+/* Les surfaces propres à transcript, qui suivent le thème comme les rôles
+   d'ekonum-ui : `inline` pour que chaque élément lise la valeur de sa zone
+   (page sombre, zone .ekn-dark, îlot au thème de la page) et non celle de
+   la racine. Liens et mots surlignés viennent d'ekonum-ui (.ekn-link,
+   .ekn-mark). */
+@theme inline {
+  --color-carte: var(--app-carte);       /* panneau opaque : calendrier, fenêtre, bulle */
+  --color-voile: var(--app-voile);       /* éclaircissement translucide : survol, onglet choisi */
+  --color-papier: var(--app-papier);     /* fond discret dans une carte */
+  --color-bord: var(--app-bord);
+}
+
+/* Clair : les valeurs d'avant le thème sombre, au pixel près. Mêmes
+   sélecteurs qu'ekonum-ui, îlot `page` compris. */
+:root, [data-ekn-theme="light"], [data-ekn-theme="page"] {
+  --app-carte: #FFFFFF;
+  --app-voile: #FFFFFF;
+  --app-papier: #F4F5F4;
+  --app-bord: #D2D8D6;
+  --app-fond: #F4F5F4;
+  --app-foyer-turquoise: 42%;
+  --app-foyer-violet: 16%;
+  --app-foyer-bas: 20%;
+  --app-verre-fond: color-mix(in oklab, #ffffff 58%, transparent);
+  --app-verre-bord: color-mix(in oklab, #ffffff 82%, var(--app-bord));
+  --app-verre-reflet: rgb(255 255 255 / 0.55);
+  --app-verre-ombre: rgb(2 26 26 / 0.04);
+  --app-verre-ombre-portee: rgb(2 26 26 / 0.20);
+}
+
+/* Sombre : dérivé des rôles d'ekonum-ui (surface, fond, bordure). Écrit
+   deux fois, comme dans ekonum-ui : une zone sombre, et la
+   page en mode « auto » quand le système est sombre. */
+.ekn-dark, [data-ekn-theme="dark"], :root[data-ekn-theme="dark"] [data-ekn-theme="page"] {
+  --app-carte: var(--ekn-surface);
+  --app-voile: color-mix(in oklab, var(--ekn-off-white) 16%, transparent);
+  --app-papier: color-mix(in oklab, var(--ekn-off-white) 7%, transparent);
+  --app-bord: var(--ekn-border);
+  --app-fond: var(--ekn-background);
+  --app-foyer-turquoise: 16%;
+  --app-foyer-violet: 10%;
+  --app-foyer-bas: 8%;
+  --app-verre-fond: color-mix(in oklab, var(--ekn-surface) 72%, transparent);
+  --app-verre-bord: color-mix(in oklab, var(--ekn-off-white) 10%, transparent);
+  --app-verre-reflet: color-mix(in oklab, var(--ekn-off-white) 6%, transparent);
+  --app-verre-ombre: color-mix(in oklab, var(--ekn-dark-green) 30%, transparent);
+  --app-verre-ombre-portee: color-mix(in oklab, var(--ekn-dark-green) 70%, transparent);
+}
+@media (prefers-color-scheme: dark) {
+  [data-ekn-theme="auto"], :root[data-ekn-theme="auto"] [data-ekn-theme="page"] {
+    --app-carte: var(--ekn-surface);
+    --app-voile: color-mix(in oklab, var(--ekn-off-white) 16%, transparent);
+    --app-papier: color-mix(in oklab, var(--ekn-off-white) 7%, transparent);
+    --app-bord: var(--ekn-border);
+    --app-fond: var(--ekn-background);
+    --app-foyer-turquoise: 16%;
+    --app-foyer-violet: 10%;
+    --app-foyer-bas: 8%;
+    --app-verre-fond: color-mix(in oklab, var(--ekn-surface) 72%, transparent);
+    --app-verre-bord: color-mix(in oklab, var(--ekn-off-white) 10%, transparent);
+    --app-verre-reflet: color-mix(in oklab, var(--ekn-off-white) 6%, transparent);
+    --app-verre-ombre: color-mix(in oklab, var(--ekn-dark-green) 30%, transparent);
+    --app-verre-ombre-portee: color-mix(in oklab, var(--ekn-dark-green) 70%, transparent);
+  }
+}
+
 /* Un dégradé doux, posé une fois, et le contenu directement dessus : la
    charte demande un seul effet dominant par zone visible. C'est lui qui
    donne au verre quelque chose à laisser voir — une surface vitrée sur
@@ -38,17 +102,17 @@
    diffus, jamais derrière un texte long. */
 html {
   background:
-    radial-gradient(1200px 760px at 10% -10%, color-mix(in oklab, var(--color-turquoise) 42%, transparent), transparent 60%),
-    radial-gradient(1000px 620px at 106% 4%, color-mix(in oklab, var(--color-violet) 16%, transparent), transparent 56%),
-    radial-gradient(1400px 900px at 50% 118%, color-mix(in oklab, var(--color-turquoise) 20%, transparent), transparent 62%),
-    var(--color-papier);
+    radial-gradient(1200px 760px at 10% -10%, color-mix(in oklab, var(--color-turquoise) var(--app-foyer-turquoise), transparent), transparent 60%),
+    radial-gradient(1000px 620px at 106% 4%, color-mix(in oklab, var(--color-violet) var(--app-foyer-violet), transparent), transparent 56%),
+    radial-gradient(1400px 900px at 50% 118%, color-mix(in oklab, var(--color-turquoise) var(--app-foyer-bas), transparent), transparent 62%),
+    var(--app-fond);
   background-attachment: fixed;
 }
 
 body {
   font-family: var(--font-texte);
   font-size: var(--text-corps);
-  color: var(--color-fonce);
+  color: var(--ekn-text);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -74,17 +138,17 @@ h1, h2, h3, .titre { font-family: var(--font-titre); }
    paragraphe : la charte met explicitement en garde contre le verre
    comme contenant automatique. */
 .verre {
-  background: color-mix(in oklab, #ffffff 58%, transparent);
+  background: var(--app-verre-fond);
   backdrop-filter: blur(18px) saturate(1.25);
   -webkit-backdrop-filter: blur(18px) saturate(1.25);
   /* Bordure fine et claire, plus un liseré intérieur : c'est lui qui
      donne l'arête de la matière, sans recourir à une ombre lourde que la
      charte déconseille. */
-  border: 1px solid color-mix(in oklab, #ffffff 82%, var(--color-bord));
+  border: 1px solid var(--app-verre-bord);
   box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.55),
-    0 1px 2px rgb(2 26 26 / 0.04),
-    0 10px 30px -14px rgb(2 26 26 / 0.20);
+    inset 0 1px 0 var(--app-verre-reflet),
+    0 1px 2px var(--app-verre-ombre),
+    0 10px 30px -14px var(--app-verre-ombre-portee);
 }
 
 /* Variante sombre, pour la navigation posée sur le dégradé. */
@@ -98,6 +162,6 @@ h1, h2, h3, .titre { font-family: var(--font-titre); }
 /* Repli honnête là où le flou n'existe pas : on rend la surface opaque
    plutôt que de laisser un texte flotter sur un fond illisible. */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .verre { background: #ffffff; }
+  .verre { background: var(--app-carte); }
   .verre-sombre { background: var(--color-fonce); }
 }
