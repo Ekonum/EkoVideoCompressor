@@ -25,12 +25,7 @@ export function surligner(texte, terme, actif) {
     morceaux.push(texte.slice(depuis, trouve));
     const franc = actif === undefined || actif === k;
     morceaux.push(
-      <mark
-        key={trouve}
-        className={`rounded px-0.5 ${
-          franc ? 'bg-marque text-fonce ring-1 ring-turquoise-sombre' : 'bg-turquoise/20 text-ekn-text'
-        }`}
-      >
+      <mark key={trouve} className="ekn-mark" aria-current={franc ? 'true' : undefined}>
         {texte.slice(trouve, trouve + cible.length)}
       </mark>,
     );
@@ -70,7 +65,7 @@ export function surlignerMots(texte, requete) {
   for (const [debut, fin] of fusion) {
     morceaux.push(texte.slice(depuis, debut));
     morceaux.push(
-      <mark key={debut} className="rounded bg-marque-mot px-0.5 text-fonce">
+      <mark key={debut} className="ekn-mark">
         {texte.slice(debut, fin)}
       </mark>,
     );

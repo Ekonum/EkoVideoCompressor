@@ -1,6 +1,6 @@
-/*! ekonum-ui 3.7.0 — Ekonum brand (Brand Guidelines, BolimDesign 2025) */
+/*! ekonum-ui 3.10.0 — Ekonum brand (Brand Guidelines, BolimDesign 2025) */
 /*  Fonts are separate: fonts/fonts.css, to be served by the application. */
-:root { --ekn-version: "3.7.0"; }
+:root { --ekn-version: "3.10.0"; }
 
 /* ── src/tokens.css ── */
 /* ──────────────────────────────────────────────────────────────────────────
@@ -41,7 +41,8 @@
   --ekn-border-inverse:     rgba(234, 234, 234, .32);   /* border on a dark background */
   --ekn-hover-inverse:      rgba(234, 234, 234, .08);   /* hover on a dark background */
   --ekn-overlay:            rgba(2, 26, 26, .48);   /* backdrop behind a modal dialog: the page stays visible, dimmed */
-  --ekn-highlight:          rgba(42, 211, 159, .24);   /* highlighted passage, selected row: turquoise, translucent, under dark text */
+  --ekn-highlight:          rgba(42, 211, 159, .24);   /* highlighted passage, selected row: a turquoise tint under the text of its theme — dark on light; on dark the tint stays a deep teal (light text 7.3:1), never turquoise under light text */
+  --ekn-mark:               rgba(42, 211, 159, .45);   /* highlighted words (a search hit, a matched term): turquoise under dark-green ink in both themes; dark: 75 % so the ink keeps 5.9:1 */
 
   /* Semantic states — an extension of the guidelines, APPROVED by the brand
      on 24/09/2026. The guidelines have no warning or error colour; a
@@ -80,6 +81,7 @@
   --ekn-tile:         var(--ekn-dark-green);   /* icon tile: dark plaque on light, light plaque on dark — as the guidelines ask */
   --ekn-on-tile:      var(--ekn-turquoise);   /* pictogram on the icon tile */
   --ekn-halo:         rgba(2, 26, 26, 0);   /* hairline that detaches a thin mark from the bright colour it crosses (the audio playhead over the kept part): none on light, dark green on dark */
+  --ekn-underline:    var(--ekn-success-dark);   /* underline of a link, which keeps the text colour: turquoise's dark shade on light (4.5:1; turquoise itself 1.6:1), turquoise on dark */
 
   /* Typography: Chillax (headings) and Synonym (body), as in the guidelines. */
   --ekn-font-heading: 'Chillax', system-ui, sans-serif;   /* headings, buttons, labels of states and badges */
@@ -151,7 +153,7 @@
 /* Dark theme: a dark area (.ekn-dark, the selection bar) or a whole page
    (data-ekn-theme="dark" on <html>, or "auto" to follow the system). Opt-in:
    without the attribute, the page stays light. */
-.ekn-dark, .ekn-selection-bar, [data-ekn-theme="dark"] {
+.ekn-dark, .ekn-selection-bar, [data-ekn-theme="dark"], :root[data-ekn-theme="dark"] [data-ekn-theme="page"] {
   color-scheme: dark;
   --ekn-color-scheme: dark;
   --ekn-surface:        #152B2B;
@@ -162,6 +164,7 @@
   --ekn-text:           var(--ekn-off-white);
   --ekn-text-muted:     rgba(234, 234, 234, .72);
   --ekn-overlay:        rgba(2, 26, 26, .72);
+  --ekn-mark:           rgba(42, 211, 159, .75);
   --ekn-field:          var(--ekn-dark-green);
   --ekn-hover:          rgba(234, 234, 234, .08);
   --ekn-action:         var(--ekn-turquoise);
@@ -177,10 +180,11 @@
   --ekn-tile:           var(--ekn-off-white);
   --ekn-on-tile:        var(--ekn-dark-green);
   --ekn-halo:           var(--ekn-dark-green);
+  --ekn-underline:      var(--ekn-turquoise);
 }
 
 @media (prefers-color-scheme: dark) {
-  [data-ekn-theme="auto"] {
+  [data-ekn-theme="auto"], :root[data-ekn-theme="auto"] [data-ekn-theme="page"] {
     color-scheme: dark;
     --ekn-color-scheme: dark;
     --ekn-surface:        #152B2B;
@@ -191,6 +195,7 @@
     --ekn-text:           var(--ekn-off-white);
     --ekn-text-muted:     rgba(234, 234, 234, .72);
     --ekn-overlay:        rgba(2, 26, 26, .72);
+    --ekn-mark:           rgba(42, 211, 159, .75);
     --ekn-field:          var(--ekn-dark-green);
     --ekn-hover:          rgba(234, 234, 234, .08);
     --ekn-action:         var(--ekn-turquoise);
@@ -206,11 +211,13 @@
     --ekn-tile:           var(--ekn-off-white);
     --ekn-on-tile:        var(--ekn-dark-green);
     --ekn-halo:           var(--ekn-dark-green);
+    --ekn-underline:      var(--ekn-turquoise);
   }
 }
 
-/* A light island in a dark page. */
-[data-ekn-theme="light"] {
+/* A light island in a dark page; and an island that takes the page's theme
+   back inside a dark area (light here, dark through the selectors above). */
+[data-ekn-theme="light"], [data-ekn-theme="page"] {
   color-scheme: light;
   --ekn-color-scheme: light;
   --ekn-surface:        #F4F4F2;
@@ -221,6 +228,7 @@
   --ekn-text:           var(--ekn-dark-green);
   --ekn-text-muted:     rgba(2, 26, 26, .64);
   --ekn-overlay:        rgba(2, 26, 26, .48);
+  --ekn-mark:           rgba(42, 211, 159, .45);
   --ekn-field:          #FFFFFF;
   --ekn-hover:          rgba(2, 26, 26, .12);
   --ekn-action:         var(--ekn-dark-green);
@@ -236,6 +244,7 @@
   --ekn-tile:           var(--ekn-dark-green);
   --ekn-on-tile:        var(--ekn-turquoise);
   --ekn-halo:           rgba(2, 26, 26, 0);
+  --ekn-underline:      var(--ekn-success-dark);
 }
 
 /* ── src/base.css ── */
@@ -281,7 +290,7 @@
 .ekn :where(h4) { font-weight: 600; font-size: var(--ekn-text-md); }
 
 .ekn :where(p) { margin: 0; }
-.ekn :where(a) { color: inherit; text-decoration-color: var(--ekn-turquoise); text-underline-offset: .2em; }
+.ekn :where(a) { color: inherit; text-decoration-color: var(--ekn-underline); text-underline-offset: .2em; }
 
 /* Visible focus: the guidelines do not mention it, accessibility requires it.
    Dark green on light, turquoise on dark — primary combinations. */
@@ -463,7 +472,9 @@
    Focus follows the base rule: dark green on light (14.98:1). v1's turquoise only
    reached 1.92:1 against the field's white. */
 .ekn-input {
-  font: inherit; color: var(--ekn-text);
+  /* The font comes from the page, but not the weight: inside a .ekn-label (600), the
+     typed text would turn bold. Synonym Medium, as in body text. */
+  font: inherit; font-weight: 500; color: var(--ekn-text);
   background: var(--ekn-field); border: 1px solid var(--ekn-border-control);
   border-radius: var(--ekn-radius-field);
   padding: var(--ekn-space-3) var(--ekn-space-4); width: 100%;
@@ -891,8 +902,10 @@ button.ekn-account:hover { background: var(--ekn-hover-inverse); }
    without JavaScript; older browsers need dialog.showModal(). On a phone, it
    becomes a sheet at the bottom of the screen, within reach of the thumb;
    --full takes the whole screen for long content. */
+/* margin: auto is set, not left to the browser: Tailwind's preflight (* { margin: 0 })
+   would otherwise pin the dialog to the top-left corner. */
 .ekn-dialog {
-  box-sizing: border-box; width: min(100% - 2 * var(--ekn-gutter), var(--ekn-dialog-width, 32rem));
+  box-sizing: border-box; margin: auto; width: min(100% - 2 * var(--ekn-gutter), var(--ekn-dialog-width, 32rem));
   max-height: calc(100dvh - 2 * var(--ekn-space-6)); overflow: auto;
   padding: var(--ekn-space-6); border: 1px solid var(--ekn-border); border-radius: var(--ekn-radius-card);
   background: var(--ekn-surface); color: var(--ekn-text); box-shadow: var(--ekn-shadow-2);
@@ -1055,13 +1068,33 @@ button.ekn-account:hover { background: var(--ekn-hover-inverse); }
    be understood". One per screen, or it stops meaning anything. */
 .ekn-card--accent { border-color: var(--ekn-turquoise); box-shadow: 0 0 0 1px var(--ekn-turquoise), var(--ekn-shadow-2); }
 
+/* Link: the text colour, always underlined — the underline, not a colour,
+   says it is a link (a link coloured only on hover leaves colour alone to
+   say it). .ekn-link gives that look to a <button> that acts as a link
+   (« version antérieure », « Retraiter » inline) or to an <a> outside .ekn.
+   No violet text: 4.24:1 on the page background, 2.9:1 on a dark card, and
+   violet stays an accent for one or two elements per screen. */
+.ekn-link {
+  font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer;
+  text-decoration: underline; text-decoration-color: var(--ekn-underline); text-underline-offset: .2em;
+}
+.ekn-link:hover, .ekn :where(a):hover { text-decoration-thickness: 2px; }
+.ekn-link:focus-visible { outline: 2px solid var(--ekn-focus); outline-offset: 2px; border-radius: 2px; }
+
 /* A passage reached from elsewhere — a "to check" item that scrolls the
    transcript to its sentence. The anchor lands clear of a sticky header, and
-   the passage lights up. <mark class="ekn-mark"> for words highlighted in text.
+   the passage lights up.
      <p class="ekn-passage" id="t-17h29">…</p>   reached by   <a href="#t-17h29">17 h 29</a> */
 .ekn-passage { scroll-margin-block: var(--ekn-space-8); border-radius: var(--ekn-radius-field); }
 .ekn-passage:target { background: var(--ekn-highlight); box-shadow: 0 0 0 var(--ekn-space-2) var(--ekn-highlight); }
-.ekn-mark { background: var(--ekn-highlight); color: inherit; border-radius: calc(var(--ekn-radius-field) * .3); padding: 0 .15em; }
+/* Highlighted words: <mark class="ekn-mark">, aria-current="true" on the
+   current one (the search hit the reader is on). Turquoise always under
+   dark-green ink, whatever the theme — light ink on turquoise is ruled out
+   by the brand. The current hit is solid and ringed with the text colour:
+   solid against the 75 % of the others is only 1.5:1 in dark, the ring
+   tells them apart without relying on colour. */
+.ekn-mark { background: var(--ekn-mark); color: var(--ekn-dark-green); border-radius: calc(var(--ekn-radius-field) * .3); padding: 0 .15em; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+.ekn-mark[aria-current]:not([aria-current="false"]) { background: var(--ekn-turquoise); box-shadow: 0 0 0 1px var(--ekn-text); }
 @media (prefers-reduced-motion: no-preference) {
   html:has(.ekn-passage) { scroll-behavior: smooth; }
 }
@@ -1070,7 +1103,8 @@ button.ekn-account:hover { background: var(--ekn-hover-inverse); }
    <ekn-date-picker> adds a calendar to a native date field, on desktop only;
    on a phone the phone's own calendar stays. Without the script, nothing here
    applies and the native field works as before. Day buttons are 40 px; the
-   chosen day is dark green (14.98:1), today is underlined. */
+   chosen day is dark green (14.98:1), today is underlined. On a datetime-local
+   field, a time row (native time input) and « Valider » close the calendar. */
 ekn-date-picker { display: block; position: relative; min-width: 0; }
 ekn-date-picker[data-enhanced] > input { padding-right: calc(var(--ekn-target) + var(--ekn-space-1)); }
 ekn-date-picker[data-enhanced] > input::-webkit-calendar-picker-indicator { display: none; }
@@ -1084,7 +1118,7 @@ ekn-date-picker[data-enhanced] > input::-webkit-calendar-picker-indicator { disp
 .ekn-date-picker__toggle > svg { width: 1.25rem; height: 1.25rem; }
 
 .ekn-calendar {
-  position: fixed; inset: auto; margin: 0; box-sizing: border-box;
+  position: fixed; inset: auto; margin: 0; box-sizing: border-box; max-height: calc(100dvh - 1rem); overflow: auto;
   padding: var(--ekn-space-3); border: 1px solid var(--ekn-border); border-radius: var(--ekn-radius-card);
   background: var(--ekn-surface); color: var(--ekn-text); box-shadow: var(--ekn-shadow-2);
   font-family: var(--ekn-font-body); font-size: var(--ekn-text-sm); font-weight: 500; letter-spacing: var(--ekn-tracking);
@@ -1111,7 +1145,14 @@ ekn-date-picker[data-enhanced] > input::-webkit-calendar-picker-indicator { disp
 .ekn-calendar__day[aria-disabled="true"] { color: var(--ekn-text-muted); text-decoration: line-through; cursor: not-allowed; }
 .ekn-calendar__day[aria-disabled="true"]:hover { background: none; }
 .ekn-calendar__foot { display: flex; justify-content: center; margin-top: var(--ekn-space-2); padding-top: var(--ekn-space-2); border-top: 1px solid var(--ekn-border); }
+.ekn-calendar__foot:has(.ekn-calendar__done) { justify-content: flex-end; gap: var(--ekn-space-2); }
 .ekn-calendar__today { min-height: var(--ekn-target-min); padding: var(--ekn-space-1) var(--ekn-space-4); font-weight: 600; }
+.ekn-calendar__time {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--ekn-space-3);
+  margin-top: var(--ekn-space-2); padding-top: var(--ekn-space-2); border-top: 1px solid var(--ekn-border); font-weight: 600;
+}
+.ekn-calendar__time > .ekn-input { width: auto; }
+.ekn-calendar__done:focus-visible { outline: 2px solid var(--ekn-focus); outline-offset: 2px; }
 
 /* ── Audio player (optional JavaScript: ekonum-ui.js) ───────────────────────
    <ekn-audio> replaces the browser's player with compact controls. Without
@@ -1155,7 +1196,9 @@ ekn-audio :is(.ekn-audio__play, .ekn-audio__speed, .ekn-audio__reset):focus-visi
 /* Range inputs: a light 6 px track, a 16 px thumb detached by a ring of the card's
    colour, a 44 px hit area. */
 .ekn-audio__range {
-  -webkit-appearance: none; appearance: none; flex: 1 1 8rem; min-width: 0; height: var(--ekn-target); margin: 0;
+  /* width: 0, so only flex-basis counts: a range's intrinsic width (~130 px) would
+     otherwise widen a grid column or flex item sized on its content. */
+  -webkit-appearance: none; appearance: none; flex: 1 1 8rem; width: 0; min-width: 0; height: var(--ekn-target); margin: 0;
   background: transparent; cursor: pointer;
 }
 .ekn-audio__range::-webkit-slider-runnable-track { height: 6px; border-radius: var(--ekn-radius-pill); background: var(--ekn-track, var(--ekn-border)); }
@@ -1178,7 +1221,7 @@ ekn-audio :is(.ekn-audio__play, .ekn-audio__speed, .ekn-audio__reset):focus-visi
 .ekn-audio__reset {
   min-height: var(--ekn-target-min); margin-left: var(--ekn-space-2); padding: 0;
   font: inherit; color: var(--ekn-text); background: none; border: 0; cursor: pointer;
-  text-decoration: underline; text-decoration-color: var(--ekn-turquoise); text-underline-offset: .2em;
+  text-decoration: underline; text-decoration-color: var(--ekn-underline); text-underline-offset: .2em;
 }
 .ekn-audio__body { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ekn-space-4); }
 /* A video shows its picture; an audio file reserves no space. */

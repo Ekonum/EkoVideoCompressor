@@ -347,7 +347,7 @@ function Row({ item, checked, result, disabled, onToggle, onOpen }) {
         )}
       </td>
       <td className="px-3 py-2">
-        <a href={item.web_link} target="_blank" rel="noreferrer" className="hover:underline">
+        <a href={item.web_link} target="_blank" rel="noreferrer" className="ekn-link">
           {item.name}
         </a>
         {status || result ? (
@@ -357,7 +357,7 @@ function Row({ item, checked, result, disabled, onToggle, onOpen }) {
               <button
                 type="button"
                 onClick={() => onOpen(result?.jobId || item.job_id)}
-                className="ml-2 text-lien hover:underline"
+                className="ml-2 ekn-link"
               >
                 ouvrir
               </button>

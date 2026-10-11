@@ -271,7 +271,7 @@ export function Bibliotheque({ surOuvrir, surLancer, surVue }) {
                         {job.title ? job.filename : null}
                         {job.title && job.has_versions ? ' · ' : null}
                         {job.has_versions ? (
-                          <span className="whitespace-nowrap text-lien">version antérieure</span>
+                          <span className="whitespace-nowrap font-medium text-ekn-text">version antérieure</span>
                         ) : null}
                       </span>
                     ) : null}

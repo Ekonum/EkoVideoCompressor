@@ -66,24 +66,6 @@ export function Entete({ vue, surVue, surAide }) {
  *  page de connexion Google — c'est le « se connecter ». */
 export const DECONNEXION = '/cdn-cgi/access/logout';
 
-/** Le thème du système, pour les îlots posés dans l'en-tête.
- *
- *  L'en-tête est une zone .ekn-dark ; un menu qui en sort doit reprendre le
- *  thème de la page. La page suit le système (data-ekn-theme="auto"), mais
- *  « auto » ne rétablit rien en clair à l'intérieur d'une zone sombre :
- *  l'îlot reçoit donc la valeur explicite (signalé à ekonum-ui). */
-function useThemeSysteme() {
-  const requete = '(prefers-color-scheme: dark)';
-  const [sombre, setSombre] = useState(() => window.matchMedia(requete).matches);
-  useEffect(() => {
-    const media = window.matchMedia(requete);
-    const suivre = (e) => setSombre(e.matches);
-    media.addEventListener('change', suivre);
-    return () => media.removeEventListener('change', suivre);
-  }, []);
-  return sombre ? 'dark' : 'light';
-}
-
 /** Le compte, et ce qui ne sert pas tous les jours : réglages,
  *  raccourcis, déconnexion — rangés derrière l'avatar plutôt qu'affichés
  *  en permanence. */
@@ -94,7 +76,6 @@ function Compte({ moi, surVue, surAide, actif }) {
   const [invitation, setInvitation] = useState(false);
   const [recuperation, setRecuperation] = useState(false);
   const menu = useRef(null);
-  const theme = useThemeSysteme();
 
   useEffect(() => {
     api.recoveryState()
@@ -130,7 +111,7 @@ function Compte({ moi, surVue, surAide, actif }) {
         </span>
       </button>
       {invitation && !ouvert ? (
-        <div data-ekn-theme={theme} className="absolute right-0 top-full z-30 mt-3 w-80 rounded-xl bg-carte p-4 text-ekn-text shadow-2xl ring-1 ring-bord">
+        <div data-ekn-theme="page" className="absolute right-0 top-full z-30 mt-3 w-80 rounded-xl bg-carte p-4 text-ekn-text shadow-2xl ring-1 ring-bord">
           <span aria-hidden className="absolute -top-1.5 right-4 h-3 w-3 rotate-45 bg-carte ring-1 ring-bord [clip-path:polygon(0_0,100%_0,0_100%)]" />
           <p className="titre text-[0.9375rem] font-medium">Retrouver tes anciens enregistrements</p>
           <p className="mt-1 text-ekn-sm leading-relaxed text-ekn-text/65">
@@ -161,7 +142,7 @@ function Compte({ moi, surVue, surAide, actif }) {
         ref={menu}
         id="menu-compte"
         popover="auto"
-        data-ekn-theme={theme}
+        data-ekn-theme="page"
         className="ekn-menu"
         onToggle={(e) => setOuvert(e.newState === 'open')}
       >

@@ -934,7 +934,7 @@ export function AvancementArchivage({ tache }) {
         </div>
       ) : null}
       {tache.note ? <p className="mt-1 text-ekn-sm text-ekn-text/60">{tache.note}</p> : null}
-      {tache.erreur ? <p className="mt-1 text-ekn-sm text-lien">{tache.erreur}</p> : null}
+      {tache.erreur ? <p className="mt-1 ekn-error">{tache.erreur}</p> : null}
     </div>
   );
 }

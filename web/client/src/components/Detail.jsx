@@ -305,7 +305,7 @@ function DateReunion({ jobId, valeur, deduite, surMaj, surErreur }) {
             setSaisie(local.toISOString().slice(0, 16));
             setEdition(true);
           }}
-          className="ml-2 text-ekn-sm text-ekn-text underline underline-offset-2"
+          className="ml-2 ekn-link text-ekn-sm"
         >
           modifier
         </button>
@@ -702,7 +702,7 @@ function Fenetres({ jobId, surNote, surErreur }) {
               {c.status === 'termine' ? 'terminée' : c.status === 'erreur' ? 'erreur' : c.status}
             </span>
             <button
-              className="text-ekn-text underline underline-offset-2"
+              className="ekn-link"
               onClick={async () => {
                 try {
                   await api.resetChunk(jobId, c.index);
@@ -771,7 +771,7 @@ function Versions({ versions, jobId, surMaj, surNote, surErreur }) {
                 <span className="min-w-0 flex-1 truncate text-ekn-sm">{v.title || 'Sans titre'}</span>
                 <span className="flex shrink-0 gap-3 text-ekn-sm">
                   <button type="button" onClick={() => setLue(lue === rang ? null : rang)}
-                          className="text-lien hover:underline">
+                          className="ekn-link">
                     {lue === rang ? 'replier' : 'lire'}
                   </button>
                   <button
