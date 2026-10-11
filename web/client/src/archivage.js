@@ -74,7 +74,11 @@ async function envoyer(jobId, blob, surProgression, remplacer) {
   });
   if (!ouverture.ok) throw new Error((await ouverture.json()).detail || 'Envoi refusé.');
   const { morceau } = await ouverture.json();
+  await envoyerMorceaux(jobId, blob, morceau, surProgression);
+}
 
+/** Envoie un fichier par morceaux, une fois l'envoi ouvert côté serveur. */
+export async function envoyerMorceaux(jobId, blob, morceau, surProgression) {
   for (let debut = 0; debut < blob.size; debut += morceau) {
     const tranche = blob.slice(debut, Math.min(debut + morceau, blob.size));
     // Un morceau raté se retente : sur une heure de vidéo, un hoquet
