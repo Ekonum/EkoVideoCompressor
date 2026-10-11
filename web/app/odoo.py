@@ -268,6 +268,49 @@ class OdooGateway:
             "partner_id": int(partenaire[0] if isinstance(partenaire, list) else 0),
         }
 
+    # Ce qu'une pièce jointe dit d'elle-même dans l'inventaire.
+    PIECE = ["name", "mimetype", "file_size", "checksum", "create_date", "res_model", "res_id", "res_name"]
+
+    def media_attachments(self, limit: int = 2000) -> list[dict[str, Any]]:
+        """L'audio et la vidéo joints dans Odoo, que cette personne voit :
+        fiches, mais aussi discussions où elle est membre — les règles
+        d'accès de sa clé font le tri."""
+        from odoo_client import _json2_call
+
+        try:
+            return _json2_call(
+                self._config(), "ir.attachment", "search_read",
+                {"domain": ["|", ["mimetype", "=like", "audio/%"], ["mimetype", "=like", "video/%"]],
+                 "fields": self.PIECE, "limit": limit, "order": "create_date desc"},
+            ) or []
+        except OdooError as exc:
+            raise OdooUnavailable(_lisible(exc, self._database)) from exc
+
+    def attachment(self, attachment_id: int, *, contenu: bool = False) -> dict[str, Any]:
+        """Une pièce jointe ; avec son contenu, décodé, sous « bytes ».
+
+        Odoo 19 n'expose plus `datas` : le contenu se lit dans `raw`, en
+        base64. Tout passe en mémoire — les pièces d'Odoo pèsent quelques
+        dizaines de Mo au plus."""
+        import base64
+
+        from odoo_client import _json2_call
+
+        try:
+            lignes = _json2_call(
+                self._config(), "ir.attachment", "search_read",
+                {"domain": [["id", "=", int(attachment_id)]],
+                 "fields": self.PIECE + (["raw"] if contenu else []), "limit": 1},
+            )
+        except OdooError as exc:
+            raise OdooUnavailable(_lisible(exc, self._database)) from exc
+        if not lignes:
+            raise OdooUnavailable("Pièce jointe introuvable dans Odoo.")
+        piece = dict(lignes[0])
+        if contenu:
+            piece["bytes"] = base64.b64decode(piece.pop("raw") or "")
+        return piece
+
     def chatter(self):
         """Client d'écriture dans le chatter, sous la même identité."""
         from .chatter import OdooChatter

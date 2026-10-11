@@ -26,13 +26,34 @@ const KIND_FILTERS = [
   ['done', 'Déjà dans transcript'],
 ];
 
+// Le Drive partagé et la fiche Odoo se disent par leur nom.
 const LOCATION_LABELS = {
   my_drive: 'Mon Drive',
-  shared_drive: 'Drive partagé',
   shared_with_me: 'Partagé avec moi',
 };
 
-export function Recovery({ connection, onOpen }) {
+/** Ce qui distingue une source dans l'inventaire : comment récupérer un
+ *  fichier, comment le ranger avec sa réunion, et ce que devient
+ *  l'original. */
+const DRIVE = {
+  name: 'Drive',
+  empty: 'Aucun fichier audio ou vidéo dans ce Drive.',
+  trash: 'Mettre les originaux à la corbeille du Drive une fois copiés (30 jours pour se raviser)',
+  import: (item, trash) => api.driveImport(item.id, trash),
+  attach: (item, trash) => api.driveAttach(item.id, item.job_id, trash),
+};
+
+// Odoo n'a pas de corbeille, et l'enregistrement fait partie du dossier :
+// l'original reste sur sa fiche.
+const ODOO = {
+  name: 'Odoo',
+  empty: 'Aucun enregistrement audio ou vidéo joint à tes fiches Odoo.',
+  note: 'Les originaux restent sur leur fiche Odoo.',
+  import: (item) => api.odooImport(item.id),
+  attach: (item) => api.odooAttach(item.id, item.job_id),
+};
+
+export function Recovery({ connection, onOpen, onAccount }) {
   const [state, setState] = useState(null);
   const [error, setError] = useState('');
   const message = CONNECTION_MESSAGES[connection];
@@ -46,9 +67,10 @@ export function Recovery({ connection, onOpen }) {
       <h1 className="titre text-[1.5rem] font-semibold">Récupérer ton historique</h1>
       <p className="mt-2 max-w-2xl text-ekn-text/70">
         Les réunions enregistrées avant transcript dorment peut-être dans ton
-        Drive. On les retrouve, tu choisis lesquelles ranger ici — à la date où
-        elles ont eu lieu — et les originaux peuvent partir à la corbeille du
-        Drive une fois copiés.
+        Drive ou sur tes fiches Odoo. On les retrouve, tu choisis lesquelles
+        ranger ici — à la date où elles ont eu lieu. Rien n’est transcrit
+        d’office : tu lances la transcription d’une réunion quand tu en as
+        besoin.
       </p>
       {message ? (
         <p className={`mt-4 text-ekn-sm ${message[0] === 'ok' ? 'text-ekn-tone-success' : 'text-ekn-tone-error'}`}>
@@ -68,10 +90,9 @@ export function Recovery({ connection, onOpen }) {
         ) : (
           <p className="text-ekn-text-muted">Chargement…</p>
         )}
-        <UpcomingSource
-          title="Odoo"
-          text="Les vidéos jointes aux fiches et les transcriptions collées dans leur fil de discussion, avec ta clé Odoo."
-        />
+        {state ? (
+          <OdooSource configured={state.odoo} storage={state.storage} onOpen={onOpen} onAccount={onAccount} />
+        ) : null}
         <UpcomingSource
           title="Ton Mac"
           text="Un dossier à parcourir depuis Chrome, pour les enregistrements restés sur ton poste."
@@ -89,6 +110,61 @@ function UpcomingSource({ title, text }) {
         <span className="text-ekn-sm text-ekn-text-muted">bientôt</span>
       </div>
       <p className="mt-1 text-ekn-sm text-ekn-text/60">{text}</p>
+    </div>
+  );
+}
+
+function OdooSource({ configured, storage, onOpen, onAccount }) {
+  const [items, setItems] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [open, setOpen] = useState(false);
+
+  const load = () => {
+    setOpen(true);
+    setLoading(true);
+    setError('');
+    api.odooInventory()
+      .then((vue) => setItems(vue.items))
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
+  };
+
+  return (
+    <div className="verre rounded-xl p-5">
+      <h2 className="titre text-[1.0625rem] font-medium">Odoo</h2>
+      {!configured ? (
+        <div className="mt-2">
+          <p className="text-ekn-sm text-ekn-text/60">
+            Les enregistrements joints à tes fiches et à tes discussions. Il
+            faut d’abord ta clé Odoo personnelle : transcript ne voit que ce
+            que tu vois dans Odoo.
+          </p>
+          <button type="button" className="ekn-button ekn-button--subtle mt-3" onClick={onAccount}>
+            Ajouter ma clé Odoo
+          </button>
+        </div>
+      ) : !open ? (
+        <div className="mt-2">
+          <p className="text-ekn-sm text-ekn-text/60">
+            Les enregistrements joints à tes fiches et à tes discussions. Une
+            réunion récupérée depuis une fiche y reste liée, et l’original ne
+            quitte pas Odoo.
+          </p>
+          <button type="button" className="ekn-button mt-3" onClick={load}>
+            Faire l’inventaire d’Odoo
+          </button>
+        </div>
+      ) : loading && !items ? (
+        <p className="mt-3 text-ekn-sm text-ekn-text-muted">Inventaire d’Odoo…</p>
+      ) : (
+        <>
+          <Erreur>{error}</Erreur>
+          {items ? (
+            <Inventory items={items} source={ODOO} storage={storage} onReload={load} onOpen={onOpen} />
+          ) : null}
+        </>
+      )}
     </div>
   );
 }
@@ -155,7 +231,7 @@ function DriveSource({ google, storage, onGoogle, onOpen }) {
         <>
           <Erreur>{error}</Erreur>
           {items ? (
-            <Inventory items={items} storage={storage} onReload={load} onOpen={onOpen} />
+            <Inventory items={items} source={DRIVE} storage={storage} onReload={load} onOpen={onOpen} />
           ) : null}
         </>
       )}
@@ -163,7 +239,7 @@ function DriveSource({ google, storage, onGoogle, onOpen }) {
   );
 }
 
-function Inventory({ items, storage, onReload, onOpen }) {
+function Inventory({ items, source, storage, onReload, onOpen }) {
   const [filter, setFilter] = useState('meeting');
   const [selected, setSelected] = useState(() => new Set(
     items.filter((i) => (i.status === 'new' && i.kind === 'meeting') || attachable(i)).map((i) => i.id),
@@ -198,8 +274,8 @@ function Inventory({ items, storage, onReload, onOpen }) {
         // Déjà transcrite : le fichier rejoint sa réunion, il n'en crée pas
         // une seconde.
         const vue = attachable(item)
-          ? await api.driveAttach(item.id, item.job_id, trashOriginals)
-          : await api.driveImport(item.id, trashOriginals);
+          ? await source.attach(item, trashOriginals)
+          : await source.import(item, trashOriginals);
         setResults((r) => ({
           ...r,
           [item.id]: { state: 'done', jobId: vue.job_id, message: resultMessage(vue) },
@@ -214,7 +290,7 @@ function Inventory({ items, storage, onReload, onOpen }) {
   const recoveredCount = Object.values(results).filter((r) => r.state === 'done').length;
 
   if (!items.length) {
-    return <p className="mt-3 text-ekn-sm text-ekn-text/60">Aucun fichier audio ou vidéo dans ce Drive.</p>;
+    return <p className="mt-3 text-ekn-sm text-ekn-text/60">{source.empty}</p>;
   }
 
   return (
@@ -260,6 +336,7 @@ function Inventory({ items, storage, onReload, onOpen }) {
                   disabled={running || done(item)}
                   onToggle={() => toggle(item.id)}
                   onOpen={onOpen}
+                  source={source}
                 />
               ))}
             </tbody>
@@ -279,16 +356,20 @@ function Inventory({ items, storage, onReload, onOpen }) {
                 ? `${recoveredCount} fichier${recoveredCount > 1 ? 's' : ''} rangé${recoveredCount > 1 ? 's' : ''} à leur date dans ta bibliothèque`
                 : 'Coche les fichiers à récupérer'}
         </span>
-        <label className="flex items-center gap-2 text-ekn-sm text-clair/80">
-          <input
-            type="checkbox"
-            checked={trashOriginals}
-            disabled={running}
-            onChange={(e) => setTrashOriginals(e.target.checked)}
-            className="h-4 w-4 accent-turquoise"
-          />
-          Mettre les originaux à la corbeille du Drive une fois copiés (30 jours pour se raviser)
-        </label>
+        {source.trash ? (
+          <label className="flex items-center gap-2 text-ekn-sm text-clair/80">
+            <input
+              type="checkbox"
+              checked={trashOriginals}
+              disabled={running}
+              onChange={(e) => setTrashOriginals(e.target.checked)}
+              className="h-4 w-4 accent-turquoise"
+            />
+            {source.trash}
+          </label>
+        ) : source.note ? (
+          <span className="text-ekn-sm text-clair/70">{source.note}</span>
+        ) : null}
         <button
           type="button"
           disabled={running || !chosen.length || !storage}
@@ -315,11 +396,12 @@ function resultMessage(vue) {
     trashed: 'original à la corbeille du Drive',
     kept: 'original gardé (droits insuffisants pour le retirer)',
     kept_different: 'original gardé : il diffère de l’enregistrement déjà conservé',
+    left_in_odoo: vue.linked ? 'liée à sa fiche Odoo, où l’original reste' : 'original laissé dans Odoo',
   }[vue.original];
   return original ? `${rangement} · ${original}` : rangement;
 }
 
-function Row({ item, checked, result, disabled, onToggle, onOpen }) {
+function Row({ item, checked, result, disabled, onToggle, onOpen, source }) {
   const status = {
     recovered: item.recovered_by ? `déjà récupéré${item.job_id ? '' : ` par ${item.recovered_by}`}` : 'déjà récupéré',
     duplicate: 'copie d’un autre fichier de la liste',
@@ -368,8 +450,8 @@ function Row({ item, checked, result, disabled, onToggle, onOpen }) {
       <td className="whitespace-nowrap px-3 py-2 text-ekn-text/70">
         {jour(item.recorded_at)}
         {!item.recorded_at_from_name ? (
-          <span className="block text-ekn-xs text-ekn-text-muted" title="Date du dépôt dans le Drive : l’enregistrement peut être un peu plus ancien.">
-            date du Drive
+          <span className="block text-ekn-xs text-ekn-text-muted" title={`Date du dépôt dans ${source.name} : l’enregistrement peut être un peu plus ancien.`}>
+            date {source.name === 'Odoo' ? 'd’Odoo' : 'du Drive'}
           </span>
         ) : null}
       </td>
@@ -378,7 +460,7 @@ function Row({ item, checked, result, disabled, onToggle, onOpen }) {
       </td>
       <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-ekn-text/70">{fileSize(item.size)}</td>
       <td className="px-3 py-2 text-ekn-text/60">
-        {item.location.kind === 'shared_drive' ? item.location.name : LOCATION_LABELS[item.location.kind]}
+        {LOCATION_LABELS[item.location.kind] || item.location.name}
       </td>
     </tr>
   );

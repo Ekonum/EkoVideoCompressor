@@ -16,6 +16,7 @@ import app as _app_package  # noqa: F401  (installe la racine du dépôt dans sy
 
 from app.db import Database
 from app.main import create_app
+from app.odoo import OdooGateway, OdooUnavailable
 from app.recovery import build_inventory, classify, library_match, recording_date, stem
 from app.secrets import GeminiKey
 from tests.test_api import FauxStockage, _Client, _settings
@@ -80,6 +81,8 @@ class RulesTestCase(unittest.TestCase):
         for nom in ("audio.wav", "audio.vad.wav", "audio_partie_03.wav"):
             with self.subTest(nom=nom):
                 self.assertEqual(classify({"name": nom, "mimeType": "audio/wav"}), "other")
+        # Les messages vocaux des discussions d'Odoo s'appellent « audio ».
+        self.assertEqual(classify({"name": "audio", "mimeType": "audio/webm"}), "other")
         self.assertEqual(classify({"name": "audio Seyve.wav", "mimeType": "audio/wav"}), "meeting")
 
     def test_le_nom_seul_ne_suffit_pas_a_reconnaitre_une_reunion(self):
@@ -386,6 +389,133 @@ class RecoveryApiTestCase(unittest.TestCase):
         self.assertEqual(self.client.delete("/api/google").status_code, 204)
         self.assertFalse(self.client.get("/api/google").json()["connected"])
         self.assertIn("rafraichissement", self.google.revoques)
+
+
+class FausseOdoo(OdooGateway):
+    """Les pièces jointes audio et vidéo qu'Odoo montre à cette personne."""
+
+    def __init__(self, cle="cle"):
+        super().__init__(url="https://ekonum.odoo.com", database="ekonum", login="robin@ekonum.fr", api_key=cle)
+        self.pieces = {
+            11: {"id": 11, "name": "Côte de Cambon 95.m4a", "mimetype": "audio/mp4", "file_size": 12,
+                 "checksum": "sha-11", "create_date": "2026-09-21 16:34:00",
+                 "res_model": "crm.lead", "res_id": 640, "res_name": "Mairie de Cambon"},
+            12: {"id": 12, "name": "audio", "mimetype": "audio/webm", "file_size": 5,
+                 "checksum": "sha-12", "create_date": "2026-09-22 08:00:00",
+                 "res_model": "discuss.channel", "res_id": 7, "res_name": "Robin, Izaak"},
+        }
+        self.lus = []
+
+    def media_attachments(self, limit=2000):
+        return list(self.pieces.values())
+
+    def attachment(self, attachment_id, *, contenu=False):
+        if attachment_id not in self.pieces:
+            raise OdooUnavailable("Pièce jointe introuvable dans Odoo.")
+        piece = dict(self.pieces[attachment_id])
+        if contenu:
+            self.lus.append(attachment_id)
+            piece["bytes"] = b"o" * piece["file_size"]
+        return piece
+
+
+class OdooRecoveryTestCase(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.settings = _settings(Path(self._tmp.name), odoo_url="https://ekonum.odoo.com",
+                                  recovery_users=frozenset({"robin@ekonum.fr"}))
+        self.db = Database(self.settings.db_path)
+        self.odoo = FausseOdoo()
+        self.stockage = FauxStockage()
+        self.app = create_app(
+            self.settings, database=self.db,
+            gemini_key=GeminiKey(url="", token="", item="", field="", static_key="k"),
+            stockage_factory=lambda: self.stockage,
+            odoo_factory=lambda _owner: self.odoo,
+        )
+        self.client = _Client(self.app)
+        self.client.__enter__()
+        self.addCleanup(self.client.__exit__, None, None, None)
+        self.moi = self.db.user_id_for_email("robin@ekonum.fr")
+
+    def _items(self):
+        return {i["id"]: i for i in self.client.get("/api/recovery/odoo").json()["items"]}
+
+    def test_l_inventaire_dit_ou_vit_chaque_piece(self):
+        self.assertTrue(self.client.get("/api/recovery").json()["odoo"])
+        items = self._items()
+        self.assertEqual(items["11"]["kind"], "meeting")
+        self.assertEqual(items["11"]["location"], {"kind": "odoo", "name": "opportunité · Mairie de Cambon"})
+        self.assertEqual(items["11"]["recorded_at"], "2026-09-21T18:34", "Odoo date en UTC")
+        self.assertEqual(items["11"]["web_link"], "https://ekonum.odoo.com/odoo/crm.lead/640")
+        self.assertEqual(items["12"]["kind"], "other")
+        self.assertEqual(items["12"]["location"]["name"], "discussion · Robin, Izaak")
+        self.assertIn("discuss.channel_7", items["12"]["web_link"])
+
+    def test_recuperer_lie_la_reunion_a_sa_fiche_et_laisse_l_original(self):
+        vue = self.client.post("/api/recovery/odoo/11").json()
+        self.assertEqual((vue["original"], vue["linked"]), ("left_in_odoo", True))
+        fiche = self.client.get(f"/api/jobs/{vue['job_id']}/detail").json()
+        self.assertEqual(fiche["status"], "recovered")
+        self.assertTrue(fiche["video"]["presente"])
+        self.assertEqual((fiche["odoo"]["model"], fiche["odoo"]["record_id"]), ("crm.lead", 640))
+        self.assertEqual(list(self.stockage.fichiers.values()), [b"o" * 12])
+
+        # Jamais deux fois : ni par la même pièce, ni par la même empreinte.
+        self.assertEqual(self.client.post("/api/recovery/odoo/11").status_code, 409)
+        self.assertEqual((self._items()["11"]["status"], self._items()["11"]["job_id"]),
+                         ("recovered", vue["job_id"]))
+        self.odoo.pieces[13] = {**self.odoo.pieces[11], "id": 13, "res_id": 641}
+        self.assertEqual((self._items()["13"]["status"], self._items()["13"]["job_id"]),
+                         ("recovered", vue["job_id"]))
+        self.assertEqual(self.client.post("/api/recovery/odoo/13").status_code, 409)
+        self.assertEqual(self.odoo.lus, [11, 13], "la seconde n'est lue que pour être refusée")
+
+    def test_une_discussion_ne_devient_pas_une_fiche(self):
+        vue = self.client.post("/api/recovery/odoo/12").json()
+        self.assertFalse(vue["linked"])
+        self.assertIsNone(self.client.get(f"/api/jobs/{vue['job_id']}/detail").json()["odoo"]["model"])
+
+    def test_ranger_avec_une_reunion_existante(self):
+        job_id = self.db.create_job(owner_id=self.moi, filename="Côte de Cambon 95.m4a", duration_seconds=1800,
+                                    model="", language="fr", context={}, chunks=[])
+        vue = self.client.post("/api/recovery/odoo/11/attach", json={"job_id": job_id}).json()
+        self.assertEqual((vue["job_id"], vue["video"], vue["original"]), (job_id, "attached", "left_in_odoo"))
+        fiche = self.client.get(f"/api/jobs/{job_id}/detail").json()
+        self.assertTrue(fiche["video"]["presente"])
+        self.assertEqual(fiche["odoo"]["model"], "crm.lead")
+        self.assertEqual(self.client.get("/api/jobs").headers["x-total-count"], "1", "pas de seconde réunion")
+        self.assertEqual(self.client.post("/api/recovery/odoo/11/attach", json={"job_id": job_id}).status_code, 409)
+
+    def test_une_reunion_deja_liee_garde_sa_fiche_et_sa_video(self):
+        job_id = self.db.create_job(owner_id=self.moi, filename="réunion.mp4", duration_seconds=1800,
+                                    model="", language="fr", context={}, chunks=[])
+        self.db.set_odoo_link(job_id, model="project.project", record_id=3, message_id=None)
+        self.db.ouvrir_envoi_video(job_id, "", 4)
+        self.db.terminer_envoi_video(job_id, "deja-la")
+        vue = self.client.post("/api/recovery/odoo/11/attach", json={"job_id": job_id}).json()
+        self.assertEqual(vue["video"], "kept")
+        self.assertEqual(self.odoo.lus, [], "rien n'est téléchargé pour rien")
+        fiche = self.client.get(f"/api/jobs/{job_id}/detail").json()
+        self.assertEqual((fiche["odoo"]["model"], fiche["odoo"]["record_id"]), ("project.project", 3))
+
+    def test_on_ne_range_pas_avec_la_reunion_d_un_autre(self):
+        job_id = self.db.create_job(owner_id=self.db.user_id_for_email("luka@ekonum.fr"), filename="x.m4a", duration_seconds=10,
+                                    model="", language="fr", context={}, chunks=[])
+        self.assertEqual(self.client.post("/api/recovery/odoo/11/attach",
+                                          json={"job_id": job_id}).status_code, 404)
+
+    def test_sans_cle_odoo_on_le_dit(self):
+        self.odoo = FausseOdoo(cle="")
+        self.assertFalse(self.client.get("/api/recovery").json()["odoo"])
+        retour = self.client.get("/api/recovery/odoo")
+        self.assertEqual(retour.status_code, 409)
+        self.assertIn("clé Odoo", retour.json()["detail"])
+
+    def test_une_piece_absente_d_odoo(self):
+        self.assertEqual(self.client.post("/api/recovery/odoo/404").status_code, 502)
+        self.assertEqual(self.client.get("/api/jobs").headers["x-total-count"], "0")
 
 
 if __name__ == "__main__":
