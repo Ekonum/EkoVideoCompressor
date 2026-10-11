@@ -20,6 +20,11 @@ export const horodatage = (secondes) => {
 export const usd = (montant) =>
   new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'USD' }).format(montant || 0);
 
+/** Un horodatage du serveur (`created_at`, …) : sans fuseau, il est en
+ *  UTC — le navigateur, lui, le lirait à l'heure locale. */
+export const depuisUtc = (texte) =>
+  texte && !/(Z|[+-]\d\d:?\d\d)$/.test(texte) ? `${texte.replace(' ', 'T')}Z` : texte;
+
 export const jour = (iso) => {
   if (!iso) return '';
   const date = new Date(iso.replace(' ', 'T'));

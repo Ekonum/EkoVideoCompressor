@@ -14,7 +14,7 @@ from pathlib import Path
 
 import app as _app_package  # noqa: F401  (installe la racine du dépôt dans sys.path)
 
-from app.db import Database
+from app.db import Database, meeting_date_utc
 from app.main import create_app
 from app.odoo import OdooGateway, OdooUnavailable
 from app.recovery import build_inventory, classify, library_match, recording_date, stem
@@ -141,6 +141,33 @@ class RulesTestCase(unittest.TestCase):
         self.assertEqual((par_id["b"]["status"], par_id["b"]["duplicate_of"]), ("duplicate", "a"))
         self.assertEqual(par_id["c"]["status"], "new", "même nom, autre taille : un autre enregistrement")
         self.assertEqual((par_id["d"]["status"], par_id["d"]["job_id"]), ("recovered", 4))
+
+
+class MeetingDateTestCase(unittest.TestCase):
+    """Toutes les dates de réunion rangées pareil : UTC, à la minute."""
+
+    def test_une_date_sans_fuseau_est_une_heure_de_paris(self):
+        self.assertEqual(meeting_date_utc("2026-09-21T18:34"), "2026-09-21T16:34+00:00", "été")
+        self.assertEqual(meeting_date_utc("2025-12-02T10:30"), "2025-12-02T09:30+00:00", "hiver")
+        self.assertEqual(meeting_date_utc("2026-09-21T16:34:12Z"), "2026-09-21T16:34+00:00")
+        self.assertEqual(meeting_date_utc("2026-09-21T18:34+02:00"), "2026-09-21T16:34+00:00")
+        self.assertIsNone(meeting_date_utc(None))
+        self.assertIsNone(meeting_date_utc(""))
+
+    def test_les_dates_deja_rangees_sans_fuseau_sont_converties_au_demarrage(self):
+        with tempfile.TemporaryDirectory() as dossier:
+            chemin = Path(dossier) / "base.db"
+            db = Database(chemin)
+            owner = db.user_id_for_email("robin@ekonum.fr")
+            ids = [db.create_job(owner_id=owner, filename=f"{n}.m4a", duration_seconds=0, model="",
+                                 language="fr", context={}, chunks=[]) for n in range(3)]
+            with db.connect() as conn:
+                for job_id, date in zip(ids, ("2026-09-21T18:34", "2026-09-21T16:34+00:00", None)):
+                    conn.execute("UPDATE jobs SET meeting_date = ? WHERE id = ?", (date, job_id))
+            for _ in range(2):  # idempotent
+                db = Database(chemin)
+                dates = [db.get_job(i)["meeting_date"] for i in ids]
+                self.assertEqual(dates, ["2026-09-21T16:34+00:00", "2026-09-21T16:34+00:00", None])
 
 
 class FauxGoogle:
@@ -295,7 +322,7 @@ class RecoveryApiTestCase(unittest.TestCase):
         self.assertEqual(self.google.droits["f1"], [])
         fiche = self.client.get(f"/api/jobs/{vue['job_id']}/detail").json()
         self.assertEqual(fiche["status"], "recovered")
-        self.assertEqual(fiche["meeting_date"][:16], "2026-09-21T18:34")
+        self.assertEqual(fiche["meeting_date"], "2026-09-21T16:34+00:00", "18 h 34 à Paris, rangée en UTC")
         self.assertTrue(fiche["video"]["presente"])
 
         # Relancer ne récupère pas deux fois, et l'inventaire le montre.

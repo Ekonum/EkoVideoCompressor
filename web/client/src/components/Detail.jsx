@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { Bouton, Champ, DateHeure, Erreur } from './Communs.jsx';
-import { horodatage, usd, jour, mo } from '../format.js';
+import { depuisUtc, horodatage, usd, jour, mo } from '../format.js';
 import { useArchivage } from '../archivage.js';
 import { AvancementArchivage } from './Nouveau.jsx';
 import { MOD, useRaccourcis } from '../raccourcis.js';
@@ -122,7 +122,7 @@ export function Detail({ jobId, recherche = '', surRetour, surRetraiter }) {
       </p>
       <DateReunion
         jobId={jobId}
-        valeur={fiche.meeting_date || fiche.created_at}
+        valeur={fiche.meeting_date || depuisUtc(fiche.created_at)}
         deduite={!fiche.meeting_date}
         surMaj={recharger}
         surErreur={setErreur}
