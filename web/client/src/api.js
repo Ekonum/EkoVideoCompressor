@@ -22,9 +22,10 @@ async function call(method, url, body) {
 
 export const api = {
   /** Une page de la bibliothèque, triée par le serveur, et son total. */
-  listJobs: async (etat = 'actif', { sort = 'date', order = 'desc', page = 1, perPage = 50 } = {}) => {
+  listJobs: async (etat = 'actif', { sort = 'date', order = 'desc', page = 1, perPage = 50, status = '' } = {}) => {
     const response = await fetch(
-      `/api/jobs?etat=${etat}&sort=${sort}&order=${order}&page=${page}&per_page=${perPage}`,
+      `/api/jobs?etat=${etat}&sort=${sort}&order=${order}&page=${page}&per_page=${perPage}`
+      + (status ? `&status=${status}` : ''),
     );
     if (!response.ok) throw new Error(await detail(response));
     return { items: await response.json(), total: Number(response.headers.get('X-Total-Count') || 0) };

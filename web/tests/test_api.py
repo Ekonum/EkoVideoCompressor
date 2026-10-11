@@ -2600,6 +2600,21 @@ class CorbeilleTestCase(_Fixture):
         return [j["job_id"] for j in
                 self.client.get(f"/api/jobs?etat={etat}").json()]
 
+    def test_le_filtre_par_statut_resserre_l_etat_et_le_total(self):
+        """« Récupérées » se lit dans la bibliothèque : le statut s'ajoute
+        à l'état, et le total suit, pour paginer."""
+        recuperee = self._importee("Récupérée")
+        jetee = self._importee("Jetée")
+        self._importee("Terminée")
+        with self.db.connect() as conn:
+            conn.execute("UPDATE jobs SET status = 'recovered' WHERE id IN (?, ?)",
+                         (recuperee, jetee))
+        self.client.delete(f"/api/jobs/{jetee}")
+        reponse = self.client.get("/api/jobs?status=recovered")
+        self.assertEqual([j["job_id"] for j in reponse.json()], [recuperee])
+        self.assertEqual(reponse.headers["X-Total-Count"], "1")
+        self.assertEqual(len(self._liste()), 2)
+
     def test_jeter_sort_de_la_bibliotheque_sans_rien_perdre(self):
         job_id = self._importee()
         self.assertEqual(self.client.delete(f"/api/jobs/{job_id}").status_code, 204)

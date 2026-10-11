@@ -277,7 +277,7 @@ function Retraiter({ fiche, jobId, surRetraiter }) {
         Le traitement relit la vidéo stockée, sans rien déposer dans Odoo
         d'office ; une vidéo lourde peut être allégée au passage.
       </p>
-      <Bouton className="mt-3" onClick={lancer}>Retraiter</Bouton>
+      <Bouton variante="discret" className="ekn-button--compact mt-3" onClick={lancer}>Retraiter</Bouton>
     </div>
   );
 }
