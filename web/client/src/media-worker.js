@@ -194,8 +194,12 @@ async function compresser({ file, handle, profile, trim }) {
   const debut = performance.now();
   try {
     const writable = await handle.createWritable();
+    const input = new Input({ formats: ALL_FORMATS, source: sourceOf(file) });
+    // L'encodeur AAC du navigateur n'accepte que 44,1 ou 48 kHz : un mémo
+    // vocal en 16 kHz échouerait (« Encoding error »), on le rééchantillonne.
+    const frequence = (await input.getPrimaryAudioTrack())?.sampleRate;
     const conversion = await Conversion.init({
-      input: new Input({ formats: ALL_FORMATS, source: sourceOf(file) }),
+      input,
       output: new Output({
         format: new Mp4OutputFormat(),
         target: new StreamTarget(writable),
@@ -213,6 +217,7 @@ async function compresser({ file, handle, profile, trim }) {
       audio: {
         codec: 'aac',
         numberOfChannels: 1,
+        ...(frequence && ![44100, 48000].includes(frequence) ? { sampleRate: 48000 } : {}),
         quality: new Quality({ bitrate: profile.audioBitrate }),
       },
     });
