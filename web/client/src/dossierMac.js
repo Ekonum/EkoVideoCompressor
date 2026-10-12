@@ -13,6 +13,13 @@ const MEDIA = new Set([
 // photothèque et les projets iMovie ont leurs propres outils.
 const PAQUETS = /\.(app|photoslibrary|imovielibrary|fcpbundle|logicx|band|bundle|framework|plugin|tvlibrary|musiclibrary)$/i;
 const IGNORES = new Set(['Library', 'node_modules', 'Applications']);
+// Les dossiers de travail de l'ancienne app macOS (« 20260604-221454 -
+// Titre ») gardent, à côté de la vidéo compressée, ses étapes : audio
+// extrait, échantillons de voix, anciennes versions. Ce ne sont pas des
+// réunions, seulement des morceaux de celle qui est déjà là.
+const TRAVAIL_APP = /(^|\/)\d{8}-\d{6} - [^/]+\/(versions|speaker_samples|audio_recheck_clips)(\/|$)/;
+const AUDIO_APP = /(^|\/)\d{8}-\d{6} - [^/]+\/audio(_partie_\d+|\.diar|\.vad)?\.wav$/;
+const travailApp = (chemin) => TRAVAIL_APP.test(chemin) || AUDIO_APP.test(chemin);
 // En dessous, ce n'est pas une réunion : un son système, une notification.
 const TAILLE_MIN = 50 * 1024;
 // Ce que l'empreinte lit au début et à la fin de chaque fichier.
@@ -35,6 +42,7 @@ export async function parcourirDossier(dossier, surAvancee) {
     for await (const entree of poignee.values()) {
       if (ignore(entree.name)) continue;
       const ici = chemin ? `${chemin}/${entree.name}` : entree.name;
+      if (travailApp(entree.kind === 'directory' ? `${ici}/` : ici)) continue;
       if (entree.kind === 'directory') {
         await visiter(entree, ici);
       } else {
@@ -55,7 +63,7 @@ export async function parcourirDossier(dossier, surAvancee) {
 export function lireSelection(fichiers) {
   return Array.from(fichiers)
     .filter((f) => !f.webkitRelativePath.split('/').slice(0, -1).some(ignore))
-    .filter((f) => !ignore(f.name) && retenu(f))
+    .filter((f) => !ignore(f.name) && retenu(f) && !travailApp(f.webkitRelativePath || f.name))
     .map((f) => ({ chemin: f.webkitRelativePath || f.name, fichier: f }));
 }
 

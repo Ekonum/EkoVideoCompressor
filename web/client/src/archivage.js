@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { PROFIL } from './useCompression.js';
+import { remoteFile } from './fileQueue.js';
 
 /** Archivage de la vidéo compressée : compresser, puis envoyer.
  *
@@ -140,4 +141,20 @@ export async function archiver({ fichier, trim = null, cible }) {
   } finally {
     await racine.removeEntry(nom).catch(() => {});
   }
+}
+
+// Une compression à la fois : deux en parallèle se disputeraient le
+// processeur sans finir plus tôt.
+let file = Promise.resolve();
+
+/** Alléger la vidéo stockée d'une réunion déjà transcrite : relue depuis
+ *  le stockage froid, compressée sur ce poste, et remise à sa place si
+ *  elle en sort plus légère. La transcription n'est pas touchée. */
+export function alleger(job) {
+  publier(job.job_id, { etape: 'attente', progression: 0, erreur: '' });
+  file = file.then(() => archiver({
+    fichier: remoteFile(job),
+    cible: { cle: `alleger-${job.job_id}`, jobId: job.job_id },
+  }));
+  return file;
 }

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { Bouton, Champ, DateHeure, Erreur } from './Communs.jsx';
 import { depuisUtc, horodatage, usd, jour, mo } from '../format.js';
-import { useArchivage } from '../archivage.js';
+import { alleger, useArchivage } from '../archivage.js';
 import { AvancementArchivage } from './Nouveau.jsx';
 import { MOD, useRaccourcis } from '../raccourcis.js';
 import { MediaPlayer } from './MediaPlayer.jsx';
@@ -151,6 +151,7 @@ export function Detail({ jobId, recherche = '', surRetour, surRetraiter }) {
             </div>
           </div>
           <Video jobId={jobId} video={fiche.video} filename={fiche.filename} surMaj={recharger}
+                 duree={fiche.duration_seconds} meetingDate={fiche.meeting_date}
                  lecteur={lecteur} surTemps={setEcoute} />
           {trouver ? (
             <div className="mt-3 flex items-center gap-2 rounded-lg border border-bord bg-ekn-field px-3 py-1.5">
@@ -353,11 +354,20 @@ function enCours(segments, rang, instant) {
 }
 
 const AUDIO = /\.(m4a|mp3|wav|aac|flac|ogg|opus|amr|weba)$/i;
+// Au-delà, une vidéo n'a pas été compressée au format de transcript.
+const DEBIT_LOURD = 1_000_000;
+// Sans durée, seule la taille parle : une heure compressée pèse ~150 Mo.
+const TAILLE_LOURDE = 200 * 1024 * 1024;
 
-function Video({ jobId, video, filename, surMaj, lecteur, surTemps }) {
+function Video({ jobId, video, filename, duree, meetingDate, surMaj, lecteur, surTemps }) {
   const audio = AUDIO.test(filename || '');
   const tache = useArchivage(jobId);
-  const [etape, setEtape] = useState('repos'); // repos → question → lecture
+  const [etape, setEtape] = useState('repos'); // repos → question → lecture | allegement
+  // Sans durée connue (réunion récupérée pas encore transcrite), on s'en
+  // tient à la taille ; la compression gardera de toute façon l'originale
+  // si elle était déjà légère.
+  const lourde = !audio && video?.octets > 0
+    && (duree ? (video.octets * 8) / duree > DEBIT_LOURD : video.octets > TAILLE_LOURDE);
 
   useEffect(() => {
     if (tache?.etape === 'termine') surMaj();
@@ -407,19 +417,57 @@ function Video({ jobId, video, filename, surMaj, lecteur, surTemps }) {
             </button>
           </div>
         </>
+      ) : etape === 'allegement' ? (
+        <>
+          <p className="titre text-[0.9375rem] font-medium">Alléger la vidéo ?</p>
+          <p className="mt-1 text-ekn-sm text-ekn-text/70">
+            Elle pèse {mo(video.octets)}{duree ? `, ${Math.round((video.octets * 8) / duree / 1000)} kbit/s` : ''} :
+            elle n’a pas été compressée au format de transcript. Elle est en <strong>stockage froid</strong> : la relire une fois coûte
+            davantage que la garder, mais elle en ressort environ dix fois plus légère — 720p, HEVC, compressée
+            sur ce poste. Si elle n’en sort pas plus légère, on garde celle qui y est. La transcription ne change pas.
+          </p>
+          <div className="mt-3 flex gap-2">
+            <Bouton
+              onClick={() => {
+                setEtape('repos');
+                alleger({ job_id: jobId, filename, video_bytes: video.octets, meeting_date: meetingDate });
+              }}
+            >
+              Alléger
+            </Bouton>
+            <button
+              type="button"
+              onClick={() => setEtape('repos')}
+              className="ekn-button ekn-button--subtle"
+            >
+              Pas maintenant
+            </button>
+          </div>
+        </>
       ) : (
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-ekn-sm text-ekn-text/70">
             {audio ? 'Enregistrement archivé' : 'Vidéo archivée'}{video.octets ? ` — ${mo(video.octets)}` : ''}, en
             stockage froid.
           </p>
-          <button
-            type="button"
-            onClick={() => setEtape('question')}
-            className="ekn-button ekn-button--subtle ekn-button--compact"
-          >
-            {audio ? 'Écouter' : 'Regarder'}
-          </button>
+          <div className="flex gap-2">
+            {lourde ? (
+              <button
+                type="button"
+                onClick={() => setEtape('allegement')}
+                className="ekn-button ekn-button--subtle ekn-button--compact"
+              >
+                Alléger
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => setEtape('question')}
+              className="ekn-button ekn-button--subtle ekn-button--compact"
+            >
+              {audio ? 'Écouter' : 'Regarder'}
+            </button>
+          </div>
         </div>
       )}
     </div>

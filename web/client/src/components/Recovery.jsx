@@ -441,9 +441,10 @@ function DriveSource({ google, storage, onGoogle, onOpen }) {
 
 function Inventory({ items, source, storage, onReload, onOpen }) {
   const [filter, setFilter] = useState('meeting');
-  const [selected, setSelected] = useState(() => new Set(
-    items.filter((i) => (i.status === 'new' && i.kind === 'meeting') || attachable(i)).map((i) => i.id),
-  ));
+  const [selected, setSelected] = useState(() => new Set([
+    ...items.filter((i) => i.status === 'new' && i.kind === 'meeting').map((i) => i.id),
+    ...plusLegerParReunion(items.filter(attachable)).map((i) => i.id),
+  ]));
   const [trashOriginals, setTrashOriginals] = useState(true);
   const [results, setResults] = useState({}); // id → { state, message, jobId }
   const [running, setRunning] = useState(false);
@@ -597,6 +598,18 @@ function Inventory({ items, source, storage, onReload, onOpen }) {
 // Un fichier qui enregistre une réunion déjà à soi dans transcript : on le
 // range avec elle plutôt que d'en créer une seconde.
 const attachable = (item) => item.status === 'in_library' && Boolean(item.job_id);
+
+/** Plusieurs fichiers pour une même réunion (l'original, sa version
+ *  compressée, une copie) : seul le plus léger est coché d'office — la
+ *  réunion ne garde qu'une vidéo, la première envoyée. */
+function plusLegerParReunion(items) {
+  const retenus = new Map();
+  for (const item of items) {
+    const deja = retenus.get(item.job_id);
+    if (!deja || Number(item.size) < Number(deja.size)) retenus.set(item.job_id, item);
+  }
+  return [...retenus.values()];
+}
 
 function resultMessage(vue, source) {
   const rangement = vue.video === 'attached'
