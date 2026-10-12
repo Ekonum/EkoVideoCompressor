@@ -912,6 +912,7 @@ function Reunions({ surChoix }) {
  *  La fiche de la réunion prend le relais une fois qu'on l'a ouverte. */
 export function AvancementArchivage({ tache }) {
   const libelle = {
+    attente: 'En attente : une autre vidéo est en cours de compression',
     compression: 'Compression sur ce poste',
     envoi: 'Envoi vers le stockage froid',
     termine: tache.note ? 'Vidéo conservée' : 'Vidéo archivée',
