@@ -67,11 +67,11 @@ async function compresserVers(fichier, trim, poignee, surProgression) {
   });
 }
 
-async function envoyer(jobId, blob, surProgression, remplacer) {
+async function envoyer(jobId, blob, type, surProgression, remplacer) {
   const ouverture = await fetch(`/api/jobs/${jobId}/video`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ taille: blob.size, type: 'video/mp4', remplacer }),
+    body: JSON.stringify({ taille: blob.size, type, remplacer }),
   });
   if (!ouverture.ok) throw new Error((await ouverture.json()).detail || 'Envoi refusé.');
   const { morceau } = await ouverture.json();
@@ -105,7 +105,7 @@ export async function envoyerMorceaux(jobId, blob, morceau, surProgression) {
  *  aussitôt, le traitement est créé en parallèle, et l'envoi attend les
  *  deux.
  */
-export async function archiver({ fichier, trim = null, cible }) {
+export async function archiver({ fichier, trim = null, cible, audio = false }) {
   const cle = cible.cle;
   publier(cle, { etape: 'compression', progression: 0, erreur: '' });
   const racine = await navigator.storage.getDirectory();
@@ -131,11 +131,15 @@ export async function archiver({ fichier, trim = null, cible }) {
       });
       return;
     }
+    // Un enregistrement déjà léger (un mémo vocal, souvent) part tel quel :
+    // le recompresser l'alourdirait. Rogné, il faut la version coupée.
+    const garde = !fichier.remote && !trim && fichier.size <= compresse.size ? fichier : compresse;
+    const type = garde === fichier && fichier.type ? fichier.type : (audio ? 'audio/mp4' : 'video/mp4');
     await envoyer(
-      cible.jobId, compresse, (p) => publier(cible.jobId, { progression: p }),
+      cible.jobId, garde, type, (p) => publier(cible.jobId, { progression: p }),
       Boolean(fichier.remote),
     );
-    publier(cible.jobId, { etape: 'termine', progression: 1, octets: compresse.size });
+    publier(cible.jobId, { etape: 'termine', progression: 1, octets: garde.size });
   } catch (erreur) {
     publier(cible.jobId ?? cle, { etape: 'erreur', erreur: erreur.message });
   } finally {

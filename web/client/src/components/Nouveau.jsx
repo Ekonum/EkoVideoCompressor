@@ -32,6 +32,11 @@ function versChampLocal(date) {
  *  jamais été compressée : la retraiter propose de la remplacer par sa
  *  version légère (environ 0,2 Mbit/s). */
 const DEBIT_A_COMPRESSER = 1_000_000;
+/** Un enregistrement sans image : il est gardé avec la réunion, comme une
+ *  vidéo, mais il n'y a rien à choisir — seule sa piste audio compte. */
+const AUDIO_SEUL = /\.(m4a|mp3|wav|aac|flac|ogg|opus|amr|caf|aiff?|weba)$/i;
+const audioSeul = (fichier) => Boolean(fichier)
+  && (fichier.type?.startsWith('audio/') || AUDIO_SEUL.test(fichier.name || ''));
 
 /** Au-dessous de ce poids, le fichier est copié en mémoire dès qu'on le
  *  choisit. Un mémo vocal synchronisé par iCloud peut être réécrit sur le
@@ -229,11 +234,15 @@ export function Nouveau({ surTermine, surBibliotheque }) {
         if (modeChoisi.current === null) modeChoisi.current = mode;
         setMode(choisi.size * 8 > total * DEBIT_A_COMPRESSER ? 'les-deux' : 'transcrire');
         setLecture(`${mo(choisi.size)} · ${duree(total)} · vidéo déjà stockée avec la réunion`);
+      } else if (audioSeul(choisi)) {
+        // Rien à compresser à part : il est transcrit, et gardé.
+        if (modeChoisi.current === null) modeChoisi.current = mode;
+        setMode('transcrire');
       } else if (modeChoisi.current !== null) {
         setMode(modeChoisi.current);
         modeChoisi.current = null;
       }
-      if (mode !== 'compresser') ecouter(choisi, total, debutReunion.toISOString());
+      if (mode !== 'compresser' || audioSeul(choisi)) ecouter(choisi, total, debutReunion.toISOString());
     } catch (e) {
       setFichier(null);
       setLecture(`Fichier illisible : ${e.message}`);
@@ -437,13 +446,15 @@ export function Nouveau({ surTermine, surBibliotheque }) {
         <div>
           <h2 className="titre text-[1.0625rem] font-medium">2. Que faire de ce fichier</h2>
           <div className="mt-3 flex flex-wrap gap-2">
-            {[
+            {(audioSeul(fichier) && !fichier.remote ? [['transcrire', 'Transcrire']] : [
               ['transcrire', 'Transcrire'],
               // La vidéo d'une réunion retraitée est déjà stockée : la
               // compresser n'a de sens que pour l'y remplacer.
               ...(fichier?.remote ? [] : [['compresser', 'Compresser']]),
-              ['les-deux', fichier?.remote ? 'Transcrire et alléger la vidéo' : 'Les deux'],
-            ].map(([cle, libelle]) => (
+              ['les-deux', fichier?.remote
+                ? `Transcrire et alléger ${audioSeul(fichier) ? 'l’enregistrement' : 'la vidéo'}`
+                : 'Les deux'],
+            ]).map(([cle, libelle]) => (
               <button
                 key={cle}
                 type="button"
@@ -459,7 +470,15 @@ export function Nouveau({ surTermine, surBibliotheque }) {
               </button>
             ))}
           </div>
-          {mode === 'les-deux' && fichier?.remote ? (
+          {audioSeul(fichier) && !fichier.remote ? (
+            videoDisponible ? (
+              <p className="mt-2 text-ekn-sm text-ekn-text-muted">
+                L’enregistrement est gardé avec la réunion, en stockage froid,
+                pour pouvoir le réécouter. S’il est lourd, il est d’abord
+                compressé sur ce poste (AAC mono, environ 30 Mo par heure).
+              </p>
+            ) : null
+          ) : mode === 'les-deux' && fichier?.remote ? (
             <p className="mt-2 text-ekn-sm text-ekn-text-muted">
               La vidéo stockée ({mo(fichier.size)}) est relue, compressée sur ce
               poste — 720p, HEVC — puis remplace l’originale en stockage froid.
@@ -607,12 +626,15 @@ export function Nouveau({ surTermine, surBibliotheque }) {
               const borne = debut > 0 || (fin && fin < secondes)
                 ? { start: debut, end: fin || secondes }
                 : null;
-              if (mode === 'les-deux' && videoDisponible) {
+              // Un enregistrement audio est toujours gardé : il n'y a pas
+              // de « Compresser » à choisir pour lui.
+              const garderAudio = audioSeul(fichier) && !fichier.remote;
+              if ((mode === 'les-deux' || garderAudio) && videoDisponible) {
                 // Retraitée, la réunion existe déjà : l'envoi n'a pas à
                 // attendre sa création.
                 const cible = { cle: `nouveau-${Date.now()}`, jobId: fichier.remote?.jobId ?? null };
                 cibleRef.current = cible;
-                archiver({ fichier, trim: borne, cible });
+                archiver({ fichier, trim: borne, cible, audio: audioSeul(fichier) });
               } else if (mode !== 'transcrire') {
                 compression.compresser(fichier, borne);
               }
