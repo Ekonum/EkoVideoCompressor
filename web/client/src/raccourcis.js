@@ -12,10 +12,15 @@ export const MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(na
 export const MOD = MAC ? '⌘' : 'Ctrl';
 export const ALT = MAC ? '⌥' : 'Alt';
 
+// Une pastille ou une case cochée est un <input>, mais on n'y tape rien :
+// les raccourcis doivent y rester actifs.
+const SANS_SAISIE = new Set(['radio', 'checkbox', 'button', 'submit', 'reset', 'range', 'color', 'file']);
+
 function enSaisie(cible) {
   if (!cible) return false;
   const balise = cible.tagName;
-  return balise === 'INPUT' || balise === 'TEXTAREA' || balise === 'SELECT' || cible.isContentEditable;
+  if (balise === 'INPUT') return !SANS_SAISIE.has(cible.type);
+  return balise === 'TEXTAREA' || balise === 'SELECT' || cible.isContentEditable;
 }
 
 function correspond(evenement, combinaison) {

@@ -219,7 +219,12 @@ export function Detail({ jobId, recherche = '', surRetour, surRetraiter }) {
                     )}
                     <span>
                       {s.speaker ? (
-                        <span className="titre mr-2 font-medium text-ekn-text">{s.speaker}</span>
+                        // Le nom en couleur de marque, sauf sur la ligne mise
+                        // en avant : le turquoise sur turquoise y tombe sous 4,5:1.
+                        <strong className={`titre mr-2 ${
+                          surlignee === rang || enCours(fiche.segments, rang, ecoute)
+                            ? 'font-semibold text-ekn-text' : 'ekn-emphasis'
+                        }`}>{s.speaker}</strong>
                       ) : null}
                       {trouver?.terme.trim()
                         ? surligner(s.text, trouver.terme, actuelle?.rang === rang ? actuelle.k : -1)

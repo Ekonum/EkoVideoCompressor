@@ -1,6 +1,6 @@
-/*! ekonum-ui 3.11.1 — Ekonum brand (Brand Guidelines, BolimDesign 2025) */
+/*! ekonum-ui 3.15.0 — Ekonum brand (Brand Guidelines, BolimDesign 2025) */
 /*  Fonts are separate: fonts/fonts.css, to be served by the application. */
-:root { --ekn-version: "3.11.1"; }
+:root { --ekn-version: "3.15.0"; }
 
 /* ── src/tokens.css ── */
 /* ──────────────────────────────────────────────────────────────────────────
@@ -82,6 +82,7 @@
   --ekn-on-tile:      var(--ekn-turquoise);   /* pictogram on the icon tile */
   --ekn-halo:         rgba(2, 26, 26, 0);   /* hairline that detaches a thin mark from the bright colour it crosses (the audio playhead over the kept part): none on light, dark green on dark */
   --ekn-underline:    var(--ekn-success-dark);   /* underline of a link, which keeps the text colour: turquoise's dark shade on light (4.5:1; turquoise itself 1.6:1), turquoise on dark */
+  --ekn-emphasis:     var(--ekn-success-dark);   /* text set apart by the brand colour — a speaker's name, a short heading: turquoise's dark shade on light (5.4:1 on white; turquoise itself 1.9:1), turquoise on dark. On a hovered or selected row, the text colour (3.9 and 4.2:1 there). Not a state: a status says it in words */
 
   /* categorical series of a chart: one colour per category, always in this
      order, never a meaning of state (that is status). Measured against both
@@ -193,6 +194,7 @@
   --ekn-on-tile:        var(--ekn-dark-green);
   --ekn-halo:           var(--ekn-dark-green);
   --ekn-underline:      var(--ekn-turquoise);
+  --ekn-emphasis:       var(--ekn-turquoise);
   --ekn-series-1:       var(--ekn-turquoise);
   --ekn-series-2:       #B98AE8;
   --ekn-series-3:       #F08A4B;
@@ -229,6 +231,7 @@
     --ekn-on-tile:        var(--ekn-dark-green);
     --ekn-halo:           var(--ekn-dark-green);
     --ekn-underline:      var(--ekn-turquoise);
+    --ekn-emphasis:       var(--ekn-turquoise);
     --ekn-series-1:       var(--ekn-turquoise);
     --ekn-series-2:       #B98AE8;
     --ekn-series-3:       #F08A4B;
@@ -267,6 +270,7 @@
   --ekn-on-tile:        var(--ekn-turquoise);
   --ekn-halo:           rgba(2, 26, 26, 0);
   --ekn-underline:      var(--ekn-success-dark);
+  --ekn-emphasis:       var(--ekn-success-dark);
   --ekn-series-1:       #0E8A73;
   --ekn-series-2:       var(--ekn-violet);
   --ekn-series-3:       #C2571A;
@@ -567,6 +571,66 @@ input.ekn-input::-webkit-calendar-picker-indicator { cursor: pointer; opacity: .
 .ekn-filters > * { flex: 1 1 10rem; min-width: 0; }
 .ekn-filters > .ekn-date-range { flex-basis: 18rem; }
 .ekn-filters > .ekn-button { flex: 0 0 auto; }
+
+/* ── Table toolbar ──────────────────────────────────────────────────────────
+   One light line above a table: a search, a filter by state, the actions. Asked
+   for on transcript, where a 44 px search field with its label, and a « Show »
+   select above the table, weighed on a desktop screen.
+     <div class="ekn-toolbar">
+       <label class="ekn-search"><input class="ekn-input ekn-input--compact" type="search"
+         aria-label="Rechercher dans les transcriptions" placeholder="Rechercher"></label>
+       <fieldset class="ekn-chips"><legend>État</legend>
+         <label><input type="radio" name="state" value="" checked>Toutes</label>
+         <label><input type="radio" name="state" value="error">En erreur</label>
+       </fieldset>
+       <div class="ekn-toolbar__end"><button class="ekn-button ekn-button--compact">Importer</button></div>
+     </div> */
+
+/* Compact field: 32 px with a mouse; 44 px under a finger, where the target matters.
+   14 px text with a mouse only: below 16 px, iOS Safari zooms into the field. */
+@media (pointer: fine) {
+  .ekn-input--compact { min-height: 2rem; padding: var(--ekn-space-1) var(--ekn-space-3); font-size: var(--ekn-text-sm); }
+  select.ekn-input--compact { padding-right: var(--ekn-space-6); background-position: right 1.05rem center, right .7rem center; }
+}
+
+/* Search: a magnifying glass instead of a visible label, which goes into aria-label.
+   The glass is a mask — only its shape is read — painted in the muted text colour. */
+.ekn-search { position: relative; display: block; min-width: 0; }
+.ekn-search::before {
+  content: ""; position: absolute; left: var(--ekn-space-3); top: 50%; width: 1rem; height: 1rem;
+  translate: 0 -50%; pointer-events: none; background: var(--ekn-text-muted);
+  --ekn-search-glass: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill-rule='evenodd' d='M10.5 3a7.5 7.5 0 1 0 0 15 7.5 7.5 0 0 0 0-15Zm0 2.5a5 5 0 1 1 0 10 5 5 0 0 1 0-10Z'/%3E%3Cpath d='m15.2 17 1.8-1.8 4.8 4.8-1.8 1.8Z'/%3E%3C/svg%3E");
+  -webkit-mask: var(--ekn-search-glass) center / contain no-repeat; mask: var(--ekn-search-glass) center / contain no-repeat;
+}
+.ekn-search > .ekn-input { padding-left: calc(var(--ekn-space-3) + 1rem + var(--ekn-space-2)); }
+input.ekn-input[type="search"] { -webkit-appearance: none; appearance: none; }
+
+.ekn-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ekn-space-2) var(--ekn-space-3); }
+.ekn-toolbar > .ekn-search { flex: 1 1 14rem; max-width: 22rem; }
+.ekn-toolbar__end { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ekn-space-2); margin-left: auto; }
+
+/* Chips: one choice among a few values that filter what is below — all rows, the
+   finished ones, those in error. Native radios: the keyboard, a form sent without
+   JavaScript and screen readers work as they are; the legend is read, not shown.
+   The chosen value takes the action colour, like a pressed button. Same heights as
+   the compact field. Four or five values at most: beyond that, a select. */
+.ekn-chips { display: flex; flex-wrap: wrap; gap: var(--ekn-space-2); border: 0; margin: 0; padding: 0; min-width: 0; }
+.ekn-chips > legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.ekn-chips > label {
+  position: relative; display: inline-flex; align-items: center; gap: var(--ekn-space-1);
+  min-height: var(--ekn-target); padding: 0 var(--ekn-space-4); box-sizing: border-box;
+  font-family: var(--ekn-font-heading); font-weight: 600; font-size: var(--ekn-text-sm); letter-spacing: var(--ekn-tracking);
+  white-space: nowrap; color: var(--ekn-text); cursor: pointer;
+  border: 1px solid var(--ekn-border-strong); border-radius: var(--ekn-radius-pill);
+}
+/* The radio covers its chip: the whole chip is the target, and its size is the chip's. */
+.ekn-chips > label > input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.ekn-chips > label:hover { background: var(--ekn-hover); }
+.ekn-chips > label:has(:checked) { background: var(--ekn-action); border-color: var(--ekn-action); color: var(--ekn-on-action); }
+.ekn-chips > label:has(:focus-visible) { outline: 2px solid var(--ekn-focus); outline-offset: 2px; }
+@media (pointer: fine) {
+  .ekn-chips > label { min-height: 2rem; padding: 0 var(--ekn-space-3); }
+}
 
 /* Checkboxes and radio buttons: native, 24 px (WCAG 2.5.8 minimum). */
 .ekn-option {
@@ -1259,6 +1323,18 @@ button.ekn-account:hover { background: var(--ekn-hover-inverse); }
 }
 .ekn-link:hover, .ekn :where(a):hover { text-decoration-thickness: 2px; }
 .ekn-link:focus-visible { outline: 2px solid var(--ekn-focus); outline-offset: 2px; border-radius: 2px; }
+
+/* Emphasis: a few words set apart by the brand colour — a speaker's name, a
+   short heading — and by weight, so colour is never the only sign. Turquoise's
+   dark shade on light (5.4:1 on white), turquoise on dark. Not a state: a
+   status says it in words. On a hovered or selected row and on a passage
+   reached, it falls back to the text colour: 3.9 and 4.2:1 on those
+   backgrounds, which already set the line apart.
+     <strong class="ekn-emphasis">Claire Martin</strong> */
+.ekn-emphasis { color: var(--ekn-emphasis); font-weight: 600; }
+.ekn-table tbody tr:is(:hover, [aria-selected="true"]) .ekn-emphasis,
+.ekn-row[aria-selected="true"] .ekn-emphasis,
+.ekn-passage:target .ekn-emphasis { color: var(--ekn-text); }
 
 /* A passage reached from elsewhere — a "to check" item that scrolls the
    transcript to its sentence. The anchor lands clear of a sticky header, and
