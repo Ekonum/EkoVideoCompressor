@@ -7,6 +7,7 @@ import { archiver, useArchivage } from '../archivage.js';
 import { Apercu } from './Apercu.jsx';
 import { Sonde } from './Sonde.jsx';
 import { interrompre, reprendre, usePipeline } from '../usePipeline.js';
+import { avancementGlobal } from '../progression.js';
 import {
   consumeLaunchRequest, enqueue, isMedia, removeFromQueue, takeNext, useFileDrag, useFileQueue,
 } from '../fileQueue.js';
@@ -76,7 +77,11 @@ export function Nouveau({ surTermine, surBibliotheque }) {
   // Le champ fichier garde sa sélection tant qu'on ne le vide pas : sans
   // cela, « Lancer une autre transcription » montrait encore l'ancien.
   const champFichier = useRef(null);
-  const archivage = useArchivage(cibleRef.current?.cle);
+  // L'archivage change de clé en route : sous sa clé provisoire pendant la
+  // compression, sous le numéro de la réunion pour l'envoi.
+  const archivageProvisoire = useArchivage(cibleRef.current?.cle);
+  const archivageEnvoi = useArchivage(cibleRef.current?.jobId);
+  const archivage = cibleRef.current ? archivageEnvoi || archivageProvisoire : null;
   const [sonde, setSonde] = useState(null);
   const [dossier, setDossier] = useState(null);
   // Une sonde lancée pour un fichier ne doit pas répondre pour le
@@ -629,6 +634,7 @@ export function Nouveau({ surTermine, surBibliotheque }) {
               // Un enregistrement audio est toujours gardé : il n'y a pas
               // de « Compresser » à choisir pour lui.
               const garderAudio = audioSeul(fichier) && !fichier.remote;
+              cibleRef.current = null;
               if ((mode === 'les-deux' || garderAudio) && videoDisponible) {
                 // Retraitée, la réunion existe déjà : l'envoi n'a pas à
                 // attendre sa création.
@@ -690,15 +696,19 @@ export function Nouveau({ surTermine, surBibliotheque }) {
           </div>
         ) : null}
         <Erreur>{compression.erreur}</Erreur>
-        {archivage ? <AvancementArchivage tache={archivage} /> : null}
-        <Compression compression={compression} />
-
-        {pipeline.fenetres.length > 0 ? (
+        {pipeline.fenetres.length > 0 || pipeline.etat === 'creation' ? (
           <Avancement
             numero={mode === 'compresser' ? 3 : 4}
-            fenetres={pipeline.fenetres}
-            message={pipeline.message}
+            pipeline={pipeline}
+            video={archivage || (mode !== 'transcrire' ? compressionEnTache(compression) : null)}
           />
+        ) : archivage ? (
+          <AvancementArchivage tache={archivage} />
+        ) : (
+          <Compression compression={compression} />
+        )}
+        {pipeline.fenetres.length > 0 && compression.resultat ? (
+          <Compression compression={compression} />
         ) : null}
 
         {pipeline.etat === 'traitement' || pipeline.etat === 'interrompu' ? (
@@ -769,51 +779,120 @@ const LIBELLES = {
   erreur: 'erreur',
 };
 
-/** Avancement par fenêtre.
+/** La compression « Enregistrer sous », quand elle tourne à côté d'une
+ *  transcription : la barre la compte comme un archivage. */
+function compressionEnTache(compression) {
+  if (compression.etat === 'repos' && !compression.resultat) return null;
+  return {
+    etape: compression.resultat ? 'termine' : compression.etat === 'repos' ? 'erreur' : 'compression',
+    progression: compression.progression,
+  };
+}
+
+const ETAPES_VIDEO = {
+  attente: 'en attente d’une autre compression',
+  compression: 'compression sur ce poste',
+  envoi: 'envoi vers le stockage froid',
+};
+
+/** Une seule barre pour tout le traitement.
  *
- *  Une ligne par fenêtre plutôt qu'une barre unique : sur une réunion de
- *  trois heures, savoir *laquelle* patine est la seule information qui
+ *  Compression, envoi et transcription y ont chacune leur part (voir
+ *  ``progression.js``) ; le détail par fenêtre reste à portée, replié :
+ *  sur une réunion de trois heures, savoir *laquelle* patine est ce qui
  *  aide — c'est aussi elle qu'on pourra relancer seule.
  */
-function Avancement({ numero, fenetres, message }) {
+function Avancement({ numero, pipeline, video }) {
+  const { fenetres, etat, finalisation } = pipeline;
+  const [maintenant, setMaintenant] = useState(() => Date.now());
+  const enCours = etat === 'creation' || etat === 'traitement'
+    || (video && (video.etape === 'compression' || video.etape === 'envoi' || video.etape === 'attente'));
+  useEffect(() => {
+    if (!enCours) return undefined;
+    const minuterie = setInterval(() => setMaintenant(Date.now()), 1000);
+    return () => clearInterval(minuterie);
+  }, [enCours]);
+
+  // Une estimation peut se corriger à la baisse d'une interrogation à
+  // l'autre : la barre, elle, ne recule jamais.
+  const max = useRef({ cle: null, valeur: 0 });
+  if (max.current.cle !== pipeline.cle) max.current = { cle: pipeline.cle, valeur: 0 };
+  const brut = avancementGlobal({ fenetres, etat, finalisation, tache: video, maintenant });
+  const valeur = Math.max(max.current.valeur, brut);
+  max.current.valeur = valeur;
+  const pourcent = Math.floor(valeur * 100);
+
   const finies = fenetres.filter((f) => f.etat === 'terminee').length;
+  const aEnvoyer = fenetres.filter((f) => ['attendue', 'encodage', 'envoi'].includes(f.etat)).length;
+  const videoEnCours = video && ETAPES_VIDEO[video.etape];
+  const phase = etat === 'creation'
+    ? 'Création du traitement…'
+    : etat === 'termine'
+      ? (videoEnCours ? 'Transcription prête — la vidéo n’est pas encore archivée' : 'Terminé')
+      : finalisation
+        ? 'Fusion des fenêtres…'
+        : aEnvoyer > 0 && finies === 0 && !fenetres.some((f) => f.etat === 'transcription')
+          ? 'Envoi de l’audio…'
+          : `Transcription — ${finies} / ${fenetres.length} fenêtre${fenetres.length > 1 ? 's' : ''}`;
+
   return (
     <div>
-      <div className="flex items-baseline justify-between">
-        {/* Le contexte est masqué en simple compression : la numérotation suit
-            ce qui est affiché, sans doublon ni trou. */}
-        <h2 className="titre text-[1.0625rem] font-medium">{numero}. Avancement</h2>
-        <span className="text-ekn-sm text-ekn-text/60">
-          {finies} / {fenetres.length} fenêtres
-        </span>
+      <h2 className="titre text-[1.0625rem] font-medium">{numero}. Avancement</h2>
+      <div className="mt-3 flex items-baseline justify-between gap-3 text-ekn-sm">
+        <span className="text-ekn-text/75">{phase}</span>
+        <span className="tabular-nums text-ekn-text-muted">{pourcent} %</span>
       </div>
-
-      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-ekn-text/10">
+      <div
+        className="mt-2 h-1.5 overflow-hidden rounded-full bg-ekn-text/10"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={pourcent}
+        aria-label="Avancement du traitement"
+      >
         <div
-          className="h-full rounded-full bg-turquoise transition-[width] duration-500"
-          style={{ width: `${(finies / fenetres.length) * 100}%` }}
+          className="h-full rounded-full bg-turquoise transition-[width] duration-1000 ease-linear"
+          style={{ width: `${valeur * 100}%` }}
         />
       </div>
-      {message ? <p className="mt-2 text-ekn-sm text-ekn-text/60">{message}</p> : null}
+      {pipeline.alerte ? <p className="mt-2 text-ekn-sm text-ekn-text/60">{pipeline.alerte}</p> : null}
+      {video ? (
+        <p className="mt-2 text-ekn-sm text-ekn-text/60">
+          {videoEnCours
+            ? `Vidéo : ${ETAPES_VIDEO[video.etape]}${video.etape === 'attente' ? '' : `, ${Math.round((video.progression || 0) * 100)} %`}. Garde cet onglet ouvert.`
+            : video.etape === 'termine'
+              ? (video.note || 'Vidéo archivée.')
+              : 'Archivage de la vidéo interrompu.'}
+        </p>
+      ) : null}
+      {video?.erreur ? <p className="mt-1 ekn-error">{video.erreur}</p> : null}
 
-      <ul className="verre mt-4 divide-y divide-bord/60 rounded-xl">
-        {fenetres.map((f) => (
-          <li key={f.index} className="flex items-center gap-4 px-4 py-2.5">
-            <span className="w-16 shrink-0 text-ekn-sm tabular-nums text-ekn-text-muted">
-              {horodatage(f.start)}
-            </span>
-            <span className={`flex-1 text-[0.9375rem] ${f.etat === 'erreur' ? 'text-ekn-tone-error' : ''}`}>
-              {f.etat === 'erreur' ? f.erreur : LIBELLES[f.etat]}
-              {f.etat === 'encodage' && f.progression
-                ? ` ${Math.round(f.progression * 100)} %`
-                : ''}
-            </span>
-            <span className="shrink-0 text-ekn-sm tabular-nums text-ekn-text-muted">
-              {f.octets ? mo(f.octets) : ''}
-            </span>
-          </li>
-        ))}
-      </ul>
+      {fenetres.length > 0 ? (
+        // Ouvert d'office quand une fenêtre échoue : c'est elle qu'on relance.
+        <details className="mt-3" open={fenetres.some((f) => f.etat === 'erreur') || undefined}>
+          <summary className="cursor-pointer text-ekn-sm text-ekn-text-muted hover:text-ekn-text">
+            Détail des fenêtres
+          </summary>
+          <ul className="verre mt-2 divide-y divide-bord/60 rounded-xl">
+            {fenetres.map((f) => (
+              <li key={f.index} className="flex items-center gap-4 px-4 py-2.5">
+                <span className="w-16 shrink-0 text-ekn-sm tabular-nums text-ekn-text-muted">
+                  {horodatage(f.start)}
+                </span>
+                <span className={`flex-1 text-[0.9375rem] ${f.etat === 'erreur' ? 'text-ekn-tone-error' : ''}`}>
+                  {f.etat === 'erreur' ? f.erreur : LIBELLES[f.etat]}
+                  {f.etat === 'encodage' && f.progression
+                    ? ` ${Math.round(f.progression * 100)} %`
+                    : ''}
+                </span>
+                <span className="shrink-0 text-ekn-sm tabular-nums text-ekn-text-muted">
+                  {f.octets ? mo(f.octets) : ''}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
     </div>
   );
 }
@@ -962,12 +1041,9 @@ export function AvancementArchivage({ tache }) {
   );
 }
 
-/** Avancement de la compression.
- *
- *  Séparé de la transcription parce que les deux avancent en parallèle
- *  et à des rythmes très différents : l'audio part en quelques minutes,
- *  la vidéo prend des heures sur une longue réunion.
- */
+/** La compression seule, sans transcription : sa barre, puis ce qu'elle
+ *  a fait gagner. À côté d'une transcription, sa barre se fond dans
+ *  l'avancement commun ; seul le bilan reste ici. */
 function Compression({ compression }) {
   if (compression.etat === 'repos' && !compression.resultat) return null;
   const { resultat } = compression;

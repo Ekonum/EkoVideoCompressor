@@ -272,6 +272,11 @@ class Database:
         ):
             self._ensure_column(conn, "jobs", colonne, ddl)
 
+        # Quand Gemini a pris la fenêtre, pas quand elle est arrivée :
+        # l'écart, c'est l'attente derrière les autres. La barre
+        # d'avancement s'en sert, et l'historique des durées aussi.
+        self._ensure_column(conn, "job_chunks", "started_at", "TEXT")
+
         # Les réunions récupérées avant le 11/10/2026 portaient leur date
         # sans fuseau, à l'heure de Paris : on les range comme les autres.
         for row in conn.execute(
@@ -796,6 +801,33 @@ class Database:
                 ),
             )
 
+    def mark_chunk_started(self, job_id: int, idx: int, started: bool = True) -> None:
+        """Horodate la prise en charge par Gemini — ou l'efface quand la
+        fenêtre revient faire la queue (nouvel envoi)."""
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE job_chunks SET started_at = ? WHERE job_id = ? AND idx = ?",
+                (
+                    datetime.now().isoformat(timespec="seconds") if started else None,
+                    job_id,
+                    idx,
+                ),
+            )
+
+    def chunk_durations(self, model: str, limit: int = 200) -> list[tuple[float, float]]:
+        """(secondes d'audio, secondes de transcription) des dernières
+        fenêtres transcrites par ce modèle : de quoi estimer les suivantes."""
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT c.end_second - c.start_second AS audio, "
+                "(julianday(c.updated_at) - julianday(c.started_at)) * 86400 AS duree "
+                "FROM job_chunks c JOIN jobs j ON j.id = c.job_id "
+                "WHERE c.status = 'termine' AND c.started_at IS NOT NULL AND j.model = ? "
+                "ORDER BY c.updated_at DESC LIMIT ?",
+                (model, limit),
+            ).fetchall()
+            return [(float(r["audio"]), float(r["duree"])) for r in rows]
+
     def replace_segments(self, job_id: int, segments: list[dict[str, Any]]) -> None:
         rows = [
             (
@@ -840,7 +872,8 @@ class Database:
         with self.connect() as conn:
             conn.execute(
                 "UPDATE job_chunks SET status = 'attendu', error = NULL, "
-                "result_json = NULL, updated_at = ? WHERE job_id = ? AND idx = ?",
+                "result_json = NULL, started_at = NULL, updated_at = ? "
+                "WHERE job_id = ? AND idx = ?",
                 (datetime.now().isoformat(timespec="seconds"), job_id, idx),
             )
 

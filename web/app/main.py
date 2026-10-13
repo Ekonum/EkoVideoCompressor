@@ -44,6 +44,7 @@ from cloud_transcription import (
     provider_for_model,
 )
 
+from . import avancement
 from .auth import AccessVerifier, AuthError
 from .chatter import ChatterError, composer
 from .coffre import Coffre, CoffreIndisponible
@@ -651,6 +652,7 @@ def create_app(
         path = config.chunk_dir / f"job{job_id}_chunk{index}{CHUNK_SUFFIX}"
         path.write_bytes(body)
         db.set_chunk_status(job_id, index, "en_cours", error=None)
+        db.mark_chunk_started(job_id, index, started=False)
         db.set_job_status(job_id, "en_cours")
 
         # 202 tout de suite : Cloudflare coupe vers 100 s, la
@@ -660,10 +662,23 @@ def create_app(
         task.add_done_callback(app.state.tasks.discard)
         return {"accepted": True, "index": index, "bytes": len(body)}
 
+    # Recalculée au plus toutes les cinq minutes : l'écran interroge
+    # toutes les trois secondes, l'historique ne bouge pas si vite.
+    vitesses: dict[str, tuple[float, float]] = {}
+
+    def _ratio(model: str) -> float:
+        mesure = vitesses.get(model)
+        if mesure is None or time.monotonic() - mesure[1] > 300:
+            mesure = (avancement.ratio_from_history(db.chunk_durations(model)), time.monotonic())
+            vitesses[model] = mesure
+        return mesure[0]
+
     @app.get("/api/jobs/{job_id}")
     def job_state(job_id: int, owner_id: int = Depends(current_user)) -> dict:
         job = owned_job(job_id, owner_id)
         chunks = db.chunks_for_job(job_id)
+        ratio = _ratio(str(job["model"]))
+        maintenant = datetime.now()
         return {
             "job_id": job_id,
             "status": job["status"],
@@ -679,6 +694,14 @@ def create_app(
                     "end": c["end_second"],
                     "status": c["status"],
                     "error": c["error"],
+                    # De quoi faire avancer la barre entre deux
+                    # interrogations, sans horloge commune avec le poste.
+                    "elapsed_seconds": avancement.elapsed_seconds(
+                        c["started_at"], maintenant
+                    ) if c["status"] == "en_cours" else None,
+                    "estimated_seconds": round(avancement.estimated_seconds(
+                        c["end_second"] - c["start_second"], ratio
+                    ), 1),
                 }
                 for c in chunks
             ],
@@ -1089,6 +1112,9 @@ def create_app(
         return {
             "done": sum(1 for c in fenetres if c["status"] == "termine"),
             "total": len(fenetres),
+            "fraction": round(avancement.transcription_fraction(
+                fenetres, _ratio(str(job["model"])), datetime.now()
+            ), 3),
         }
 
     @app.post("/api/jobs/import", status_code=status.HTTP_200_OK)
@@ -1925,6 +1951,7 @@ def create_app(
             if interrompue(job_id):
                 _discard(path)
                 return
+            db.mark_chunk_started(job_id, index)
             try:
                 result = await asyncio.to_thread(_transcribe_blocking, job, window, path)
             except (CloudTranscriptionError, SecretError) as exc:

@@ -54,8 +54,16 @@ function suivre(cle, jobId) {
           if (!distante) return f;
           if (distante.status === 'termine') return { ...f, etat: 'terminee' };
           if (distante.status === 'erreur') return { ...f, etat: 'erreur', erreur: distante.error };
-          return f;
+          // Gemini l'a prise : la barre avance sur l'estimation du serveur,
+          // et sur l'horloge du poste entre deux interrogations.
+          return {
+            ...f,
+            ecoule: distante.elapsed_seconds ?? null,
+            prevu: distante.estimated_seconds ?? null,
+            mesureA: Date.now(),
+          };
         }),
+        finalisation: vue.status === 'finalisation',
       });
       if (vue.status === 'cancelled' || tache.etat === 'interrompu') {
         publier(cle, { etat: 'interrompu', message: '' });
@@ -89,6 +97,7 @@ async function demarrer(cle, { fichier, duree, contexte, modele, offset = 0, mee
   publier(cle, {
     etat: 'creation', message: 'Création du traitement…', erreur: '',
     fichier: fichier.name, fenetres: [], resultat: null, estimation: null, jobId: null,
+    finalisation: false,
   });
   let job;
   try {
@@ -138,16 +147,16 @@ async function envoyer(cle) {
     } else if (data.kind === 'encoded') {
       majFenetre(cle, data.index, { etat: 'envoi', octets: data.bytes });
     } else if (data.kind === 'retrying') {
-      publier(cle, {
-        message: `Connexion perdue : nouvel essai dans ${Math.round(data.wait / 1000)} s (essai ${data.attempt + 1})…`,
-      });
+      const alerte = `Connexion perdue : nouvel essai dans ${Math.round(data.wait / 1000)} s (essai ${data.attempt + 1})…`;
+      publier(cle, { message: alerte, alerte });
     } else if (data.kind === 'uploaded') {
       majFenetre(cle, data.index, { etat: 'transcription' });
-      publier(cle, { message: 'Encodage sur ce poste…' });
+      publier(cle, { message: 'Encodage sur ce poste…', alerte: '' });
     } else if (data.kind === 'done') {
       finir();
       publier(cle, {
         envoiTermine: true,
+        alerte: '',
         message: 'Tout est envoyé : le serveur termine seul. Tu peux quitter cet écran.',
       });
     } else if (data.kind === 'cancelled') {
@@ -234,10 +243,12 @@ export function usePipeline() {
     fenetres: tache.fenetres || [],
     etat: tache.etat || 'repos',
     message: tache.message || '',
+    alerte: tache.alerte || '',
     erreur: tache.erreur || '',
     estimation: tache.estimation ?? null,
     resultat: tache.resultat || null,
     envoiTermine: Boolean(tache.envoiTermine),
+    finalisation: Boolean(tache.finalisation),
     lancer,
     detacher,
   };
