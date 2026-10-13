@@ -310,7 +310,7 @@ export function Bibliotheque({ surOuvrir, surLancer, surVue }) {
                         <span className="block h-1 overflow-hidden rounded-full bg-bord">
                           <span
                             className="block h-full bg-turquoise transition-[width]"
-                            style={{ width: `${(job.progress.done / job.progress.total) * 100}%` }}
+                            style={{ width: `${(job.progress.fraction ?? job.progress.done / job.progress.total) * 100}%` }}
                           />
                         </span>
                         <span className="text-ekn-xs tabular-nums text-ekn-text-muted">

@@ -231,7 +231,9 @@ class ApiTestCase(_Fixture):
         body = self._create(duration=3600.0)
         ligne = next(j for j in self.client.get("/api/jobs").json()
                      if j["job_id"] == body["job_id"])
-        self.assertEqual(ligne["progress"], {"done": 0, "total": len(body["chunks"])})
+        self.assertEqual(
+            ligne["progress"], {"done": 0, "total": len(body["chunks"]), "fraction": 0.0}
+        )
 
     def test_renommer_un_interlocuteur_reecrit_les_repliques(self):
         """Enregistrer un nom doit se voir dans la transcription, pas
