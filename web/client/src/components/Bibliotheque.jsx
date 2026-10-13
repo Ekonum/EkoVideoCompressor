@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
-import { Bouton, Champ, Etat, Erreur, Vide } from './Communs.jsx';
+import { Bouton, Etat, Erreur, Vide } from './Communs.jsx';
 import { depuisUtc, duree, fileSize, usd, jour, horodatage } from '../format.js';
 import { MOD, useRaccourcis } from '../raccourcis.js';
 import { surlignerMots } from '../surlignage.jsx';
@@ -164,28 +164,7 @@ export function Bibliotheque({ surOuvrir, surLancer, surVue }) {
 
   return (
     <section className="mx-auto max-w-6xl px-6 py-10">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <h1 className="titre text-[1.5rem] font-semibold">Bibliothèque</h1>
-        {/* La barre de filtres d'ekonum-ui : « Récupérées » y resserre la
-            liste sans en faire une couleur ni un onglet de plus. */}
-        <div className="ekn-filters w-full sm:w-[32rem]">
-          <Champ
-            ref={champRecherche}
-            label="Rechercher dans les transcriptions"
-            placeholder="un mot, un nom, une décision…"
-            value={recherche}
-            onChange={(e) => setRecherche(e.target.value)}
-          />
-          <label className="ekn-label sm:max-w-44">
-            Afficher
-            <select className="ekn-input" value={statut} onChange={(e) => setStatut(e.target.value)}>
-              {Object.entries(STATUTS).map(([cle, libelle]) => (
-                <option key={cle} value={cle}>{libelle}</option>
-              ))}
-            </select>
-          </label>
-        </div>
-      </div>
+      <h1 className="titre text-[1.5rem] font-semibold">Bibliothèque</h1>
 
       <nav className="ekn-tabs mt-4" aria-label="Rangement">
         {[
@@ -236,6 +215,38 @@ export function Bibliotheque({ surOuvrir, surLancer, surVue }) {
       {etat === 'actif' ? <ALancer surLancer={surLancer} /> : null}
       <DeposerIci />
 
+      {/* La barre d'outils d'ekonum-ui, juste au-dessus du tableau : une
+          recherche compacte (⌘F ou / y mènent) et l'état en pastilles —
+          « Récupérées » y resserre la liste sans en faire un onglet de plus. */}
+      <div className="ekn-toolbar mt-6">
+        <label className="ekn-search">
+          <input
+            ref={champRecherche}
+            className="ekn-input ekn-input--compact"
+            type="search"
+            aria-label="Rechercher dans les transcriptions"
+            placeholder="Rechercher"
+            value={recherche}
+            onChange={(e) => setRecherche(e.target.value)}
+          />
+        </label>
+        <fieldset className="ekn-chips">
+          <legend>État</legend>
+          {Object.entries(STATUTS).map(([cle, libelle]) => (
+            <label key={cle}>
+              <input
+                type="radio"
+                name="statut"
+                value={cle}
+                checked={statut === cle}
+                onChange={() => setStatut(cle)}
+              />
+              {libelle}
+            </label>
+          ))}
+        </fieldset>
+      </div>
+
       {resultats ? (
         <Resultats resultats={resultats} requete={recherche} surOuvrir={(id) => surOuvrir(id, recherche.trim())} />
       ) : jobs === null ? (
@@ -243,8 +254,8 @@ export function Bibliotheque({ surOuvrir, surLancer, surVue }) {
       ) : jobs.length === 0 ? (
         statut ? (
           <Vide titre="Rien à afficher">
-            Aucune réunion ne correspond à ce filtre. « Afficher : Toutes »
-            ramène la liste entière.
+            Aucune réunion ne correspond à ce filtre. « Toutes » ramène la
+            liste entière.
           </Vide>
         ) : etat === 'corbeille' ? (
           <Vide titre="Corbeille vide">Rien à récupérer.</Vide>
@@ -260,7 +271,7 @@ export function Bibliotheque({ surOuvrir, surLancer, surVue }) {
           </Vide>
         )
       ) : (
-        <div className="verre mt-6 overflow-x-auto rounded-xl">
+        <div className="verre mt-3 overflow-x-auto rounded-xl">
           <table className="w-full min-w-[46rem] border-collapse">
             <thead className="border-b border-bord">
               <tr>

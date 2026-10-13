@@ -1,4 +1,4 @@
-/*! ekonum-ui 3.11.1 — optional components. Without this file, every native element still works. */
+/*! ekonum-ui 3.15.0 — optional components. Without this file, every native element still works. */
 
 /* ── src/js/audio.js ── */
 /* <ekn-audio> — an audio (or video) player in the brand's colours, with an optional
