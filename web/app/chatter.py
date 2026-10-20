@@ -8,9 +8,9 @@ l'écriture** plutôt qu'après coup.
 
 Deux pièges, tous deux rencontrés en production :
 
-* ``message_post`` **échappe le HTML**. On poste, puis on réécrit le
-  corps par ``mail.message.write`` — c'est le seul chemin qui laisse un
-  accordéon déroulable.
+* ``message_post`` **échappe le HTML** d'une simple chaîne. Par RPC,
+  seul ``body_is_html=True`` le fait passer tel quel — c'est ce qui
+  laisse un accordéon déroulable.
 * Un composant OWL est impossible dans le chatter, qui désactive les
   composants embarqués. D'où l'accordéon HTML5 ``<details>``, validé
   contre le nettoyeur HTML d'Odoo.
@@ -109,50 +109,31 @@ class OdooChatter:
         subtype: str,
         extra: dict[str, Any] | None = None,
     ) -> int:
-        """Poste, retrouve, puis réécrit — le seul chemin qui laisse du
-        HTML s'afficher.
+        """Poste du HTML qui s'affiche comme tel, et rend l'identifiant
+        du message.
 
-        ``message_post`` échappe le corps quoi qu'on fasse. On sème donc
-        un marqueur, on retrouve le message par ce marqueur, et on
-        réécrit le corps tel qu'il doit s'afficher. Vaut pour une note
-        de chatter comme pour un ping : c'est la même API, donc le même
-        piège.
+        Une chaîne est échappée par ``message_post`` : ``body_is_html``
+        lui dit de la prendre pour du HTML — le paramètre est prévu pour
+        les appels RPC, où l'on ne peut pas passer de ``Markup``. Odoo
+        assainit encore le corps à l'enregistrement. Vaut pour une note
+        de chatter comme pour un ping : c'est la même API.
         """
-        marqueur = f"<!-- transcript:{record_id}:{abs(hash(corps_html)) % 10**12} -->"
-        self._appel(
-            modele,
-            "message_post",
-            {
-                "ids": [record_id],
-                "body": corps_html + marqueur,
-                "message_type": "comment",
-                "subtype_xmlid": subtype,
-                **(extra or {}),
-            },
-        )
-        trouves = self._appel(
-            "mail.message",
-            "search_read",
-            {
-                "domain": [
-                    ["model", "=", modele],
-                    ["res_id", "=", record_id],
-                    ["body", "ilike", marqueur[4:24]],
-                ],
-                "fields": ["id"],
-                "limit": 1,
-                "order": "id desc",
-            },
-        )
-        if not trouves:
-            raise ChatterError(
-                "Le message a été posté mais reste introuvable : son corps n'a "
-                "pas pu être remis en forme."
+        message_id = _identifiant(
+            self._appel(
+                modele,
+                "message_post",
+                {
+                    "ids": [record_id],
+                    "body": corps_html,
+                    "body_is_html": True,
+                    "message_type": "comment",
+                    "subtype_xmlid": subtype,
+                    **(extra or {}),
+                },
             )
-        message_id = int(trouves[0]["id"])
-        self._appel(
-            "mail.message", "write", {"ids": [message_id], "vals": {"body": corps_html}}
         )
+        if message_id is None:
+            raise ChatterError("Odoo n'a pas rendu l'identifiant du message posté.")
         return message_id
 
 
