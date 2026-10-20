@@ -789,7 +789,7 @@ function compressionEnTache(compression) {
   };
 }
 
-const ETAPES_VIDEO = {
+const ETAPES_ARCHIVAGE = {
   attente: 'en attente d’une autre compression',
   compression: 'compression sur ce poste',
   envoi: 'envoi vers le stockage froid',
@@ -824,11 +824,12 @@ function Avancement({ numero, pipeline, video }) {
 
   const finies = fenetres.filter((f) => f.etat === 'terminee').length;
   const aEnvoyer = fenetres.filter((f) => ['attendue', 'encodage', 'envoi'].includes(f.etat)).length;
-  const videoEnCours = video && ETAPES_VIDEO[video.etape];
+  const videoEnCours = video && ETAPES_ARCHIVAGE[video.etape];
+  const quoi = video?.audio ? 'l’enregistrement' : 'la vidéo';
   const phase = etat === 'creation'
     ? 'Création du traitement…'
     : etat === 'termine'
-      ? (videoEnCours ? 'Transcription prête — la vidéo n’est pas encore archivée' : 'Terminé')
+      ? (videoEnCours ? `Transcription prête — ${video?.audio ? 'l’enregistrement n’est pas encore archivé' : 'la vidéo n’est pas encore archivée'}` : 'Terminé')
       : finalisation
         ? 'Fusion des fenêtres…'
         : aEnvoyer > 0 && finies === 0 && !fenetres.some((f) => f.etat === 'transcription')
@@ -859,10 +860,10 @@ function Avancement({ numero, pipeline, video }) {
       {video ? (
         <p className="mt-2 text-ekn-sm text-ekn-text/60">
           {videoEnCours
-            ? `Vidéo : ${ETAPES_VIDEO[video.etape]}${video.etape === 'attente' ? '' : `, ${Math.round((video.progression || 0) * 100)} %`}. Garde cet onglet ouvert.`
+            ? `${video.audio ? 'Enregistrement' : 'Vidéo'} : ${ETAPES_ARCHIVAGE[video.etape]}${video.etape === 'attente' ? '' : `, ${Math.round((video.progression || 0) * 100)} %`}. Garde cet onglet ouvert.`
             : video.etape === 'termine'
-              ? (video.note || 'Vidéo archivée.')
-              : 'Archivage de la vidéo interrompu.'}
+              ? (video.note || (video.audio ? 'Enregistrement archivé.' : 'Vidéo archivée.'))
+              : `Archivage de ${quoi} interrompu.`}
         </p>
       ) : null}
       {video?.erreur ? <p className="mt-1 ekn-error">{video.erreur}</p> : null}
@@ -1009,14 +1010,16 @@ function Reunions({ surChoix }) {
   );
 }
 
-/** Où en est l'archivage de la vidéo, tant qu'on est sur cet écran.
+/** Où en est l'archivage de la vidéo ou de l'enregistrement, tant qu'on est sur cet écran.
  *  La fiche de la réunion prend le relais une fois qu'on l'a ouverte. */
 export function AvancementArchivage({ tache }) {
   const libelle = {
-    attente: 'En attente : une autre vidéo est en cours de compression',
+    attente: 'En attente : une autre compression est en cours',
     compression: 'Compression sur ce poste',
     envoi: 'Envoi vers le stockage froid',
-    termine: tache.note ? 'Vidéo conservée' : 'Vidéo archivée',
+    termine: tache.audio
+      ? (tache.note ? 'Enregistrement conservé' : 'Enregistrement archivé')
+      : (tache.note ? 'Vidéo conservée' : 'Vidéo archivée'),
     erreur: 'Archivage interrompu',
   }[tache.etape] || 'Archivage';
   return (
