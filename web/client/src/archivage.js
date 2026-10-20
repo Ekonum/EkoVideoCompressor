@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { PROFIL } from './useCompression.js';
 import { remoteFile } from './fileQueue.js';
+import { api } from './api.js';
 
 /** Archivage de la vidéo compressée : compresser, puis envoyer.
  *
@@ -107,12 +108,25 @@ export async function envoyerMorceaux(jobId, blob, morceau, surProgression) {
  */
 export async function archiver({ fichier, trim = null, cible, audio = false }) {
   const cle = cible.cle;
-  publier(cle, { etape: 'compression', progression: 0, erreur: '' });
+  // `audio` voyage avec la tâche : l'écran dit « enregistrement », pas « vidéo ».
+  publier(cle, { etape: 'compression', progression: 0, erreur: '', audio });
   const racine = await navigator.storage.getDirectory();
   const nom = `archive-${Date.now()}.mp4`;
   try {
     const poignee = await racine.getFileHandle(nom, { create: true });
-    await compresserVers(fichier, trim, poignee, (p) => publier(cle, { progression: p }));
+    let compresse = null;
+    let secours = false;
+    try {
+      await compresserVers(fichier, trim, poignee, (p) => publier(cle, { progression: p }));
+    } catch (erreur) {
+      // Un enregistrement audio entier a toujours une version à garder :
+      // la sienne. Mieux vaut l'archiver tel quel que ne rien archiver.
+      if (!audio || fichier.remote || trim) throw erreur;
+      signaler(cible, fichier, 'compression', erreur);
+      publier(cle, { progression: 1 });
+      compresse = fichier;
+      secours = true;
+    }
 
     while (cible.jobId == null) {
       if (cible.abandon) throw new Error('Traitement abandonné.');
@@ -120,8 +134,8 @@ export async function archiver({ fichier, trim = null, cible, audio = false }) {
     }
     // L'état suit désormais la réunion, pour que sa fiche l'affiche.
     taches.delete(cle);
-    publier(cible.jobId, { etape: 'envoi', progression: 0, erreur: '' });
-    const compresse = await poignee.getFile();
+    publier(cible.jobId, { etape: 'envoi', progression: 0, erreur: '', audio });
+    compresse ??= await poignee.getFile();
     // Retraiter une réunion récupérée : sa vidéo stockée n'est remplacée
     // que si la nouvelle est vraiment plus légère.
     if (fichier.remote && compresse.size >= fichier.size) {
@@ -139,12 +153,25 @@ export async function archiver({ fichier, trim = null, cible, audio = false }) {
       cible.jobId, garde, type, (p) => publier(cible.jobId, { progression: p }),
       Boolean(fichier.remote),
     );
-    publier(cible.jobId, { etape: 'termine', progression: 1, octets: garde.size });
+    publier(cible.jobId, {
+      etape: 'termine', progression: 1, octets: garde.size,
+      ...(secours ? { note: 'La compression a échoué : l’enregistrement d’origine est archivé tel quel.' } : {}),
+    });
   } catch (erreur) {
-    publier(cible.jobId ?? cle, { etape: 'erreur', erreur: erreur.message });
+    publier(cible.jobId ?? cle, { etape: 'erreur', erreur: erreur.message, audio });
+    signaler(cible, fichier, 'archivage', erreur);
   } finally {
     await racine.removeEntry(nom).catch(() => {});
   }
+}
+
+/** L'erreur part aussi au serveur, comme celles de la transcription :
+ *  sans elle, un « Encoding error » n'est connu que de qui l'a vu. */
+function signaler(cible, fichier, etape, erreur) {
+  api.reportClientError({
+    job_id: cible.jobId ?? null, stage: etape, file_name: fichier.name || '',
+    message: erreur?.message || String(erreur),
+  }).catch(() => {});
 }
 
 // Une compression à la fois : deux en parallèle se disputeraient le

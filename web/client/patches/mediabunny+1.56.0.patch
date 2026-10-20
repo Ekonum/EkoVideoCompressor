@@ -1,0 +1,13 @@
+diff --git a/node_modules/mediabunny/dist/modules/src/conversion.js b/node_modules/mediabunny/dist/modules/src/conversion.js
+index ef1014b..85d1dff 100644
+--- a/node_modules/mediabunny/dist/modules/src/conversion.js
++++ b/node_modules/mediabunny/dist/modules/src/conversion.js
+@@ -1464,7 +1464,7 @@ export class Conversion {
+                         // Offset the timestamp as needed
+                         finalSample.setTimestamp(finalSample.timestamp + this._timestampOffset);
+                         if (needsPadding === null) {
+-                            needsPadding = finalSample.timestamp > 0 && !this.output.format.supportsTimestampedMediaData;
++                            needsPadding = Math.round(finalSample.timestamp * originalSampleRate) > 0 && !this.output.format.supportsTimestampedMediaData;
+                         }
+                         if (needsPadding) {
+                             const env_4 = { stack: [], error: void 0, hasError: false };

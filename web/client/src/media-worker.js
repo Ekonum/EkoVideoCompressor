@@ -13,7 +13,7 @@
 import {
   Input, Output, Conversion, ALL_FORMATS, BlobSource, UrlSource,
   BufferTarget, StreamTarget, Mp3OutputFormat, Mp4OutputFormat,
-  OggOutputFormat, Quality,
+  OggOutputFormat, Quality, AudioSample,
 } from 'mediabunny';
 // WebCodecs n'encode que l'Opus et l'AAC : le MP3 vient d'un paquet
 // d'extension Mediabunny, qui s'enregistre auprès du cœur. Il n'est pas
@@ -219,6 +219,8 @@ async function compresser({ file, handle, profile, trim }) {
         numberOfChannels: 1,
         ...(frequence && ![44100, 48000].includes(frequence) ? { sampleRate: 48000 } : {}),
         quality: new Quality({ bitrate: profile.audioBitrate }),
+        process: enMono,
+        processedNumberOfChannels: 1,
       },
     });
     conversion.onProgress = (ratio) => say({ kind: 'compress-progress', ratio });
@@ -233,4 +235,27 @@ async function compresser({ file, handle, profile, trim }) {
   } catch (error) {
     say({ kind: 'compress-error', message: error?.message || String(error) });
   }
+}
+
+/** Ramène un échantillon en mono.
+ *
+ *  Un enregistrement en HE-AAC (« mp4a.40.5 », celui de Meet notamment)
+ *  se déclare mono mais se décode en stéréo. Mediabunny se fie à la
+ *  déclaration : il ne mixe rien, et l'encodeur AAC, réglé en mono à
+ *  64 kbit/s, refuse ce stéréo inattendu (« Encoding error »). On mixe
+ *  donc ici, sur ce qui sort vraiment du décodeur. */
+function enMono(sample) {
+  if (sample.numberOfChannels === 1) return sample;
+  const n = sample.numberOfFrames;
+  if (n === 0) return null;
+  const mono = new Float32Array(n);
+  const canal = new Float32Array(n);
+  for (let c = 0; c < sample.numberOfChannels; c += 1) {
+    sample.copyTo(canal, { planeIndex: c, format: 'f32-planar' });
+    for (let i = 0; i < n; i += 1) mono[i] += canal[i] / sample.numberOfChannels;
+  }
+  return new AudioSample({
+    data: mono, format: 'f32-planar', numberOfChannels: 1,
+    sampleRate: sample.sampleRate, timestamp: sample.timestamp,
+  });
 }

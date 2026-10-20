@@ -300,6 +300,16 @@ class RecoveryApiTestCase(unittest.TestCase):
         self.assertEqual(retour.headers["location"], "/?recovery=expired")
         self.assertFalse(self.client.get("/api/google").json()["connected"])
 
+    def test_un_retour_rejoue_apres_la_connexion_ne_dit_pas_expire(self):
+        retour, parametres = self._connecter()
+        self.assertEqual(retour.headers["location"], "/?recovery=connected")
+        rejoue = self.client.get(
+            "/api/google/callback", params={"state": parametres["state"], "code": "code"},
+            follow_redirects=False,
+        )
+        self.assertEqual(rejoue.headers["location"], "/?recovery=connected")
+        self.assertTrue(self.client.get("/api/google").json()["connected"])
+
     def test_le_drive_d_un_autre_compte_est_refuse_et_revoque(self):
         self.google.email = "izaak@ekonum.fr"
         retour, _ = self._connecter()

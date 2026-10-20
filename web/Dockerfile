@@ -6,6 +6,8 @@
 FROM node:22-alpine AS client
 WORKDIR /client
 COPY web/client/package.json web/client/package-lock.json ./
+# Les correctifs de dépendances s'appliquent à l'installation.
+COPY web/client/patches ./patches
 RUN npm ci
 COPY web/client/ ./
 RUN npm run build

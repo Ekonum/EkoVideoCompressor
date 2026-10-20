@@ -599,7 +599,12 @@ def register_recovery_routes(
         require_enabled(owner_id)
         verifier = db.pop_oauth_state(state, owner_id) if state else None
         if error or not code or not verifier:
-            return retour("refused" if error else "expired")
+            if error:
+                return retour("refused")
+            # Un retour rejoué (rechargement, connexion lente qui renvoie
+            # la même adresse) arrive après celui qui a réussi : son état
+            # est déjà consommé. Le compte est relié, rien n'a expiré.
+            return retour("connected" if db.google_account(owner_id) else "expired")
         try:
             reponse = oauth.exchange(code, verifier)
         except GoogleUnavailable as exc:
