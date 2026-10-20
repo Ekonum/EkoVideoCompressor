@@ -1468,7 +1468,7 @@ class OdooChatterHttpTestCase(unittest.TestCase):
     """Le vrai client JSON-2, doublé au niveau HTTP.
 
     C'est la couche où se trouve le piège : `message_post` échappe le
-    HTML, et rien au-dessus ne peut s'en apercevoir."""
+    HTML sans `body_is_html`, et rien au-dessus ne peut s'en apercevoir."""
 
     def _client(self, reponses):
         import io
@@ -1488,29 +1488,37 @@ class OdooChatterHttpTestCase(unittest.TestCase):
 
         return OdooChatter("https://odoo.test", "cle", opener=opener), appels
 
-    def test_le_corps_est_reecrit_apres_avoir_ete_echappe(self):
-        chatter, appels = self._client([None, [{"id": 4242}], True])
+    def test_le_corps_part_en_html_en_un_seul_appel(self):
+        """Ni recherche ni réécriture : `mail.message.write` n'est plus
+        demandé à personne."""
+        chatter, appels = self._client([4242])
         message_id = chatter.publier("crm.lead", 364, "<details>coucou</details>")
         self.assertEqual(message_id, 4242)
-        chemins = [c for c, _ in appels]
-        self.assertEqual(chemins, ["crm.lead/message_post",
-                                   "mail.message/search_read", "mail.message/write"])
-        # Le corps final est le HTML voulu, marqueur retiré.
-        self.assertEqual(appels[-1][1]["vals"]["body"], "<details>coucou</details>")
-        self.assertEqual(appels[0][1]["subtype_xmlid"], "mail.mt_note")
+        self.assertEqual([c for c, _ in appels], ["crm.lead/message_post"])
+        charge = appels[0][1]
+        self.assertEqual(charge["body"], "<details>coucou</details>")
+        self.assertIs(charge["body_is_html"], True)
+        self.assertEqual(charge["subtype_xmlid"], "mail.mt_note")
+
+    def test_sans_identifiant_rendu_le_depot_echoue(self):
+        from app.chatter import ChatterError
+
+        chatter, _ = self._client([None])
+        with self.assertRaises(ChatterError):
+            chatter.publier("crm.lead", 364, "<b>x</b>")
 
     def test_le_ping_passe_par_le_meme_chemin_et_signe_odoobot(self):
         """Le ping affichait « &lt;b&gt; » : c'est la même API, donc le
         même piège."""
-        chatter, appels = self._client(
-            [[{"id": 4}], None, [{"id": 77}], True]
-        )
+        chatter, appels = self._client([[{"id": 4}], 77])
         message_id = chatter.prevenir(10, "<b>Transcription déposée</b>")
         self.assertEqual(message_id, 77)
         self.assertEqual(appels[0][0], "discuss.channel/search_read")
         self.assertEqual(appels[1][0], "discuss.channel/message_post")
         self.assertEqual(appels[1][1]["author_id"], 2)
-        self.assertEqual(appels[-1][1]["vals"]["body"], "<b>Transcription déposée</b>")
+        self.assertEqual(appels[1][1]["body"], "<b>Transcription déposée</b>")
+        self.assertIs(appels[1][1]["body_is_html"], True)
+        self.assertEqual(len(appels), 2)
 
     def test_sans_conversation_le_ping_ne_poste_rien(self):
         chatter, appels = self._client([[]])
