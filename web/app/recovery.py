@@ -50,7 +50,7 @@ from .google_account import (
     pkce_pair,
 )
 from .notes import SAME_MEETING, author_name, best_match, fingerprint, overlap, read_note, words
-from .odoo import OdooGateway, OdooUnavailable
+from .odoo import ATTACHMENT_LIMIT, OdooGateway, OdooUnavailable
 from .stockage import MORCEAU, StockageIndisponible
 from .transcription import transcript_text
 
@@ -844,9 +844,27 @@ def register_recovery_routes(
             library=db.library_fingerprints(),
             excluded_drives=set(),
         )
+        # Trop lourd pour être copié : on le montre, sans proposer de le
+        # récupérer. Ranger avec une réunion existante reste possible.
+        for item in items:
+            if item["status"] == "new" and too_large(item["size"]):
+                item["status"] = "too_large"
+                item["limit"] = ATTACHMENT_LIMIT
         return {"items": items}
 
+    def too_large(size: Any) -> bool:
+        return int(size or 0) > ATTACHMENT_LIMIT
+
     def odoo_piece(odoo: OdooGateway, attachment_id: int) -> dict[str, Any]:
+        """Une pièce jointe avec son contenu, une fois sa taille vérifiée :
+        rien n'est téléchargé au-delà du plafond."""
+        meta = odoo_piece_meta(odoo, attachment_id)
+        if too_large(meta.get("file_size")):
+            raise HTTPException(
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                f"Trop lourd pour être copié depuis Odoo ({meta['file_size'] / 1048576:.0f} Mo, "
+                f"limite {ATTACHMENT_LIMIT // 1048576} Mo) : l'original reste sur sa fiche.",
+            )
         try:
             return odoo.attachment(attachment_id, contenu=True)
         except OdooUnavailable as exc:
@@ -911,6 +929,10 @@ def register_recovery_routes(
         if job["video_file_id"]:
             piece = odoo_piece_meta(odoo, attachment_id)
             video = "kept"
+        elif too_large((piece := odoo_piece_meta(odoo, attachment_id)).get("file_size")):
+            # Trop lourd pour être copié : la réunion gagne sa fiche, et
+            # l'enregistrement reste dans Odoo.
+            video = "too_large"
         else:
             try:
                 stockage = storage()

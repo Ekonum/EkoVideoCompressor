@@ -83,6 +83,10 @@ const ODOO = {
   inventory: () => api.odooInventory(),
   empty: 'Aucun enregistrement audio ou vidéo joint à tes fiches Odoo.',
   trash: '',
+  status: {
+    ...FILE_STATUS,
+    too_large: (item) => `trop lourd pour être copié depuis Odoo (limite ${fileSize(item.limit)}) : l’original reste sur sa fiche`,
+  },
   note: 'Les originaux restent sur leur fiche Odoo.',
   left: (linked) => (linked ? 'liée à sa fiche Odoo, où l’original reste' : 'original laissé dans Odoo'),
   import: (item) => api.odooImport(item.id),
@@ -449,7 +453,7 @@ function Inventory({ items, source, storage, onReload, onOpen }) {
   const [results, setResults] = useState({}); // id → { state, message, jobId }
   const [running, setRunning] = useState(false);
 
-  const done = (i) => i.status !== 'new' && i.status !== 'in_library';
+  const done = (i) => !['new', 'in_library', 'too_large'].includes(i.status);
   const groups = useMemo(() => ({
     meeting: items.filter((i) => !done(i) && i.kind === 'meeting'),
     unsure: items.filter((i) => !done(i) && i.kind === 'unsure'),
@@ -544,7 +548,7 @@ function Inventory({ items, source, storage, onReload, onOpen }) {
                   item={item}
                   checked={selected.has(item.id)}
                   result={results[item.id]}
-                  disabled={running || done(item)}
+                  disabled={running || done(item) || item.status === 'too_large'}
                   onToggle={() => toggle(item.id)}
                   onOpen={onOpen}
                   source={source}
@@ -612,9 +616,11 @@ function plusLegerParReunion(items) {
 }
 
 function resultMessage(vue, source) {
-  const rangement = vue.video === 'attached'
-    ? 'rangée avec la réunion existante, qui garde désormais son enregistrement'
-    : vue.video === 'kept' ? 'rangée avec la réunion existante' : 'récupérée';
+  const rangement = {
+    attached: 'rangée avec la réunion existante, qui garde désormais son enregistrement',
+    kept: 'rangée avec la réunion existante',
+    too_large: 'rangée avec la réunion existante, sans son enregistrement, trop lourd pour être copié',
+  }[vue.video] || 'récupérée';
   const original = {
     trashed: 'original à la corbeille du Drive',
     kept: 'original gardé (droits insuffisants pour le retirer)',

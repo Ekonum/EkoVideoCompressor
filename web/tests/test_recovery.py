@@ -16,7 +16,7 @@ import app as _app_package  # noqa: F401  (installe la racine du dépôt dans sy
 
 from app.db import Database, meeting_date_utc
 from app.main import create_app
-from app.odoo import OdooGateway, OdooUnavailable
+from app.odoo import ATTACHMENT_LIMIT, OdooGateway, OdooUnavailable
 from app.recovery import build_inventory, classify, library_match, recording_date, stem
 from app.secrets import GeminiKey
 from tests.test_api import FauxStockage, _Client, _settings
@@ -549,6 +549,28 @@ class OdooRecoveryTestCase(unittest.TestCase):
         retour = self.client.get("/api/recovery/odoo")
         self.assertEqual(retour.status_code, 409)
         self.assertIn("clé Odoo", retour.json()["detail"])
+
+    def test_trop_lourd_pour_odoo_n_est_jamais_telecharge(self):
+        self.odoo.pieces[14] = {**self.odoo.pieces[11], "id": 14, "checksum": "sha-14",
+                                "name": "Long.m4a", "file_size": ATTACHMENT_LIMIT + 1}
+        item = self._items()["14"]
+        self.assertEqual((item["status"], item["limit"]), ("too_large", ATTACHMENT_LIMIT))
+
+        retour = self.client.post("/api/recovery/odoo/14")
+        self.assertEqual(retour.status_code, 413)
+        self.assertIn("l'original reste sur sa fiche", retour.json()["detail"])
+        self.assertEqual(self.odoo.lus, [])
+        self.assertEqual(self.client.get("/api/jobs").headers["x-total-count"], "0")
+
+        # Déjà transcrite : la réunion gagne sa fiche, l'enregistrement reste dans Odoo.
+        job_id = self.db.create_job(owner_id=self.moi, filename="Long.m4a", duration_seconds=1800,
+                                    model="", language="fr", context={}, chunks=[])
+        vue = self.client.post("/api/recovery/odoo/14/attach", json={"job_id": job_id}).json()
+        self.assertEqual(vue["video"], "too_large")
+        self.assertEqual(self.odoo.lus, [])
+        fiche = self.client.get(f"/api/jobs/{job_id}/detail").json()
+        self.assertFalse(fiche["video"]["presente"])
+        self.assertEqual(fiche["odoo"]["model"], "crm.lead")
 
     def test_une_piece_absente_d_odoo(self):
         self.assertEqual(self.client.post("/api/recovery/odoo/404").status_code, 502)

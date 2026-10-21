@@ -37,6 +37,12 @@ class OdooUnavailable(RuntimeError):
     """Odoo est injoignable ou mal configuré — message pour l'utilisateur."""
 
 
+# Au-delà, une pièce jointe ne se copie pas depuis Odoo : il bâtit toute sa
+# réponse en base64 en mémoire, et le relais du coffre aura le même plafond.
+# Le plus gros enregistrement joint pesait 64,6 Mo en octobre 2026.
+ATTACHMENT_LIMIT = 100 * 1024 * 1024
+
+
 def _lisible(exc: OdooError, base: str) -> str:
     """Ramène une erreur Odoo à une phrase qu'on peut afficher.
 
@@ -290,8 +296,8 @@ class OdooGateway:
         """Une pièce jointe ; avec son contenu, décodé, sous « bytes ».
 
         Odoo 19 n'expose plus `datas` : le contenu se lit dans `raw`, en
-        base64. Tout passe en mémoire — les pièces d'Odoo pèsent quelques
-        dizaines de Mo au plus."""
+        base64. Tout passe en mémoire : à l'appelant de vérifier d'abord
+        `file_size` face à `ATTACHMENT_LIMIT`."""
         import base64
 
         from odoo_client import _json2_call
