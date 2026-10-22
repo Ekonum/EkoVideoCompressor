@@ -1,6 +1,69 @@
 # Backlog transcript.ekonum.fr
 
-Ce qui est décidé mais pas encore fait, et pourquoi ça attend.
+Ce qui est décidé mais pas encore fait, et pourquoi ça attend. Les sujets
+sont rangés **par priorité** : on prend le premier qui ne dépend de personne.
+
+| # | Sujet | État |
+|---|-------|------|
+| 1 | Accès Odoo relayé par le broker | en attente du portail |
+| 2 | Tableau de bord dans « Mon compte » | prochain sujet |
+| 3 | Un modèle de transcription moins cher, ou européen | prêt |
+| 4 | Un serveur MCP | prêt (les jetons d'API existent) |
+| 5 | Supprimer l'original en local après envoi | prêt |
+| 6 | Stockage des vidéos : passer de Google Drive à GCS | quand Odoo en aura besoin |
+| 7 | Migrer les vidéos existantes du Drive | en grande partie fait |
+
+## Accès Odoo relayé par le broker
+
+**Pourquoi** : aujourd'hui, chacun colle sa clé Odoo personnelle dans
+transcript. Avec le relais, transcript ne voit plus jamais de clé : il
+obtient un jeton du portail (OIDC, PKCE), l'échange contre un accès
+`app-secret-broker`, et passe par le broker pour lire `res.users`
+(`/v1/odoo/me`), poster dans le chatter (`/notify`) et lire les pièces
+jointes (`/v1/odoo/attachments/<id>` — 413 au-delà de 100 Mo, comme #171).
+
+**Où on en est** : les routes du broker sont livrées. Côté portail, la
+délégation, le consentement et le format définitif du manifeste
+(`consumes.odoo`) sont en revue (PR #34 à #36 du portail). On s'y met dès
+qu'ils sont fusionnés : le manifeste de transcript doit suivre leur format
+final, pas un brouillon.
+
+## Tableau de bord dans « Mon compte »
+
+Un graphe en barres du **nombre de réunions par jour**, filtrable sur 30, 90 et
+365 jours ou depuis le début, avec la possibilité d'y superposer le **coût
+équivalent — en euros** plutôt qu'en dollars.
+
+Les données existent déjà : date de réunion par transcription, et coût réel par
+appel dans `api_usage`. Reste à choisir la source du taux de change (fixé une
+fois par mois suffit : c'est un ordre de grandeur, pas une comptabilité) et à
+suivre la charte des graphiques Ekonum.
+
+## Un modèle de transcription moins cher, ou européen
+
+Sans aucune régression de qualité : c'est la condition. Banc d'essai tout
+trouvé — la bibliothèque, dont on connaît déjà les bonnes réponses, et la
+réunion Acritec du 4 septembre transcrite deux fois. Pas de choix de modèle
+exposé aux utilisateurs : ils ne connaissent pas ces noms, et ce n'est pas à
+eux d'arbitrer.
+
+## Un serveur MCP
+
+**Pourquoi** : lancer une transcription, retrouver une réunion ou lire un
+compte rendu depuis un assistant (Claude, Codex), sans ouvrir l'interface.
+
+**Ce qui existe** : les jetons d'API par compte (empreinte seule en base,
+gérés par la personne dans « Mon compte »), et l'API qui les accepte en
+`Bearer`. Reste à exposer ces mêmes actions en outils MCP, avec les mêmes
+droits que le compte du jeton — rien de plus.
+
+## Supprimer l'original en local après envoi
+
+L'app macOS proposait « supprimer le fichier source après copie ». Un
+navigateur ne peut effacer un fichier que si on lui en a donné le droit au
+moment de le choisir (API File System Access, Chrome seulement). À faire en
+choisissant le fichier par `showOpenFilePicker` avec accès en écriture,
+jamais en silence.
 
 ## Stockage des vidéos : passer de Google Drive à GCS
 
@@ -22,23 +85,14 @@ une seconde implémentation, avec deux gains :
 - **vraies classes de stockage** (Coldline, Archive) : le coût à la lecture,
   que l'interface annonce déjà, deviendra réel.
 
-## Supprimer l'original en local après envoi
+## Migrer les vidéos existantes du Drive
 
-L'app macOS proposait « supprimer le fichier source après copie ». Un
-navigateur ne peut effacer un fichier que si on lui en a donné le droit au
-moment de le choisir (API File System Access, Chrome seulement). À faire en
-choisissant le fichier par `showOpenFilePicker` avec accès en écriture,
-jamais en silence.
-
-## Un modèle de transcription moins cher, ou européen
-
-Sans aucune régression de qualité : c'est la condition. Banc d'essai tout
-trouvé — la bibliothèque, dont on connaît déjà les bonnes réponses, et la
-réunion Acritec du 4 septembre transcrite deux fois. Pas de choix de modèle
-exposé aux utilisateurs : ils ne connaissent pas ces noms, et ce n'est pas à
-eux d'arbitrer.
-
-## Migrer les vidéos existantes du Drive vers ce stockage
+**Où on en est (12/10)** : la récupération de l'historique a fait
+l'essentiel — les enregistrements Meet du Drive sont importés et
+rattachés à leur réunion. Restent une trentaine de tutoriels et de vidéos
+personnelles, qui n'ont pas de réunion et restent donc où elles sont, et
+trois enregistrements Meet d'un autre domaine, laissés de côté. Le plan
+ci-dessous ne sert plus que si un nouveau lot apparaît.
 
 **Pourquoi** : le Drive de l'équipe déborde de vidéos de réunions (plus d'une
 centaine rien que sur la première page de recherche de Robin). Les ranger dans
@@ -60,22 +114,3 @@ transcript.
 Les vidéos rattachées à une réunion déjà transcrite prennent sa place en
 stockage froid ; les autres pourront être transcrites à la demande — jamais
 en masse, pour ne pas payer des transcriptions sans intérêt.
-
-## Un tableau de bord dans « Mon compte »
-
-Un graphe en barres du **nombre de réunions par jour**, filtrable sur 30, 90 et
-365 jours ou depuis le début, avec la possibilité d'y superposer le **coût
-équivalent — en euros** plutôt qu'en dollars.
-
-Les données existent déjà : date de réunion par transcription, et coût réel par
-appel dans `api_usage`. Reste à choisir la source du taux de change (fixé une
-fois par mois suffit : c'est un ordre de grandeur, pas une comptabilité) et à
-suivre la charte des graphiques Ekonum.
-
-## Deux entrées au catalogue du portail
-
-Le portail ne lit qu'un `ekonum.yaml`, à la racine du dépôt. Or ce dépôt porte
-deux logiciels : l'app macOS (`ekovideo-compressor`, PR #138) et la webapp
-(`transcript`, `web/ekonum.yaml`). La question est ouverte dans le contrat du
-portail (§13) — à trancher côté portail, pas ici.
-
