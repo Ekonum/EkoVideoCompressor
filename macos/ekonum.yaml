@@ -34,11 +34,11 @@ consumes:
     - gladia
     - github                      # mise à jour automatique via l'API releases/latest
 
-release_notes: https://github.com/Ekonum/EkoVideoCompressor/releases
+release_notes: https://github.com/Ekonum/transcript/releases
 
 distribution:
   platforms: [macos-arm64]
-  source: https://github.com/Ekonum/EkoVideoCompressor/releases
+  source: https://github.com/Ekonum/transcript/releases
   update: auto                    # bouton « Vérifier mise à jour » : télécharge la dernière release
   channel: stable
 

@@ -44,7 +44,7 @@ consumes:
     - gemini                      # transcription, sonde et enquête
     - cloudflare-access           # vérification de l'identité
 
-release_notes: https://github.com/Ekonum/EkoVideoCompressor/releases
+release_notes: https://github.com/Ekonum/transcript/releases
 design_system: 3.15.0             # épinglé ; scripts/fetch-ekonum-ui.sh lit cette valeur
 
 environments:
