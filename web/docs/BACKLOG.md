@@ -6,12 +6,11 @@ sont rangés **par priorité** : on prend le premier qui ne dépend de personne.
 | # | Sujet | État |
 |---|-------|------|
 | 1 | Accès Odoo relayé par le broker | en attente du portail |
-| 2 | Tableau de bord dans « Mon compte » | prochain sujet |
-| 3 | Un modèle de transcription moins cher, ou européen | prêt |
-| 4 | Un serveur MCP | prêt (les jetons d'API existent) |
-| 5 | Supprimer l'original en local après envoi | prêt |
-| 6 | Stockage des vidéos : passer de Google Drive à GCS | quand Odoo en aura besoin |
-| 7 | Migrer les vidéos existantes du Drive | en grande partie fait |
+| 2 | Un modèle de transcription moins cher, ou européen | prochain sujet |
+| 3 | Un serveur MCP | prêt (les jetons d'API existent) |
+| 4 | Supprimer l'original en local après envoi | prêt |
+| 5 | Stockage des vidéos : passer de Google Drive à GCS | quand Odoo en aura besoin |
+| 6 | Migrer les vidéos existantes du Drive | en grande partie fait |
 
 ## Accès Odoo relayé par le broker
 
@@ -27,17 +26,6 @@ délégation, le consentement et le format définitif du manifeste
 (`consumes.odoo`) sont en revue (PR #34 à #36 du portail). On s'y met dès
 qu'ils sont fusionnés : le manifeste de transcript doit suivre leur format
 final, pas un brouillon.
-
-## Tableau de bord dans « Mon compte »
-
-Un graphe en barres du **nombre de réunions par jour**, filtrable sur 30, 90 et
-365 jours ou depuis le début, avec la possibilité d'y superposer le **coût
-équivalent — en euros** plutôt qu'en dollars.
-
-Les données existent déjà : date de réunion par transcription, et coût réel par
-appel dans `api_usage`. Reste à choisir la source du taux de change (fixé une
-fois par mois suffit : c'est un ordre de grandeur, pas une comptabilité) et à
-suivre la charte des graphiques Ekonum.
 
 ## Un modèle de transcription moins cher, ou européen
 
