@@ -48,7 +48,9 @@ from . import avancement
 from .auth import AccessVerifier, AuthError
 from .chatter import ChatterError, composer
 from .coffre import Coffre, CoffreIndisponible
+from . import dashboard
 from .db import Database
+from .fx import EuroRate
 from .odoo import OdooGateway, OdooUnavailable
 from .secrets import GeminiKey, SecretError
 from .identite import IdentiteGoogle
@@ -293,6 +295,7 @@ def create_app(
     odoo_factory=None,
     stockage_factory=None,
     google_opener=None,
+    fx_opener=None,
 ) -> FastAPI:
     config = settings or Settings.from_env()
     db = database or Database(config.db_path)
@@ -304,6 +307,7 @@ def create_app(
         static_key=config.dev_api_key,
     )
     access = verifier or AccessVerifier(config.access_team_domain, config.access_aud)
+    euro = EuroRate(db, opener=fx_opener)
 
     etat_stockage: dict[str, Any] = {}
 
@@ -1358,6 +1362,19 @@ def create_app(
             "email": db.email_for_user(owner_id),
             "via": "jeton d'API" if par_jeton else "Cloudflare Access",
         }
+
+    @app.get("/api/me/stats")
+    def my_stats(
+        period: dashboard.Period = "30", owner_id: int = Depends(current_user)
+    ) -> dict:
+        """Ses réunions sur la période, et leur coût — en euros quand le
+        cours de la BCE est connu, en dollars sinon."""
+        rate = euro.current()
+        vue = dashboard.build(
+            db.meeting_costs(owner_id), period, rate["usd_per_eur"] if rate else None
+        )
+        vue["rate"] = rate
+        return vue
 
     @app.get("/api/me/odoo")
     def voir_odoo(owner_id: int = Depends(current_user)) -> dict:

@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { DECONNEXION } from './Marque.jsx';
 import { Bouton, Champ, Erreur } from './Communs.jsx';
+import { Dashboard } from './Dashboard.jsx';
 
-/** Mon compte : identité, raccordement Odoo, jetons d'API.
+/** Mon compte : identité, activité, raccordement Odoo, jetons d'API.
  *
  *  Le raccordement Odoo est **personnel et non partageable**. La note
  *  déposée dans le chatter porte l'identité du propriétaire de la clé :
@@ -41,6 +42,8 @@ export function Compte() {
 
       <Erreur>{erreur}</Erreur>
       {note ? <p className="mt-4 text-ekn-sm text-ekn-tone-success">{note}</p> : null}
+
+      <Dashboard />
 
       <div className="verre mt-8 rounded-xl p-5">
         <h2 className="titre text-[1.0625rem] font-medium">Odoo</h2>

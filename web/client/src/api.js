@@ -61,6 +61,7 @@ export const api = {
     return response.json();
   },
   me: () => call('GET', '/api/me'),
+  myStats: (period) => call('GET', `/api/me/stats?period=${encodeURIComponent(period)}`),
   reenrichir: (id, dossier = {}) => call('POST', `/api/jobs/${id}/enrich`, dossier),
   odooStatus: () => call('GET', '/api/me/odoo'),
   odooSave: (login, apiKey) => call('PUT', '/api/me/odoo', { login, api_key: apiKey }),

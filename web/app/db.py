@@ -111,6 +111,15 @@ CREATE TABLE IF NOT EXISTS api_usage (
 
 CREATE INDEX IF NOT EXISTS idx_usage_created ON api_usage(created_at);
 
+-- Le cours de référence de la BCE, un par mois : les coûts sont payés en
+-- dollars, le tableau de bord les montre en euros. Un ordre de grandeur,
+-- pas une comptabilité.
+CREATE TABLE IF NOT EXISTS fx_rates (
+    month       TEXT PRIMARY KEY,
+    usd_per_eur REAL NOT NULL,
+    published   TEXT NOT NULL
+);
+
 -- Jetons d'API, pour les appels machine : un script, une intégration
 -- Odoo, un serveur MCP. Seule l'empreinte est stockée — un vol de base
 -- ne doit pas rendre les jetons utilisables, et personne (pas même
@@ -1513,6 +1522,47 @@ class Database:
                     int(output_tokens),
                     float(cost_usd),
                 ),
+            )
+
+    def meeting_costs(self, owner_id: int) -> list[dict[str, Any]]:
+        """Les réunions d'une personne, avec leur date et ce qu'elles ont
+        coûté : de quoi dessiner son tableau de bord.
+
+        Une réunion en erreur ou annulée n'a pas eu lieu dans transcript,
+        une réunion à la corbeille non plus ; une archive, si. Le coût est
+        celui des appels relevés dans `api_usage` ; à défaut — réunions
+        reprises de l'app macOS —, celui qu'elle portait."""
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT j.id, COALESCE(j.meeting_date, j.created_at) AS happened_at, "
+                "COALESCE(u.cost, j.cloud_cost_usd, 0) AS cost_usd FROM jobs j "
+                "LEFT JOIN (SELECT job_id, SUM(cost_usd) AS cost FROM api_usage "
+                "GROUP BY job_id) u ON u.job_id = j.id "
+                "WHERE j.owner_id = ? AND j.deleted_at IS NULL "
+                "AND j.status NOT IN ('erreur', 'cancelled')",
+                (owner_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def fx_rate(self, month: str | None = None) -> dict[str, Any] | None:
+        """Le cours du mois demandé ; sans mois, le dernier connu."""
+        with self.connect() as conn:
+            if month:
+                row = conn.execute(
+                    "SELECT * FROM fx_rates WHERE month = ?", (month,)
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT * FROM fx_rates ORDER BY month DESC LIMIT 1"
+                ).fetchone()
+        return dict(row) if row else None
+
+    def set_fx_rate(self, month: str, usd_per_eur: float, published: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO fx_rates (month, usd_per_eur, published) "
+                "VALUES (?, ?, ?)",
+                (month, float(usd_per_eur), published),
             )
 
     def month_spend_usd(self, month: str | None = None) -> float:

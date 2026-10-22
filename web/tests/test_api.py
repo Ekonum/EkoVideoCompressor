@@ -2925,3 +2925,146 @@ class OdooSansClePersonnelleTestCase(_Fixture):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+ECB_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
+<gesmes:Envelope xmlns:gesmes="http://www.gesmes.org/xml/2002-08-01"
+    xmlns="http://www.ecb.int/vocabulary/2002-08-01/eurofxref">
+  <Cube><Cube time="2026-10-21">
+    <Cube currency="USD" rate="1.2500"/><Cube currency="JPY" rate="160.12"/>
+  </Cube></Cube>
+</gesmes:Envelope>"""
+
+
+class _Reponse:
+    def __init__(self, corps: bytes) -> None:
+        self._corps = corps
+
+    def read(self) -> bytes:
+        return self._corps
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+
+class DashboardTestCase(_Fixture):
+    """Le tableau de bord de « Mon compte » : réunions et coût, par période."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.appels_bce = 0
+
+        def bce(url, timeout):
+            self.appels_bce += 1
+            if self.panne:
+                raise OSError("réseau coupé")
+            return _Reponse(ECB_XML)
+
+        self.panne = False
+        app = create_app(
+            self.settings, database=self.db,
+            gemini_key=GeminiKey(url="", token="", item="", field="", static_key="k"),
+            fx_opener=bce,
+        )
+        self.client = self._client_pour(app)
+
+    def _reunion(self, quand: str, cout: float) -> int:
+        job_id = self.client.post("/api/jobs/import", json={
+            "filename": f"{quand}.m4a", "created_at": "2026-10-05 08:00:00",
+            "transcript": "Robin : bonjour.", "meeting_date": quand,
+            "segments": [{"start": 0, "end": 3, "speaker": "Robin", "text": "bonjour"}],
+        }).json()["job_id"]
+        self.db.add_api_usage(
+            job_id=job_id, provider="gemini", model="m", step="transcription",
+            input_tokens=1, output_tokens=1, cost_usd=cout,
+        )
+        return job_id
+
+    def test_les_reunions_de_la_periode_et_leur_cout_en_euros(self):
+        from datetime import date, timedelta
+        hier = (date.today() - timedelta(days=1)).isoformat()
+        self._reunion(f"{hier}T10:00:00", 0.50)
+        self._reunion(f"{hier}T15:00:00", 0.75)
+        self._reunion("2020-01-01T10:00:00", 9.0)  # hors des 30 jours
+
+        vue = self.client.get("/api/me/stats", params={"period": "30"}).json()
+        self.assertEqual(vue["bucket"], "day")
+        self.assertEqual(len(vue["series"]), 30)
+        jour = next(b for b in vue["series"] if b["start"] == hier)
+        self.assertEqual(jour["meetings"], 2)
+        self.assertEqual(jour["cost_usd"], 1.25)
+        self.assertEqual(jour["cost_eur"], 1.0)
+        self.assertEqual(vue["totals"], {"meetings": 2, "cost_usd": 1.25, "cost_eur": 1.0})
+        self.assertEqual(vue["rate"]["usd_per_eur"], 1.25)
+
+    def test_le_cours_n_est_demande_qu_une_fois_par_mois(self):
+        self.client.get("/api/me/stats")
+        self.client.get("/api/me/stats", params={"period": "all"})
+        self.assertEqual(self.appels_bce, 1)
+
+    def test_sans_la_bce_on_reste_en_dollars(self):
+        self.panne = True
+        self._reunion("2026-10-01T10:00:00", 0.5)
+        vue = self.client.get("/api/me/stats", params={"period": "all"}).json()
+        self.assertIsNone(vue["rate"])
+        self.assertIsNone(vue["totals"]["cost_eur"])
+        self.assertEqual(vue["totals"]["cost_usd"], 0.5)
+        self.client.get("/api/me/stats")
+        self.assertEqual(self.appels_bce, 1, "une BCE en panne n'est pas rappelée à chaque affichage")
+
+    def test_une_periode_inconnue_est_refusee(self):
+        self.assertEqual(self.client.get("/api/me/stats", params={"period": "7"}).status_code, 422)
+
+    def test_les_reunions_des_autres_ne_comptent_pas(self):
+        autre = self.db.user_id_for_email("autre@ekonum.fr")
+        self.db.import_job(owner_id=autre, payload={
+            "filename": "x.m4a", "transcript": "x", "meeting_date": "2026-10-01T10:00:00",
+        })
+        vue = self.client.get("/api/me/stats", params={"period": "all"}).json()
+        self.assertEqual(vue["totals"]["meetings"], 0)
+
+
+class DashboardBuildTest(unittest.TestCase):
+    """Le regroupement des réunions, sans serveur."""
+
+    def test_une_reunion_tombe_dans_le_jour_de_paris(self):
+        from datetime import date
+        from app import dashboard
+        # 23 h 30 UTC le 14 juillet : déjà le 15 à Paris.
+        vue = dashboard.build(
+            [{"happened_at": "2026-07-14T23:30+00:00", "cost_usd": 0.1}],
+            "30", None, today=date(2026, 7, 20),
+        )
+        jour = {b["start"]: b["meetings"] for b in vue["series"]}
+        self.assertEqual(jour["2026-07-15"], 1)
+        self.assertEqual(jour["2026-07-14"], 0)
+
+    def test_une_annee_se_lit_par_semaine_et_tout_par_mois(self):
+        from datetime import date
+        from app import dashboard
+        rows = [{"happened_at": "2024-01-10T10:00:00+00:00", "cost_usd": 1}]
+        today = date(2026, 10, 22)
+        annee = dashboard.build(rows, "365", None, today=today)
+        self.assertEqual(annee["bucket"], "week")
+        self.assertTrue(all(date.fromisoformat(b["start"]).weekday() == 0 for b in annee["series"]))
+        tout = dashboard.build(rows, "all", None, today=today)
+        self.assertEqual(tout["bucket"], "month")
+        self.assertEqual(tout["series"][0]["start"], "2024-01-01")
+        self.assertEqual(tout["series"][-1]["start"], "2026-10-01")
+        self.assertEqual(tout["totals"]["meetings"], 1)
+
+    def test_une_reunion_a_venir_n_est_pas_comptee(self):
+        from datetime import date
+        from app import dashboard
+        vue = dashboard.build(
+            [{"happened_at": "2026-10-30T10:00:00+00:00", "cost_usd": 1}],
+            "30", None, today=date(2026, 10, 22),
+        )
+        self.assertEqual(vue["totals"]["meetings"], 0)
+
+    def test_le_cours_de_la_bce_se_lit(self):
+        from app.fx import parse_ecb
+        self.assertEqual(parse_ecb(ECB_XML), (1.25, "2026-10-21"))
