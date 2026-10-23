@@ -146,16 +146,50 @@ de démarrer si ni l'un ni l'autre n'est configuré.
 
 ## Le client
 
-`web/static/` — pas de build. Le module qui compte est
-`media-worker.js` : il découpe et encode les fenêtres hors du fil
+### Enregistrements en plusieurs parties et file d'attente
+
+Déposer plusieurs fichiers ouvre « Organiser les enregistrements ».
+Ils restent séparés par défaut. Avec la poignée, déposer un audio au
+centre d’un autre les réunit ; le déposer au bord change seulement l’ordre.
+On peut ajouter d’autres audios à un groupe et ordonner ses morceaux.
+Au clavier, les flèches déplacent ; Entrée choisit la réunion, puis Entrée
+sur une autre poignée les réunit. Échap annule le choix. « Séparer » et « Annuler » permettent
+de revenir sur ce choix. « Organiser » rouvre la fenêtre depuis la file.
+
+La fusion audio se fait sur le poste, vers un fichier temporaire privé
+du navigateur. Chaque morceau est normalisé en AAC mono 48 kHz, puis ses
+paquets rejoignent une piste unique sans second réencodage. Les originaux
+restent intacts ; les vidéos restent séparées. La transcription et
+l'archivage suivent ensuite le parcours habituel, pour une seule réunion.
+
+La file prépare les contextes en arrière-plan, une recherche d'avance à
+la fois. Le formulaire réutilise une recherche déjà terminée ou rejoint
+celle en cours. Aucun traitement ni dépôt Odoo ne démarre à ce stade.
+Une recherche indisponible laisse la saisie manuelle possible. Changer
+l'ordre des morceaux crée un contexte distinct ; changer seulement
+l'ordre des réunions réutilise leurs contextes.
+
+La file et les contextes restent propres à l'onglet. Fermer celui-ci vide
+la file. Le navigateur tente alors de nettoyer les assemblages temporaires ;
+ce nettoyage n'est pas garanti si le processus s'arrête brutalement.
+
+Recette locale : [`client/tests/README.md`](client/tests/README.md).
+
+Un onglet ouvert avant un déploiement peut encore référencer un ancien
+worker. Le signal de démarrage du module distingue ce cas d'une erreur
+de fichier : un échec avant ce signal affiche « Recharger la page », sans
+rechargement automatique. Le bouton attend la fin des envois, compressions
+et archivages locaux. La file non enregistrée doit ensuite être redéposée.
+
+`web/client/` — React et Vite. Le module média est
+`src/media-worker.js` : il découpe et encode les fenêtres hors du fil
 principal, puis les envoie lui-même (repasser des ArrayBuffers de
 plusieurs Mo au fil principal juste pour les poster n'ajouterait que des
 copies). Il est indépendant de tout framework et survivra à l'UI.
 
-Pas de Vite ni de React pour l'instant : la chaîne média doit rester
-lisible directement dans le navigateur. La question du socle frontend se
-pose maintenant que la bibliothèque a son API, et elle sera tranchée avec
-l'UI — pas avant, et surtout pas en retardant une API vérifiable.
+Vite construit le client et ses workers ; FastAPI sert le résultat de
+`web/client/dist/`. La chaîne média reste indépendante de React et
+s'exécute dans les workers du navigateur.
 
 **Format d'upload : MP3 64 kbps mono 16 kHz**, soit exactement ce que
 produit `build_cloud_audio_cmd`. Gemini documente wav, mp3, aiff, aac,

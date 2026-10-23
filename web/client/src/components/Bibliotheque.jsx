@@ -5,9 +5,12 @@ import { depuisUtc, duree, fileSize, usd, jour, horodatage } from '../format.js'
 import { MOD, useRaccourcis } from '../raccourcis.js';
 import { surlignerMots } from '../surlignage.jsx';
 import { Welcome } from './Welcome.jsx';
+import { FileOrganizer } from './FileOrganizer.jsx';
+import { PreparationStatus } from './PreparationStatus.jsx';
+import { uniqueFiles } from '../organizer.js';
 import { interrompreReunion } from '../usePipeline.js';
 import {
-  enqueue, isMedia, launch, remoteFile, removeFromQueue, requestLaunch, useFileDrag, useFileQueue,
+  enqueue, isMedia, launch, remoteFile, removeFromQueue, replaceQueue, requestLaunch, useFileDrag, useFileQueue,
 } from '../fileQueue.js';
 
 /** La bibliothèque : une table, pas une grille de cartes.
@@ -588,6 +591,7 @@ function Resultats({ resultats, requete, surOuvrir }) {
  */
 function ALancer({ surLancer }) {
   const enAttente = useFileQueue();
+  const [organisation, setOrganisation] = useState(null);
   if (!enAttente.length) return null;
   return (
     <div className="verre mt-6 rounded-xl p-4">
@@ -598,11 +602,13 @@ function ALancer({ surLancer }) {
         <span className="text-ekn-sm text-ekn-text-muted">
           Restés sur ton poste : la liste se vide si tu fermes l’onglet.
         </span>
+        {(enAttente.length > 1 || enAttente.some((entry) => entry.file.mergedParts)) && <button className="ekn-button ekn-button--subtle ekn-button--compact"
+          onClick={() => setOrganisation(enAttente.map((entry) => entry.file))}>Organiser</button>}
       </div>
       <ul className="mt-2 divide-y divide-bord/60">
         {enAttente.map((entree) => (
           <li key={entree.id} className="flex items-center gap-3 py-2 text-ekn-sm">
-            <span className="min-w-0 flex-1 truncate">{entree.file.name}</span>
+            <span className="min-w-0 flex-1 truncate">{entree.file.name}<PreparationStatus file={entree.file} /></span>
             <span className="whitespace-nowrap text-ekn-text-muted">{jour(new Date(entree.file.lastModified).toISOString())}</span>
             <span className="w-16 whitespace-nowrap text-right tabular-nums text-ekn-text-muted">{fileSize(entree.file.size)}</span>
             <button
@@ -622,6 +628,8 @@ function ALancer({ surLancer }) {
           </li>
         ))}
       </ul>
+      {organisation && <FileOrganizer files={organisation} onCancel={() => setOrganisation(null)}
+        onConfirm={(files) => { replaceQueue(files); setOrganisation(null); }} />}
     </div>
   );
 }
@@ -629,7 +637,9 @@ function ALancer({ surLancer }) {
 /** Déposer des fichiers sur la bibliothèque les ajoute à « À lancer ». */
 function DeposerIci() {
   const glisse = useFileDrag();
+  const queue = useFileQueue();
   const [message, setMessage] = useState('');
+  const [organisation, setOrganisation] = useState(null);
   useEffect(() => {
     if (!message) return undefined;
     const minuteur = setTimeout(() => setMessage(''), 4000);
@@ -646,6 +656,10 @@ function DeposerIci() {
             e.preventDefault();
             const liste = [...e.dataTransfer.files];
             const medias = liste.filter(isMedia);
+            if (medias.length > 1) {
+              setOrganisation(uniqueFiles([...queue.map((entry) => entry.file), ...medias]));
+              return;
+            }
             const ajoutes = enqueue(medias);
             const ignores = liste.length - medias.length;
             setMessage(
@@ -660,6 +674,8 @@ function DeposerIci() {
           </div>
         </div>
       ) : null}
+      {organisation && <FileOrganizer files={organisation} onCancel={() => setOrganisation(null)}
+        onConfirm={(files) => { replaceQueue(files); setOrganisation(null); }} />}
       {message ? (
         <p className="fixed bottom-6 left-0 right-0 z-40 mx-auto w-fit rounded-lg bg-fonce px-4 py-2 text-ekn-sm text-clair shadow-xl">
           {message}

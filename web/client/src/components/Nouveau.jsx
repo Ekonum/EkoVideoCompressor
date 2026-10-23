@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { Bouton, Champ, DateHeure, Erreur } from './Communs.jsx';
-import { sonderDuree, identifier } from '../sonde.js';
+import { sonderDuree } from '../sonde.js';
+import { meetingMoment, preparation, snapshotFile, usePreparation } from '../preparation.js';
+import { isAudioFile as audioSeul, uniqueFiles } from '../organizer.js';
+import { FileOrganizer } from './FileOrganizer.jsx';
+import { PreparationStatus } from './PreparationStatus.jsx';
+import { ReloadNotice } from './ReloadNotice.jsx';
 import { api } from '../api.js';
 import { useCompression } from '../useCompression.js';
 import { archiver, useArchivage } from '../archivage.js';
@@ -9,7 +14,7 @@ import { Sonde } from './Sonde.jsx';
 import { interrompre, reprendre, usePipeline } from '../usePipeline.js';
 import { avancementGlobal } from '../progression.js';
 import {
-  consumeLaunchRequest, enqueue, isMedia, removeFromQueue, takeNext, useFileDrag, useFileQueue,
+  consumeLaunchRequest, enqueue, isMedia, removeFromQueue, replaceQueue, takeNext, useFileDrag, useFileQueue,
 } from '../fileQueue.js';
 import { duree, mo, usd, horodatage, liste } from '../format.js';
 
@@ -33,31 +38,11 @@ function versChampLocal(date) {
  *  jamais été compressée : la retraiter propose de la remplacer par sa
  *  version légère (environ 0,2 Mbit/s). */
 const DEBIT_A_COMPRESSER = 1_000_000;
-/** Un enregistrement sans image : il est gardé avec la réunion, comme une
- *  vidéo, mais il n'y a rien à choisir — seule sa piste audio compte. */
-const AUDIO_SEUL = /\.(m4a|mp3|wav|aac|flac|ogg|opus|amr|caf|aiff?|weba)$/i;
-const audioSeul = (fichier) => Boolean(fichier)
-  && (fichier.type?.startsWith('audio/') || AUDIO_SEUL.test(fichier.name || ''));
-
-/** Au-dessous de ce poids, le fichier est copié en mémoire dès qu'on le
- *  choisit. Un mémo vocal synchronisé par iCloud peut être réécrit sur le
- *  disque entre le dépôt et l'encodage ; Chrome refuse alors de le relire,
- *  avec un « network error » qui n'a rien de réseau. La copie, elle, ne
- *  bouge plus. Au-delà, une vidéo de plusieurs gigaoctets pèserait trop. */
-const COPIE_MAX = 400 * 1024 * 1024;
-
-async function copieEnMemoire(fichier) {
-  // Une réunion qu'on retraite n'est pas sur ce poste : elle se relit
-  // depuis le stockage, qui ne bouge pas.
-  if (fichier.remote || fichier.size > COPIE_MAX) return fichier;
-  const octets = await fichier.arrayBuffer();
-  return new File([octets], fichier.name, { type: fichier.type, lastModified: fichier.lastModified });
-}
-
 export function Nouveau({ surTermine, surBibliotheque }) {
   const [fichier, setFichier] = useState(null);
   const [secondes, setSecondes] = useState(0);
   const [lecture, setLecture] = useState('');
+  const [reloadError, setReloadError] = useState(null);
   const [client, setClient] = useState('');
   const [participants, setParticipants] = useState('');
   const [glossaire, setGlossaire] = useState('');
@@ -99,6 +84,14 @@ export function Nouveau({ surTermine, surBibliotheque }) {
   const glisse = useFileDrag();
   const [surZone, setSurZone] = useState(false);
   const [ignores, setIgnores] = useState(0);
+  const [organisation, setOrganisation] = useState(null);
+  const contextePrepare = usePreparation(fichier);
+
+  useEffect(() => {
+    if (contextePrepare?.status === 'running') {
+      setSonde((current) => current?.enCours ? { ...current, phase: contextePrepare.phase } : current);
+    }
+  }, [contextePrepare?.phase, contextePrepare?.status]);
 
   const capacites = typeof AudioEncoder !== 'undefined' && window.isSecureContext;
 
@@ -152,15 +145,8 @@ export function Nouveau({ surTermine, surBibliotheque }) {
     const actuelle = () => numero === sondeCourante.current;
     setSonde({ enCours: true, phase: 'extrait', moment: instant });
     try {
-      const reglages = await api.settings();
-      const vue = await identifier(choisi, {
-        audio: reglages.audio,
-        fenetre: reglages.probe?.window_seconds || 300,
-        duree: total,
-        moment: instant,
-        surPhase: (phase) => {
-          if (actuelle()) setSonde((s) => (s?.enCours ? { ...s, phase } : s));
-        },
+      const vue = await preparation.prepare(choisi, {
+        duration: total, moment: instant || meetingMoment(choisi, total), retry: true,
       });
       if (!actuelle()) return;
       setSonde({ ...vue, enCours: false, moment: instant });
@@ -168,7 +154,8 @@ export function Nouveau({ surTermine, surBibliotheque }) {
       // Une réunion récupérée a souvent déjà sa transcription dans Odoo,
       // déposée par l'ancienne app : le dépôt ne s'y fait qu'à la main.
       if (retenu) retenir({ ...retenu, auto: Boolean(vue.investigation.auto) && !choisi.remote });
-    } catch {
+    } catch (error) {
+      if (actuelle() && error.needsReload) setReloadError(error);
       if (actuelle()) setSonde(null);
     }
   }
@@ -182,6 +169,13 @@ export function Nouveau({ surTermine, surBibliotheque }) {
     setIgnores(liste.length - medias.length);
     if (!medias.length) return;
     const occupe = pipeline.etat === 'traitement' || pipeline.etat === 'creation';
+    if (medias.length > 1) {
+      setOrganisation(uniqueFiles([
+        ...(!occupe && fichier ? [fichier] : []),
+        ...enAttente.map((entry) => entry.file), ...medias,
+      ]));
+      return;
+    }
     if (occupe) {
       enqueue(medias);
       return;
@@ -213,6 +207,7 @@ export function Nouveau({ surTermine, surBibliotheque }) {
   }, []);
 
   async function charger(original) {
+    setReloadError(null);
     setFichier(null);
     setSecondes(0);
     sondeCourante.current += 1;
@@ -221,8 +216,8 @@ export function Nouveau({ surTermine, surBibliotheque }) {
     if (!original) return setLecture('');
     setLecture('Lecture des métadonnées…');
     try {
-      const choisi = await copieEnMemoire(original);
-      const total = await sonderDuree(choisi);
+      const choisi = await snapshotFile(original);
+      const total = preparation.get(original)?.duration ?? await sonderDuree(choisi);
       setFichier(choisi);
       setSecondes(total);
       setDebut(0);
@@ -250,7 +245,8 @@ export function Nouveau({ surTermine, surBibliotheque }) {
       if (mode !== 'compresser' || audioSeul(choisi)) ecouter(choisi, total, debutReunion.toISOString());
     } catch (e) {
       setFichier(null);
-      setLecture(`Fichier illisible : ${e.message}`);
+      if (e.needsReload) { setLecture(''); setReloadError(e); }
+      else setLecture(`Fichier illisible : ${e.message}`);
     }
   }
 
@@ -412,7 +408,7 @@ export function Nouveau({ surTermine, surBibliotheque }) {
               <span className="text-ekn-text-muted">Ensuite :</span>
               {enAttente.map((entree) => (
                 <span key={entree.id} className="inline-flex items-center gap-1 rounded-full bg-voile/70 px-2.5 py-0.5 text-ekn-text/75 ring-1 ring-bord">
-                  {entree.file.name}
+                  <span>{entree.file.name}<PreparationStatus file={entree.file} /></span>
                   <button
                     type="button"
                     onClick={() => removeFromQueue(entree.id)}
@@ -423,9 +419,19 @@ export function Nouveau({ surTermine, surBibliotheque }) {
                   </button>
                 </span>
               ))}
+              <button type="button" className="ekn-button ekn-button--subtle ekn-button--compact"
+                onClick={() => setOrganisation(uniqueFiles([
+                  ...(!enCours && fichier ? [fichier] : []), ...enAttente.map((entry) => entry.file),
+                ]))}>Organiser</button>
             </div>
           ) : null}
           {lecture ? <p className="mt-2 text-ekn-sm text-ekn-text/60">{lecture}</p> : null}
+          <ReloadNotice error={reloadError} compressing={compression.etat === 'compression'} />
+          {fichier?.mergedParts && <button type="button" disabled={enCours}
+            className="ekn-button ekn-button--subtle ekn-button--compact mt-2"
+            onClick={() => setOrganisation(uniqueFiles([fichier, ...enAttente.map((entry) => entry.file)]))}>
+            Modifier les {fichier.mergedParts.length} morceaux de cette réunion
+          </button>}
           {fichier ? (
             <div className="mt-3 flex flex-wrap items-center gap-3 text-ekn-sm">
               <label htmlFor="date-reunion" className="text-ekn-text/70">Date de la réunion</label>
@@ -626,7 +632,7 @@ export function Nouveau({ surTermine, surBibliotheque }) {
         <div className="flex flex-wrap items-center gap-4">
           <Bouton
             variante="accent"
-            disabled={!fichier || enCours || (mode === 'compresser' && !compression.supportee)}
+            disabled={!fichier || Boolean(reloadError) || enCours || (mode === 'compresser' && !compression.supportee)}
             onClick={() => {
               const borne = debut > 0 || (fin && fin < secondes)
                 ? { start: debut, end: fin || secondes }
@@ -766,6 +772,16 @@ export function Nouveau({ surTermine, surBibliotheque }) {
           </div>
         ) : null}
       </div>
+      {organisation && <FileOrganizer files={organisation} onCancel={() => setOrganisation(null)}
+        onConfirm={(files) => {
+          setOrganisation(null);
+          if (enCours) replaceQueue(files);
+          else {
+            const [first, ...rest] = files;
+            replaceQueue(rest);
+            if (first) charger(first);
+          }
+        }} />}
     </section>
   );
 }

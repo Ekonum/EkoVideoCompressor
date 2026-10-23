@@ -50,6 +50,12 @@ export function useArchivage(jobId) {
   return jobId == null ? null : taches.get(jobId) || null;
 }
 
+/** Garde le bouton de rechargement à jour pendant les archivages. */
+export function useArchiving() {
+  useArchivage(null);
+  return enCours();
+}
+
 async function compresserVers(fichier, trim, poignee, surProgression) {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL('./media-worker.js', import.meta.url), {
@@ -117,7 +123,14 @@ export async function archiver({ fichier, trim = null, cible, audio = false }) {
     let compresse = null;
     let secours = false;
     try {
-      await compresserVers(fichier, trim, poignee, (p) => publier(cle, { progression: p }));
+      if (fichier.mergedParts && !trim) {
+        // L'assemblage a déjà produit le profil audio de l'archive.
+        // Le réencoder dégraderait le son sans gain utile.
+        compresse = fichier;
+        publier(cle, { progression: 1 });
+      } else {
+        await compresserVers(fichier, trim, poignee, (p) => publier(cle, { progression: p }));
+      }
     } catch (erreur) {
       // Un enregistrement audio entier a toujours une version à garder :
       // la sienne. Mieux vaut l'archiver tel quel que ne rien archiver.

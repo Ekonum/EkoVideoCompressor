@@ -3,6 +3,29 @@
 Ce qui est décidé mais pas encore fait, et pourquoi ça attend. Les sujets
 sont rangés **par priorité** : on prend le premier qui ne dépend de personne.
 
+## En revue — dépôt de plusieurs enregistrements (23/10)
+
+Branche `codex/organiser-enregistrements`, préparée et testée localement :
+fenêtre de regroupement des morceaux audio, ordre des morceaux et de la
+file, puis préparation du contexte des réunions suivantes en arrière-plan.
+La fusion reste sur le poste. Pas de migration de données, de nouveau
+service ni de publication automatique dans Odoo. Mise en production autorisée par Robin le 23/10 ; recette complète réussie, publication en cours.
+
+La même branche distingue un module audio indisponible d'un fichier
+illisible et propose un rechargement explicite, protégé pendant les
+envois, compressions et archivages locaux.
+
+Le dépôt au centre réunit les audios ; les bords réordonnent la file.
+Le geste utilise une cible vitrée temporaire et une animation réduite
+selon les préférences système. Entrée sur deux poignées réunit au clavier.
+
+Le `<dialog>` et les boutons viennent d'ekonum-ui 3.15.0. Les poignées
+d'ordre et le regroupement sont propres à ce parcours ; cette version du
+design system n'expose pas de liste réordonnable partagée. Le besoin est
+à proposer au design system s'il apparaît dans d'autres applications.
+
+## Prochains sujets
+
 | # | Sujet | État |
 |---|-------|------|
 | 1 | Accès Odoo relayé par le broker | en attente du portail |

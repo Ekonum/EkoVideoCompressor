@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { preparation } from './preparation.js';
+import { fileKey, uniqueFiles } from './organizer.js';
 
 /** Les fichiers déposés en attendant d'être lancés.
  *
@@ -20,6 +22,16 @@ const subscribers = new Set();
 function publish(next) {
   queue = next;
   subscribers.forEach((notify) => notify());
+  preparation.schedule(queue.map((entry) => entry.file));
+}
+
+/** L'organisation se valide en une fois : aucun fichier ne disparaît
+ *  pendant qu'on déplace ou assemble des morceaux dans la fenêtre. */
+export function replaceQueue(files) {
+  const previous = new Map(queue.map((entry) => [entry.file, entry]));
+  publish(uniqueFiles(files).map((file) => previous.get(file) || {
+    id: `queued-${crypto.randomUUID()}`, file,
+  }));
 }
 
 /** Un fichier audio ou vidéo — le navigateur ne donne pas toujours le
@@ -54,9 +66,9 @@ export function remoteFile(job) {
 /** Ajoute des fichiers, sans doublon : le même fichier déposé deux fois
  *  n'attend qu'une fois. */
 export function enqueue(files, { front = false } = {}) {
-  const known = new Set(queue.map((e) => `${e.file.name}|${e.file.size}|${e.file.lastModified}`));
-  const added = files
-    .filter((file) => !known.has(`${file.name}|${file.size}|${file.lastModified}`))
+  const known = new Set(queue.map((e) => fileKey(e.file)));
+  const added = uniqueFiles(files)
+    .filter((file) => !known.has(fileKey(file)))
     .map((file) => ({ id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, file }));
   if (added.length) publish(front ? [...added, ...queue] : [...queue, ...added]);
   return added.length;
@@ -83,8 +95,7 @@ export function requestLaunch(id) {
 /** Ouvre tout de suite dans l'écran de lancement, devant la file. */
 export function launch(file) {
   enqueue([file], { front: true });
-  const entry = queue.find((e) => e.file.name === file.name && e.file.size === file.size
-    && e.file.lastModified === file.lastModified);
+  const entry = queue.find((e) => fileKey(e.file) === fileKey(file));
   if (entry) requestLaunch(entry.id);
 }
 
