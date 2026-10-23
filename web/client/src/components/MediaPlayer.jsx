@@ -1,4 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
+import { clipAudioParts } from '../audio-parts.js';
+import { horodatage } from '../format.js';
 
 /** <ekn-audio> d'ekonum-ui, monté hors de React.
  *
@@ -9,7 +11,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
  *  chargement.
  */
 export const EknAudio = forwardRef(function EknAudio(
-  { src, trim = false, start, end, duration, label, autoPlay = false, onTrim, onTime, onUnreadable, className = '', inert },
+  { src, trim = false, start, end, duration, label, autoPlay = false, onTrim, onTime, onUnreadable, className = '', inert, parts },
   ref,
 ) {
   const hote = useRef(null);
@@ -55,7 +57,60 @@ export const EknAudio = forwardRef(function EknAudio(
     // lecteur à chaque poignée déplacée.
   }, [src, trim, duration, label, autoPlay]);
 
-  return <div ref={hote} className={className} inert={inert} />;
+  // L’adaptateur ajoute des repères sans modifier le composant partagé.
+  // Les contrôles et le rognage restent ceux d’ekonum-ui.
+  useEffect(() => {
+    const el = lecteur.current;
+    const chapters = clipAudioParts(parts);
+    if (!el || chapters.length < 2) return undefined;
+    const media = el.querySelector('video');
+    const range = el.querySelector('.ekn-audio__seek');
+    const timeline = el.querySelector('.ekn-audio__timeline');
+    let wrapper;
+    if (!timeline && range) {
+      wrapper = document.createElement('span');
+      wrapper.className = 'audio-parts-seek';
+      range.before(wrapper); wrapper.append(range);
+    }
+    const host = timeline || wrapper;
+    if (!host) return undefined;
+    const markers = document.createElement('span');
+    markers.className = 'audio-part-markers'; markers.setAttribute('aria-hidden', 'true');
+    host.append(markers);
+    const paint = () => {
+      const scale = Number(el.querySelector('input[type=range]')?.max) || Math.floor(duration || media.duration);
+      markers.replaceChildren();
+      if (!(scale > 0)) return;
+      for (const part of chapters.slice(1)) {
+        if (part.start >= scale) continue;
+        const marker = document.createElement('span'); marker.className = 'audio-part-marker';
+        const ratio = part.start / scale;
+        marker.style.left = `calc(8px + (100% - 16px) * ${ratio})`;
+        markers.append(marker);
+      }
+    };
+    paint(); media.addEventListener('loadedmetadata', paint); media.addEventListener('durationchange', paint);
+    return () => {
+      media.removeEventListener('loadedmetadata', paint); media.removeEventListener('durationchange', paint);
+      markers.remove();
+      if (wrapper) { wrapper.before(range); wrapper.remove(); }
+    };
+  }, [parts, duration, src, trim, label, autoPlay]);
+
+  const chapters = clipAudioParts(parts);
+  return <div className={className} inert={inert}>
+    <div ref={hote} />
+    {chapters.length > 1 && <nav className="audio-part-links" aria-label="Morceaux de l’enregistrement">
+      {chapters.map((part, index) => <button key={`${part.start}-${index}`} type="button"
+        className="audio-part-link" title={part.name}
+        aria-label={`Aller au morceau ${index + 1} : ${part.name}, à ${horodatage(part.start)}`}
+        onClick={() => lecteur.current?.seek(part.start, false)}>
+        <span aria-hidden="true" className="text-ekn-text-muted">{index + 1}</span>
+        <span className="truncate">{part.name}</span>
+        <time className="text-ekn-text-muted">{horodatage(part.start)}</time>
+      </button>)}
+    </nav>}
+  </div>;
 });
 
 /** Le lecteur de transcript, pour l'audio comme pour la vidéo.
@@ -64,6 +119,6 @@ export const EknAudio = forwardRef(function EknAudio(
  *  `onTime` lui renvoie l'instant écouté. L'image n'apparaît que s'il y
  *  en a une.
  */
-export const MediaPlayer = forwardRef(function MediaPlayer({ src, autoPlay = false, onTime }, ref) {
-  return <EknAudio ref={ref} src={src} autoPlay={autoPlay} onTime={onTime} className="mt-3" />;
+export const MediaPlayer = forwardRef(function MediaPlayer({ src, autoPlay = false, onTime, parts, duration }, ref) {
+  return <EknAudio ref={ref} src={src} autoPlay={autoPlay} onTime={onTime} parts={parts} duration={duration} className="mt-3" />;
 });

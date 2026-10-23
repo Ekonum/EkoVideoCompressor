@@ -50,6 +50,7 @@ export function Apercu({ fichier, duree, debut, fin, surDebut, surFin, actif }) 
         start={debut}
         end={fin}
         duration={duree}
+        parts={fichier.audioParts}
         onTrim={rogner}
         onUnreadable={() => setLisible(false)}
         inert={actif}

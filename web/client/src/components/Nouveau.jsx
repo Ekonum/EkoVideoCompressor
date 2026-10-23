@@ -4,11 +4,12 @@ import { sonderDuree } from '../sonde.js';
 import { meetingMoment, preparation, snapshotFile, usePreparation } from '../preparation.js';
 import { isAudioFile as audioSeul, uniqueFiles } from '../organizer.js';
 import { FileOrganizer } from './FileOrganizer.jsx';
-import { PreparationStatus } from './PreparationStatus.jsx';
+import { PreparationStatus, PreparationSummary } from './PreparationStatus.jsx';
 import { ReloadNotice } from './ReloadNotice.jsx';
 import { api } from '../api.js';
 import { useCompression } from '../useCompression.js';
 import { archiver, useArchivage } from '../archivage.js';
+import { clipAudioParts } from '../audio-parts.js';
 import { Apercu } from './Apercu.jsx';
 import { Sonde } from './Sonde.jsx';
 import { interrompre, reprendre, usePipeline } from '../usePipeline.js';
@@ -85,6 +86,7 @@ export function Nouveau({ surTermine, surBibliotheque }) {
   const [surZone, setSurZone] = useState(false);
   const [ignores, setIgnores] = useState(0);
   const [organisation, setOrganisation] = useState(null);
+  const [partsOrganisation, setPartsOrganisation] = useState(null);
   const contextePrepare = usePreparation(fichier);
 
   useEffect(() => {
@@ -403,33 +405,30 @@ export function Nouveau({ surTermine, surBibliotheque }) {
               {ignores} fichier{ignores > 1 ? 's' : ''} ignoré{ignores > 1 ? 's' : ''} : ni audio ni vidéo.
             </p>
           ) : null}
-          {enAttente.length ? (
-            <div className="mt-2 flex flex-wrap items-center gap-1.5 text-ekn-sm">
-              <span className="text-ekn-text-muted">Ensuite :</span>
-              {enAttente.map((entree) => (
-                <span key={entree.id} className="inline-flex items-center gap-1 rounded-full bg-voile/70 px-2.5 py-0.5 text-ekn-text/75 ring-1 ring-bord">
-                  <span>{entree.file.name}<PreparationStatus file={entree.file} /></span>
-                  <button
-                    type="button"
-                    onClick={() => removeFromQueue(entree.id)}
-                    aria-label={`Retirer ${entree.file.name} de la file`}
-                    className="text-ekn-text-muted hover:text-ekn-text"
-                  >
-                    ×
-                  </button>
-                </span>
-              ))}
-              <button type="button" className="ekn-button ekn-button--subtle ekn-button--compact"
+          {enAttente.length > 0 && <div className="mt-3 text-ekn-sm">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span className="text-ekn-text-muted">Ensuite · {enAttente.length}</span>
+              <PreparationSummary files={enAttente.map((entry) => entry.file)} />
+              <button type="button" className="ekn-button ekn-button--subtle ekn-button--compact ml-auto"
                 onClick={() => setOrganisation(uniqueFiles([
                   ...(!enCours && fichier ? [fichier] : []), ...enAttente.map((entry) => entry.file),
                 ]))}>Organiser</button>
             </div>
-          ) : null}
+            <ul className="divide-y divide-bord/60">
+              {enAttente.map((entree) => <li key={entree.id} className="flex min-w-0 items-center gap-2 py-1">
+                <PreparationStatus file={entree.file} />
+                <span className="min-w-0 flex-1 truncate" title={entree.file.name}>{entree.file.name}</span>
+                <button type="button" onClick={() => removeFromQueue(entree.id)}
+                  aria-label={`Retirer ${entree.file.name} de la file`}
+                  className="ekn-button ekn-button--subtle ekn-button--compact">×</button>
+              </li>)}
+            </ul>
+          </div>}
           {lecture ? <p className="mt-2 text-ekn-sm text-ekn-text/60">{lecture}</p> : null}
           <ReloadNotice error={reloadError} compressing={compression.etat === 'compression'} />
           {fichier?.mergedParts && <button type="button" disabled={enCours}
             className="ekn-button ekn-button--subtle ekn-button--compact mt-2"
-            onClick={() => setOrganisation(uniqueFiles([fichier, ...enAttente.map((entry) => entry.file)]))}>
+            onClick={() => setPartsOrganisation([fichier])}>
             Modifier les {fichier.mergedParts.length} morceaux de cette réunion
           </button>}
           {fichier ? (
@@ -659,6 +658,7 @@ export function Nouveau({ surTermine, surBibliotheque }) {
                 offset: debut,
                 modele: MODELE,
                 contexte: {
+                  audio_parts: clipAudioParts(fichier.audioParts, debut, fin || secondes),
                   client_company: client.trim(),
                   expected_speaker_names: liste(participants),
                   glossary_terms: liste(glossaire),
@@ -772,6 +772,9 @@ export function Nouveau({ surTermine, surBibliotheque }) {
           </div>
         ) : null}
       </div>
+      {partsOrganisation && <FileOrganizer partsOnly files={partsOrganisation}
+        onCancel={() => setPartsOrganisation(null)}
+        onConfirm={(files) => { setPartsOrganisation(null); charger(files[0] || null); }} />}
       {organisation && <FileOrganizer files={organisation} onCancel={() => setOrganisation(null)}
         onConfirm={(files) => {
           setOrganisation(null);
@@ -779,7 +782,7 @@ export function Nouveau({ surTermine, surBibliotheque }) {
           else {
             const [first, ...rest] = files;
             replaceQueue(rest);
-            if (first) charger(first);
+            charger(first || null);
           }
         }} />}
     </section>

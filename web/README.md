@@ -152,6 +152,12 @@ Déposer plusieurs fichiers ouvre « Organiser les enregistrements ».
 Ils restent séparés par défaut. Avec la poignée, déposer un audio au
 centre d’un autre les réunit ; le déposer au bord change seulement l’ordre.
 On peut ajouter d’autres audios à un groupe et ordonner ses morceaux.
+La poignée d’une réunion déplace tout le groupe ; celles des morceaux
+changent seulement leur ordre interne. « Modifier les morceaux » ouvre
+un éditeur limité à la réunion courante, sans toucher à la file.
+Saisir une poignée révèle une corbeille temporaire : y déposer la réunion
+ou le morceau le retire de la sélection. « Annuler le retrait » le restaure.
+Les fichiers originaux ne sont jamais supprimés. Au clavier, Suppr retire.
 Au clavier, les flèches déplacent ; Entrée choisit la réunion, puis Entrée
 sur une autre poignée les réunit. Échap annule le choix. « Séparer » et « Annuler » permettent
 de revenir sur ce choix. « Organiser » rouvre la fenêtre depuis la file.
@@ -161,11 +167,16 @@ du navigateur. Chaque morceau est normalisé en AAC mono 48 kHz, puis ses
 paquets rejoignent une piste unique sans second réencodage. Les originaux
 restent intacts ; les vidéos restent séparées. La transcription et
 l'archivage suivent ensuite le parcours habituel, pour une seule réunion.
+Le lecteur marque les jonctions et propose un accès à chaque morceau.
+Les repères utilisent les durées réellement encodées, suivent le rognage
+et restent disponibles après archivage ou lors d’un retraitement. Les
+anciennes réunions sans repères gardent le lecteur habituel.
 
 La file prépare les contextes en arrière-plan, une recherche d'avance à
 la fois. Le formulaire réutilise une recherche déjà terminée ou rejoint
 celle en cours. Aucun traitement ni dépôt Odoo ne démarre à ce stade.
-Une recherche indisponible laisse la saisie manuelle possible. Changer
+Une recherche indisponible laisse la saisie manuelle possible. Un pictogramme
+par fichier et un résumé commun indiquent l’état des contextes, sans bulles. Changer
 l'ordre des morceaux crée un contexte distinct ; changer seulement
 l'ordre des réunions réutilise leurs contextes.
 

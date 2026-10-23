@@ -197,3 +197,38 @@ h1, h2, h3, .titre { font-family: var(--font-titre); }
 @media (prefers-reduced-motion: reduce) {
   .organizer-meeting { transition: none; transform: none; }
 }
+
+.organizer-part { position: relative; }
+.organizer-part[data-picked] { outline: 2px solid var(--ekn-focus); outline-offset: 2px; border-radius: 6px; }
+.organizer-part[data-dragging] { opacity: .5; }
+.organizer-part[data-drop]::before {
+  content: ''; position: absolute; left: 0; right: 0; height: 2px;
+  background: var(--ekn-action); pointer-events: none;
+}
+.organizer-part[data-drop="before"]::before { top: -3px; }
+.organizer-part[data-drop="after"]::before { bottom: -3px; }
+/* Hors du flux : saisir la poignée ne déplace pas la fenêtre. */
+.organizer-trash {
+  position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 4;
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  width: min(340px, calc(100vw - 32px)); min-height: 58px; padding: 12px 18px;
+  border: 2px dashed var(--ekn-tone-error); border-radius: 16px;
+  background: var(--ekn-surface); color: var(--ekn-tone-error);
+  box-shadow: 0 8px 30px -12px var(--app-verre-ombre-portee);
+}
+.organizer-trash[data-hovered] { background: var(--ekn-danger); color: var(--ekn-off-white); border-style: solid; }
+.context-indicator { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 18px; width: 18px; height: 18px; color: var(--ekn-text-muted); }
+.context-indicator[data-state="ready"] { color: var(--ekn-tone-success); }
+.context-indicator[data-state="error"] { color: var(--ekn-tone-warning); }
+.context-spinner { width: 13px; height: 13px; border: 2px solid var(--ekn-border-strong); border-top-color: var(--ekn-action); border-radius: 50%; animation: context-spin 1s linear infinite; }
+@keyframes context-spin { to { transform: rotate(360deg); } }
+.audio-parts-seek { position: relative; flex: 1; min-width: 0; display: flex; }
+.audio-parts-seek > input { width: 100%; }
+.audio-part-markers { position: absolute; inset: 0; pointer-events: none; }
+.audio-part-marker { position: absolute; top: 50%; transform: translate(-50%, -50%); height: 14px; width: 2px; background: var(--ekn-text); box-shadow: 0 0 0 1px var(--ekn-field); }
+.audio-part-links { display: grid; gap: 2px; margin-top: 8px; }
+.audio-part-link { display: flex; align-items: center; gap: 10px; text-align: left; min-width: 0; min-height: 44px; padding: 6px 10px; border-radius: 6px; font-size: var(--ekn-text-sm); }
+.audio-part-link:hover { background: var(--ekn-surface); }
+.audio-part-link > .truncate { flex: 1; min-width: 0; }
+.audio-part-link time { flex-shrink: 0; font-variant-numeric: tabular-nums; }
+@media (prefers-reduced-motion: reduce) { .context-spinner { animation: none; } }

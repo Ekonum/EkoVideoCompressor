@@ -41,6 +41,7 @@ export async function mergeAudioFiles(files, { onProgress = () => {}, signal } =
       lastModified: files[0].lastModified + (result.duration - result.firstDuration) * 1000,
     });
     file.mergedParts = files;
+    file.audioParts = result.parts;
     return file;
   } catch (error) {
     await root.removeEntry(name).catch(() => {});

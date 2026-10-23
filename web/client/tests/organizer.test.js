@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dropGroup, fileKey, groupsFor, moveItem, splitGroup, uniqueFiles } from '../src/organizer.js';
+import { dropPart, removeRecording, dropGroup, fileKey, groupsFor, moveItem, splitGroup, uniqueFiles } from '../src/organizer.js';
 
 const file = (name, type = 'audio/mp4') => new File(['audio'], name, { type, lastModified: 1700000000000 });
 test('réunir des audios non contigus conserve tous les fichiers et leur ordre', () => {
@@ -56,4 +56,30 @@ test('déposer aux bords réordonne sans fusionner et les cibles invalides reste
   const remote = file('remote.m4a'); remote.remote = true;
   const distant = groupsFor([remote, file('local.m4a')]);
   assert.equal(dropGroup(distant, distant[0].id, distant[1].id, 'join'), distant);
+});
+
+
+test('intervertir les morceaux préserve les autres réunions et invalide le fichier assemblé', () => {
+  const a = file('a.m4a'), b = file('b.m4a'), c = file('c.m4a');
+  const merged = file('assemblage.m4a'); merged.mergedParts = [a, b, c];
+  const groups = groupsFor([file('avant.m4a'), merged, file('après.m4a')]);
+  const changed = dropPart(groups, groups[1].id, fileKey(c), fileKey(a), 'before');
+  assert.deepEqual(changed[1].files, [c, a, b]);
+  assert.equal(changed[0], groups[0]); assert.equal(changed[2], groups[2]);
+  assert.equal(changed[1].materialized, null);
+  assert.deepEqual(groups[1].files, [a, b, c]);
+  const movedBack = dropPart(changed, changed[1].id, fileKey(c), fileKey(b), 'after');
+  assert.deepEqual(movedBack[1].files, [a, b, c]);
+});
+
+test('retirer un morceau ou une réunion conserve les originaux et permet de restaurer la sélection', () => {
+  const a = file('a.m4a'), b = file('b.m4a');
+  const merged = file('assemblage.m4a'); merged.mergedParts = [a, b];
+  const original = groupsFor([merged, file('autre.m4a')]);
+  const removed = removeRecording(original, { groupId: original[0].id, partKey: fileKey(a) });
+  assert.deepEqual(removed[0].files, [b]); assert.equal(removed[0].materialized, b);
+  assert.equal(removed[1], original[1]); assert.deepEqual(original[0].files, [a, b]);
+  const empty = removeRecording(removed, { groupId: original[0].id, partKey: fileKey(b) });
+  assert.deepEqual(empty, [original[1]]);
+  assert.deepEqual(removeRecording(empty, { groupId: original[1].id }), []);
 });

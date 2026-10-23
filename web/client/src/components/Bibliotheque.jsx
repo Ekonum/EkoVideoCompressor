@@ -6,7 +6,7 @@ import { MOD, useRaccourcis } from '../raccourcis.js';
 import { surlignerMots } from '../surlignage.jsx';
 import { Welcome } from './Welcome.jsx';
 import { FileOrganizer } from './FileOrganizer.jsx';
-import { PreparationStatus } from './PreparationStatus.jsx';
+import { PreparationStatus, PreparationSummary } from './PreparationStatus.jsx';
 import { uniqueFiles } from '../organizer.js';
 import { interrompreReunion } from '../usePipeline.js';
 import {
@@ -599,18 +599,17 @@ function ALancer({ surLancer }) {
         <h2 className="titre text-[1.0625rem] font-medium">
           À lancer <span className="tabular-nums text-ekn-text-muted">{enAttente.length}</span>
         </h2>
-        <span className="text-ekn-sm text-ekn-text-muted">
-          Restés sur ton poste : la liste se vide si tu fermes l’onglet.
-        </span>
+        <PreparationSummary files={enAttente.map((entry) => entry.file)} />
         {(enAttente.length > 1 || enAttente.some((entry) => entry.file.mergedParts)) && <button className="ekn-button ekn-button--subtle ekn-button--compact"
           onClick={() => setOrganisation(enAttente.map((entry) => entry.file))}>Organiser</button>}
       </div>
       <ul className="mt-2 divide-y divide-bord/60">
         {enAttente.map((entree) => (
           <li key={entree.id} className="flex items-center gap-3 py-2 text-ekn-sm">
-            <span className="min-w-0 flex-1 truncate">{entree.file.name}<PreparationStatus file={entree.file} /></span>
-            <span className="whitespace-nowrap text-ekn-text-muted">{jour(new Date(entree.file.lastModified).toISOString())}</span>
-            <span className="w-16 whitespace-nowrap text-right tabular-nums text-ekn-text-muted">{fileSize(entree.file.size)}</span>
+            <PreparationStatus file={entree.file} />
+            <span className="min-w-0 flex-1 truncate" title={entree.file.name}>{entree.file.name}</span>
+            <span className="hidden md:block whitespace-nowrap text-ekn-text-muted">{jour(new Date(entree.file.lastModified).toISOString())}</span>
+            <span className="hidden sm:block w-16 whitespace-nowrap text-right tabular-nums text-ekn-text-muted">{fileSize(entree.file.size)}</span>
             <button
               type="button"
               onClick={() => { requestLaunch(entree.id); surLancer?.(); }}

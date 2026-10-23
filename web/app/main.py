@@ -44,6 +44,7 @@ from cloud_transcription import (
     provider_for_model,
 )
 
+from .audio_parts import audio_parts
 from . import avancement
 from .auth import AccessVerifier, AuthError
 from .chatter import ChatterError, composer
@@ -1090,6 +1091,7 @@ def create_app(
                 "status": job["status"],
                 "model": job["model"],
                 "duration_seconds": job["duration_seconds"],
+                "audio_parts": audio_parts(job["context_json"], job["duration_seconds"]),
                 "cost_usd": job["cloud_cost_usd"],
                 "created_at": job["created_at"],
                 "has_versions": bool(job["previous_versions_json"]),
@@ -1156,6 +1158,7 @@ def create_app(
             "reprocessable": job["status"] in REPROCESSABLE and not job["transcript"],
             "model": job["model"],
             "duration_seconds": job["duration_seconds"],
+            "audio_parts": audio_parts(job["context_json"], job["duration_seconds"]),
             "cost_usd": job["cloud_cost_usd"],
             "transcript": job["transcript"] or "",
             "speakers": json.loads(job["speaker_map_json"] or "{}"),
