@@ -71,7 +71,7 @@ export function useDraftSaving() {
   return Boolean(saveTimer || pendingWrites);
 }
 if (typeof window !== 'undefined') window.addEventListener('beforeunload', (event) => {
-  if ((currentDraft || queue.length) && (saveTimer || pendingWrites || persistenceError)) {
+  if (saveTimer || pendingWrites || ((currentDraft || queue.length) && persistenceError)) {
     event.preventDefault(); event.returnValue = '';
   }
 });
