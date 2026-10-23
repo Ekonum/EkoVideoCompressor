@@ -149,10 +149,11 @@ de démarrer si ni l'un ni l'autre n'est configuré.
 ### Enregistrements en plusieurs parties et file d'attente
 
 Déposer plusieurs fichiers ouvre « Organiser les enregistrements ».
-Ils restent séparés par défaut : sélectionner les audios d'une même
-réunion, puis « Réunir la sélection », crée une seule réunion. Les
-poignées ordonnent les réunions et leurs morceaux ; les flèches haut/bas
-du clavier font le même déplacement. « Séparer » et « Annuler » permettent
+Ils restent séparés par défaut. Avec la poignée, déposer un audio au
+centre d’un autre les réunit ; le déposer au bord change seulement l’ordre.
+On peut ajouter d’autres audios à un groupe et ordonner ses morceaux.
+Au clavier, les flèches déplacent ; Entrée choisit la réunion, puis Entrée
+sur une autre poignée les réunit. Échap annule le choix. « Séparer » et « Annuler » permettent
 de revenir sur ce choix. « Organiser » rouvre la fenêtre depuis la file.
 
 La fusion audio se fait sur le poste, vers un fichier temporaire privé

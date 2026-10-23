@@ -27,11 +27,21 @@ export function moveItem(items, from, to) {
   return next;
 }
 
-export function combineGroups(groups, selected) {
-  const chosen = groups.filter((group) => selected.has(group.id));
-  if (chosen.length < 2 || chosen.some((group) => group.files.some((file) => !isAudioFile(file) || file.remote))) return groups;
-  const joined = { id: chosen[0].id, files: chosen.flatMap((group) => group.files) };
-  return groups.flatMap((group) => group === chosen[0] ? [joined] : selected.has(group.id) ? [] : [group]);
+/** Le centre ajoute les morceaux à la fin de la réunion cible ; les
+ * bords changent seulement la place dans la file. */
+export function dropGroup(groups, sourceId, targetId, zone) {
+  const source = groups.find((group) => group.id === sourceId);
+  const target = groups.find((group) => group.id === targetId);
+  if (!source || !target || source === target) return groups;
+  if (zone === 'join') {
+    if ([source, target].some((group) => group.files.some((file) => !isAudioFile(file) || file.remote))) return groups;
+    return groups.filter((group) => group !== source).map((group) => group === target
+      ? { id: target.id, files: [...target.files, ...source.files] } : group);
+  }
+  if (!['before', 'after'].includes(zone)) return groups;
+  const next = groups.filter((group) => group !== source);
+  next.splice(next.indexOf(target) + (zone === 'after' ? 1 : 0), 0, source);
+  return next;
 }
 
 export function splitGroup(groups, id) {

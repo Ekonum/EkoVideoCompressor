@@ -1,5 +1,5 @@
 <!doctype html><html lang="fr" data-ekn-theme="auto"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Recette Transcript</title>
-<body><div class="flex flex-wrap gap-3 p-4"><button id="deposit" class="ekn-button">Déposer 3 enregistrements de test</button><button id="audio" class="ekn-button ekn-button--subtle">Contrôler l’assemblage audio</button><output id="result" role="status"></output></div><div id="root"></div>
+<body><div class="flex flex-wrap gap-3 p-4"><button id="deposit" class="ekn-button">Déposer 3 enregistrements de test</button><button id="audio" class="ekn-button ekn-button--subtle">Contrôler l’assemblage audio</button><button id="export" class="ekn-button ekn-button--subtle">Exporter l’assemblage de recette</button><output id="result" role="status"></output></div><div id="root"></div>
 <script type="module">
 import React from 'react';import{createRoot}from'react-dom/client';import App from'/src/App.jsx';import'/src/styles.css';import'/vendor/ekonum-ui/ekonum-ui.js';
 import{mergeAudioFiles}from'/src/merge-audio.js';import{Input,ALL_FORMATS,BlobSource,AudioSampleSink}from'mediabunny';
@@ -25,13 +25,14 @@ window.fetch=async(url,options)=>{
  if(path==='/api/probe'){probes++;document.querySelector('#result').textContent=probes+' recherches effectuées';await new Promise(r=>setTimeout(r,500));data={clues:{resume:'Réunion de test',organisations:['Odoo'],personnes:[]},candidates:[],odoo:true,investigation:{auto:false}};}
  return new Response(JSON.stringify(data),{headers:{'Content-Type':'application/json','X-Total-Count':'0'}});
 };
-async function fixtures(){return Promise.all(['première.wav','suite.wav','autre.wav'].map(async(name)=>new File([await(await nativeFetch('/tests/_fixtures/'+name)).blob()],name,{type:'audio/wav',lastModified:1700000000000})));}
+async function fixtures(){return Promise.all((new URLSearchParams(location.search).has('spoken')?['recette-partie-1.m4a','recette-partie-2.m4a','autre.wav']:['première.wav','suite.wav','autre.wav']).map(async(name)=>new File([await(await nativeFetch('/tests/_fixtures/'+name)).blob()],name,{type:name.endsWith('.m4a')?'audio/mp4':'audio/wav',lastModified:1700000000000})));}
 document.querySelector('#deposit').onclick=async()=>{
  const files=await fixtures();const transfer=new DataTransfer();files.forEach(f=>transfer.items.add(f));
  const zone=document.querySelector('input[type=file]')?.parentElement;
  if(!zone){document.querySelector('#result').textContent='Ouvrir Nouvelle transcription';return;}
  zone.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}));
 };
+document.querySelector('#export').onclick=async()=>{const [a,b]=await fixtures();const joined=await mergeAudioFiles([a,b]);const link=document.createElement('a');link.href=URL.createObjectURL(joined);link.download='RECETTE-CODEX-reunion-complete.m4a';link.click();setTimeout(()=>URL.revokeObjectURL(link.href),1000);};
 async function frequency(file,at){const input=new Input({formats:ALL_FORMATS,source:new BlobSource(file)});try{const sample=await new AudioSampleSink(await input.getPrimaryAudioTrack()).getSample(at);const floats=new Float32Array(sample.numberOfFrames);sample.copyTo(floats,{planeIndex:0,format:'f32-planar'});let crosses=0;for(let i=1;i<floats.length;i++)if(floats[i-1]<0&&floats[i]>=0)crosses++;const value=crosses*sample.sampleRate/floats.length;sample.close();return value;}finally{input.dispose();}}
 document.querySelector('#audio').onclick=async()=>{const result=document.querySelector('#result');result.textContent='Contrôle en cours…';try{
  const [a,b]=await fixtures();const joined=await mergeAudioFiles([a,b],{onProgress:p=>result.textContent='Normalisation '+Math.round(p.ratio*100)+' %'});const reverse=await mergeAudioFiles([b,a]);

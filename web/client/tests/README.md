@@ -16,8 +16,12 @@ une API simulée et des sons synthétiques locaux. Elle n'appelle aucun
 service distant, ne lance aucune transcription et ne publie rien dans Odoo.
 
 - Ouvrir « Nouvelle transcription », puis « Déposer 3 enregistrements de test ».
-- Sélectionner les deux premiers fichiers, les réunir, déplacer un morceau
-  puis la réunion avec les poignées et avec les flèches du clavier.
+- Avec la poignée, déposer le deuxième audio au centre du premier : deux
+  réunions doivent rester. Ajouter le troisième au groupe, puis séparer.
+- Déposer au bord d’une autre réunion : seul l’ordre change. Vérifier aussi
+  un relâchement hors cible, Échap, le tactile et les flèches du clavier.
+- Au clavier, Entrée sur la poignée choisit la réunion ; Entrée sur une
+  autre poignée les réunit. Échap annule le choix.
 - Vérifier « Séparer », puis « Annuler » : la file existante doit rester intacte.
 - Valider un regroupement : la première réunion s'ouvre, le contexte de la
   suivante se prépare. Lancer la suivante depuis « À lancer » doit afficher
