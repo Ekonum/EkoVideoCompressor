@@ -24,5 +24,5 @@ def audio_parts(context_json: str | None, duration: float) -> list[dict]:
             result.append({"name": name, "start": start, "end": end})
             previous = end
         return result
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return []

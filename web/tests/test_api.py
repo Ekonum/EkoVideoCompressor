@@ -200,9 +200,13 @@ class ApiTestCase(_Fixture):
         prompt = transcription.context_for_chunk(chunk_index=0, chunk_count=1, start=0,
                     end=20.132, language="fr", context={"audio_parts": parts})
         self.assertNotIn("premier.m4a", repr(prompt))
-        invalid = self._create(duration=20, context={"audio_parts": [
-            {"name": "incorrect", "start": 15, "end": 30}]})["job_id"]
-        self.assertEqual(self.client.get(f"/api/jobs/{invalid}/detail").json()["audio_parts"], [])
+        for malformed in ["ancien format", [{"name": "incorrect", "start": 15, "end": 30}],
+                          [{"name": "hors limites", "start": 10 ** 400, "end": 10 ** 401}],
+                          [{"name": "premier", "start": 0, "end": 12},
+                           {"name": "chevauchement", "start": 10, "end": 20}]]:
+            with self.subTest(malformed=malformed):
+                invalid = self._create(duration=20, context={"audio_parts": malformed})["job_id"]
+                self.assertEqual(self.client.get(f"/api/jobs/{invalid}/detail").json()["audio_parts"], [])
 
     def test_le_serveur_finit_seul_sans_que_le_navigateur_reste(self):
         """On doit pouvoir quitter l'écran une fois les fenêtres
