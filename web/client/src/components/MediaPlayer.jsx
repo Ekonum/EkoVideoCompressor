@@ -42,11 +42,13 @@ export const EknAudio = forwardRef(function EknAudio(
     el.append(media);
     el.addEventListener('ekn-trim', (e) => rappels.current.onTrim?.(e.detail));
     media.addEventListener('timeupdate', () => rappels.current.onTime?.(media.currentTime));
-    media.addEventListener('error', () => rappels.current.onUnreadable?.());
+    const unreadable = () => rappels.current.onUnreadable?.();
+    media.addEventListener('error', unreadable);
     hote.current.append(el);
     lecteur.current = el;
     return () => {
       // Libère la lecture et la connexion : retirer l'élément ne suffit pas.
+      media.removeEventListener('error', unreadable);
       media.pause();
       media.removeAttribute('src');
       media.load();

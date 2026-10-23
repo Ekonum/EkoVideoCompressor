@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { preparation } from './preparation.js';
 import { fileKey, uniqueFiles } from './organizer.js';
+import { browserDraftStore, claimBrowserDraft, createDraftSession, packFile, unpackFile } from './draft-storage.js';
 
 /** Les fichiers déposés en attendant d'être lancés.
  *
@@ -8,9 +9,8 @@ import { fileKey, uniqueFiles } from './organizer.js';
  *  régler d'un coup : le premier s'ouvre dans le formulaire, les autres
  *  attendent ici, visibles dans la bibliothèque, et passent un à un.
  *
- *  La file vit dans l'onglet, hors des composants — comme les
- *  transcriptions en cours. Les fichiers restent sur le poste : fermer
- *  l'onglet vide la liste, sans rien perdre d'autre.
+ *  Une copie privée au navigateur permet de retrouver la préparation.
+ *  Chaque onglet et chaque compte garde sa propre file.
  */
 
 const MEDIA_EXTENSIONS = /\.(m4a|mp3|wav|aac|flac|ogg|opus|weba|mp4|m4v|mov|mkv|webm|avi)$/i;
@@ -19,10 +19,72 @@ let queue = [];
 let launchRequest = null;
 const subscribers = new Set();
 
+let currentDraft = null;
+let persistence = null, opening = null, saveTimer = null;
+let persistenceError = '';
+let pendingWrites = 0;
+const notify = () => subscribers.forEach((callback) => callback());
+function saveDraft() {
+  if (!persistence) return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    saveTimer = null; pendingWrites++;
+    const files = uniqueFiles([...(currentDraft ? [currentDraft] : []), ...queue.map((entry) => entry.file)]);
+    const entries = files.map((file) => ({ id: queue.find((entry) => entry.file === file)?.id || `queued-${crypto.randomUUID()}`, file: packFile(file) }));
+    persistence.save({ entries, contexts: preparation.export(files) })
+      .then(() => { if (persistenceError) { persistenceError = ''; notify(); } })
+      .catch(() => { persistenceError = 'Cette file reste disponible dans cet onglet uniquement.'; notify(); })
+      .finally(() => { pendingWrites--; notify(); });
+    notify();
+  }, 150);
+  notify();
+}
+export function openFileQueue(owner) {
+  return opening ||= (async () => {
+    try {
+      if (!owner) throw new Error('Compte inconnu.');
+      persistence = createDraftSession({ store: browserDraftStore(), claim: claimBrowserDraft, session: sessionStorage });
+      const saved = await persistence.open(owner);
+      if (saved) {
+        preparation.restore(saved.contexts);
+        queue = saved.entries.map((entry) => ({ id: entry.id, file: unpackFile(entry.file) }));
+        notify();
+        preparation.schedule(queue.map((entry) => entry.file));
+      }
+      preparation.subscribe(saveDraft);
+    } catch {
+      persistence = null; persistenceError = 'Cette file reste disponible dans cet onglet uniquement.';
+    }
+  })();
+}
+export function setCurrentDraft(file, state) {
+  currentDraft = file;
+  if (file) {
+    const remaining = queue.filter((entry) => fileKey(entry.file) !== fileKey(file));
+    if (remaining.length !== queue.length) { queue = remaining; notify(); }
+  }
+  if (file && state) file.draftState = { ...state };
+  saveDraft();
+}
+export function useDraftSaving() {
+  useFileQueue();
+  return Boolean(saveTimer || pendingWrites);
+}
+if (typeof window !== 'undefined') window.addEventListener('beforeunload', (event) => {
+  if (saveTimer || pendingWrites || ((currentDraft || queue.length) && persistenceError)) {
+    event.preventDefault(); event.returnValue = '';
+  }
+});
+export function useQueuePersistence() {
+  useFileQueue();
+  return persistenceError;
+}
+
 function publish(next) {
   queue = next;
   subscribers.forEach((notify) => notify());
   preparation.schedule(queue.map((entry) => entry.file));
+  saveDraft();
 }
 
 /** L'organisation se valide en une fois : aucun fichier ne disparaît
@@ -83,6 +145,7 @@ export function removeFromQueue(id) {
 export function takeNext(id = null) {
   const entry = id ? queue.find((e) => e.id === id) : queue[0];
   if (!entry) return null;
+  currentDraft = entry.file;
   publish(queue.filter((e) => e !== entry));
   return entry.file;
 }

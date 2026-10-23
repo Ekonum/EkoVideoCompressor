@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Entete } from './components/Marque.jsx';
 import { Bibliotheque } from './components/Bibliotheque.jsx';
 import { Nouveau } from './components/Nouveau.jsx';
@@ -7,9 +7,18 @@ import { Compte } from './components/Compte.jsx';
 import { Enroler } from './components/Enroler.jsx';
 import { Aide } from './components/Aide.jsx';
 import { Recovery } from './components/Recovery.jsx';
+import { api } from './api.js';
+import { openFileQueue } from './fileQueue.js';
 import { useRaccourcis } from './raccourcis.js';
 
 export default function App() {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    let active = true;
+    api.me().then((me) => openFileQueue(me.email)).catch(() => {})
+      .finally(() => { if (active) setReady(true); });
+    return () => { active = false; };
+  }, []);
   const [vue, setVue] = useState(
     () => (new URLSearchParams(window.location.search).get('recovery') ? 'recuperation' : 'bibliotheque'),
   );
@@ -43,6 +52,8 @@ export default function App() {
     setEnrolement(null);
     window.history.replaceState({}, '', '/');
   };
+
+  if (!ready) return <p className="py-16 text-center text-ekn-text-muted">Chargement…</p>;
 
   // Pas de fond sur ce conteneur : le dégradé vit sur `html`, et un aplat
   // posé par-dessus le masquerait — le verre n'aurait alors plus rien à

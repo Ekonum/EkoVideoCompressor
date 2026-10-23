@@ -13,10 +13,13 @@ if(new URLSearchParams(location.search).has('missing-worker')) {
  };
 }
 const nativeFetch=window.fetch.bind(window);let probes=0;
+const scenario=new URLSearchParams(location.search);
+if(scenario.has('quota'))IDBObjectStore.prototype.put=function(){throw new DOMException('Espace local insuffisant','QuotaExceededError');};
 window.fetch=async(url,options)=>{
  if(!String(url).startsWith('/api/'))return nativeFetch(url,options);
  let data={};const path=String(url).split('?')[0];
- if(path==='/api/me')data={email:'recette@example.test',name:'Recette',via:'session de recette'};
+ if(scenario.has('resume')&&path!=='/api/me')return nativeFetch(url,options);
+ if(path==='/api/me')data={email:scenario.get('account')||(scenario.has('resume')?'resume@example.test':'recette@example.test'),name:'Recette',via:'session de recette'};
  if(path==='/api/jobs')data=[];
  if(path==='/api/onboarding')data={show:false};
  if(path==='/api/settings')data={audio:{codec:'mp3',channels:1,sample_rate:16000,bitrate:64000},video:{disponible:true}};
@@ -46,5 +49,5 @@ const params=new URLSearchParams(location.search);
 if(params.has('player-only')){const [a,b]=await fixtures();const joined=await mergeAudioFiles([a,b]);createRoot(document.getElementById('root')).render(React.createElement(MediaPlayer,{src:URL.createObjectURL(joined),parts:joined.audioParts,duration:2.133333}));}
 else createRoot(document.getElementById('root')).render(params.has('reload-only')
  ?React.createElement(ReloadNotice,{error:new MediaModuleUnavailableError(),compressing:params.has('busy')})
- :React.createElement(App));
+ :React.createElement(React.StrictMode,null,React.createElement(App)));
 </script></body></html>

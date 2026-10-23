@@ -5,6 +5,8 @@ import { depuisUtc, horodatage, usd, jour, mo } from '../format.js';
 import { alleger, useArchivage } from '../archivage.js';
 import { AvancementArchivage } from './Nouveau.jsx';
 import { MOD, useRaccourcis } from '../raccourcis.js';
+import { resumeArchived } from '../resume.js';
+import { ReloadNotice } from './ReloadNotice.jsx';
 import { MediaPlayer } from './MediaPlayer.jsx';
 import { plier, surligner } from '../surlignage.jsx';
 import { launch, remoteFile } from '../fileQueue.js';
@@ -17,6 +19,9 @@ import { launch, remoteFile } from '../fileQueue.js';
  */
 export function Detail({ jobId, recherche = '', surRetour, surRetraiter }) {
   const [fiche, setFiche] = useState(null);
+  const [execution, setExecution] = useState(null);
+  const [resuming, setResuming] = useState(false);
+  const [resumeError, setResumeError] = useState(null);
   const [erreur, setErreur] = useState('');
   const [note, setNote] = useState('');
   const [surlignee, setSurlignee] = useState(null);
@@ -102,7 +107,36 @@ export function Detail({ jobId, recherche = '', surRetour, surRetraiter }) {
   });
 
   const recharger = () => api.detail(jobId).then(setFiche).catch((e) => setErreur(e.message));
-  useEffect(() => { recharger(); }, [jobId]);
+  const refreshExecution = () => api.job(jobId).then((next) => { setExecution(next); return next; }).catch(() => {});
+  useEffect(() => { recharger(); refreshExecution(); }, [jobId]);
+  useEffect(() => {
+    if (!execution || ['termine', 'cancelled'].includes(execution.status)) return undefined;
+    const timer = setInterval(async () => {
+      const next = await api.job(jobId).catch(() => null);
+      if (next) {
+        setExecution(next);
+        if (next.status === 'termine' || next.status === 'cancelled') {
+          setNote(''); recharger();
+        }
+      }
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [jobId, execution?.status]);
+
+  const resume = async (index = null) => {
+    setResuming(true); setResumeError(null); setErreur('');
+    try {
+      if (index !== null) await api.resetChunk(jobId, index);
+      await resumeArchived(jobId, remoteFile({ job_id: jobId, filename: fiche.filename,
+        video_bytes: fiche.video.octets, meeting_date: fiche.meeting_date }));
+      const next = await refreshExecution();
+      setNote(next?.status === 'termine' ? '' : 'Les parties manquantes sont envoyées. La transcription se termine automatiquement.');
+      recharger();
+    } catch (error) {
+      if (error.needsReload) setResumeError(error);
+      else setErreur(error.message);
+    } finally { setResuming(false); }
+  };
 
   if (erreur && !fiche) return <div className="mx-auto max-w-4xl px-6 py-10"><Erreur>{erreur}</Erreur></div>;
   if (!fiche) return <p className="py-16 text-center text-ekn-text-muted">Chargement…</p>;
@@ -129,6 +163,14 @@ export function Detail({ jobId, recherche = '', surRetour, surRetraiter }) {
       />
 
       <Erreur>{erreur}</Erreur>
+      <ReloadNotice error={resumeError} compressing={resuming} />
+      {fiche.video?.presente && execution && !['termine', 'cancelled'].includes(execution.status)
+        && !execution.chunks.some((chunk) => chunk.status === 'en_cours')
+        && (execution.missing_chunks?.length > 0 || execution.status === 'a_finaliser') &&
+        <div className="mt-4 flex flex-wrap items-center gap-3 text-ekn-sm">
+          <Bouton disabled={resuming} onClick={() => resume()}>{resuming ? 'Reprise…' : 'Reprendre'}</Bouton>
+          <span className="text-ekn-text-muted">Les parties déjà transcrites sont conservées.</span>
+        </div>}
       {note ? <p className="mt-4 text-ekn-sm text-ekn-tone-success">{note}</p> : null}
 
       <div className="mt-8 grid gap-10 lg:grid-cols-[minmax(0,1fr)_20rem]">
@@ -185,7 +227,7 @@ export function Detail({ jobId, recherche = '', surRetour, surRetraiter }) {
           ) : null}
           <div className="verre mt-3 max-h-[34rem] overflow-y-auto rounded-xl">
             {fiche.segments.length === 0 ? (
-              fiche.reprocessable && fiche.video?.presente ? (
+              fiche.reprocessable && fiche.video?.presente && (fiche.status === 'cancelled' || !execution?.chunks.length) ? (
                 <Retraiter fiche={fiche} jobId={jobId} surRetraiter={surRetraiter} />
               ) : (
                 <p className="px-4 py-6 text-ekn-text-muted">Pas encore de segment.</p>
@@ -245,7 +287,7 @@ export function Detail({ jobId, recherche = '', surRetour, surRetraiter }) {
         </div>
 
         <aside className="space-y-8">
-          <Interlocuteurs fiche={fiche} jobId={jobId} surMaj={recharger} surNote={setNote} surErreur={setErreur} />
+          {fiche.segments.length > 0 && <><Interlocuteurs fiche={fiche} jobId={jobId} surMaj={recharger} surNote={setNote} surErreur={setErreur} />
           <Termes fiche={fiche} jobId={jobId} surMaj={recharger} surNote={setNote} surErreur={setErreur}
                   aCorriger={aCorriger} />
           <AVerifier
@@ -253,7 +295,8 @@ export function Detail({ jobId, recherche = '', surRetour, surRetraiter }) {
             surAller={allerA}
             surCorriger={(mot) => setACorriger({ mot, fois: Date.now() })}
           />
-          <Fenetres jobId={jobId} surNote={setNote} surErreur={setErreur} />
+          </>}
+          <Fenetres vue={execution} canResume={Boolean(fiche.video?.presente) && fiche.status !== 'cancelled'} busy={resuming} onRestart={resume} />
           <Odoo fiche={fiche} jobId={jobId} surMaj={recharger} surNote={setNote} surErreur={setErreur} />
         </aside>
       </div>
@@ -270,6 +313,7 @@ function Retraiter({ fiche, jobId, surRetraiter }) {
       job_id: jobId,
       filename: fiche.filename,
       video_bytes: fiche.video.octets,
+      audio_parts: fiche.audio_parts,
       meeting_date: fiche.meeting_date,
     }));
     surRetraiter?.();
@@ -744,38 +788,19 @@ function Termes({ fiche, jobId, surMaj, surNote, surErreur, aCorriger }) {
  *  Sur une réunion de huit fenêtres dont trois ont échoué, relancer les
  *  cinq bonnes serait les repayer pour rien.
  */
-function Fenetres({ jobId, surNote, surErreur }) {
-  const [vue, setVue] = useState(null);
-  useEffect(() => { api.job(jobId).then(setVue).catch(() => {}); }, [jobId]);
+function Fenetres({ vue, canResume, busy, onRestart }) {
   if (!vue || vue.chunks.length <= 1) return null;
-
-  return (
-    <div>
-      <h2 className="titre text-[1.0625rem] font-medium">Fenêtres</h2>
-      <ul className="verre mt-3 divide-y divide-bord/60 rounded-xl">
-        {vue.chunks.map((c) => (
-          <li key={c.index} className="flex items-center gap-3 px-3 py-2 text-ekn-sm">
-            <span className="w-12 shrink-0 tabular-nums text-ekn-text-muted">{horodatage(c.start)}</span>
-            <span className={`flex-1 ${c.status === 'erreur' ? 'text-ekn-tone-error' : 'text-ekn-text/70'}`}>
-              {c.status === 'termine' ? 'terminée' : c.status === 'erreur' ? 'erreur' : c.status}
-            </span>
-            <button
-              className="ekn-link"
-              onClick={async () => {
-                try {
-                  await api.resetChunk(jobId, c.index);
-                  surNote(`Fenêtre ${c.index + 1} à refaire — relance-la depuis l'onglet de transcription.`);
-                  setVue(await api.job(jobId));
-                } catch (e) { surErreur(e.message); }
-              }}
-            >
-              relancer
-            </button>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
+  return <details className="text-ekn-sm">
+    <summary className="cursor-pointer text-ekn-text-muted">Détails du traitement</summary>
+    <ul className="mt-3 divide-y divide-bord/60">
+      {vue.chunks.map((chunk) => <li key={chunk.index} className="flex items-center gap-3 py-2">
+        <span className="w-12 shrink-0 tabular-nums text-ekn-text-muted">{horodatage(chunk.start)}</span>
+        <span className="flex-1 text-ekn-text-muted">{{ termine: 'Transcrite', erreur: 'À reprendre', attendu: 'À reprendre', en_cours: 'En cours' }[chunk.status] || chunk.status}</span>
+        {canResume && chunk.status !== 'en_cours' && <button className="ekn-link" disabled={busy}
+          aria-label={`Refaire la partie à ${horodatage(chunk.start)}`} onClick={() => onRestart(chunk.index)}>Refaire</button>}
+      </li>)}
+    </ul>
+  </details>;
 }
 
 /** Les versions précédentes, lisibles.
