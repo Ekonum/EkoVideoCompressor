@@ -12,7 +12,7 @@ export function sonderDuree(fichier) {
       if (data.kind === 'probed') { worker.terminate(); resolve(data.duration); }
       else if (data.kind === 'probe-error') { worker.terminate(); reject(new Error(data.message)); }
     };
-    worker.onerror = (e) => { worker.terminate(); reject(new Error(e.message)); };
+    worker.onerror = (e) => { worker.terminate(); reject(new Error(e.message || 'Le module de lecture n’est plus disponible. Recharge la page puis redépose le fichier.')); };
     worker.postMessage({ kind: 'probe', file: fichier });
   });
 }
@@ -53,7 +53,7 @@ export function identifier(fichier, { audio, fenetre = 300, duree = 0, moment = 
         reject(new Error(data.message));
       }
     };
-    worker.onerror = (e) => { worker.terminate(); reject(new Error(e.message)); };
+    worker.onerror = (e) => { worker.terminate(); reject(new Error(e.message || 'Le module audio n’est plus disponible. Recharge la page puis redépose le fichier.')); };
     worker.postMessage({
       kind: 'window',
       file: fichier,

@@ -45,4 +45,5 @@ jobs:
         working-directory: web/client
         run: |
           npm ci
+          npm test
           npm run build

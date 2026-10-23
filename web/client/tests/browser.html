@@ -1,0 +1,35 @@
+<!doctype html><html lang="fr" data-ekn-theme="auto"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Recette Transcript</title>
+<body><div class="flex flex-wrap gap-3 p-4"><button id="deposit" class="ekn-button">Déposer 3 enregistrements de test</button><button id="audio" class="ekn-button ekn-button--subtle">Contrôler l’assemblage audio</button><output id="result" role="status"></output></div><div id="root"></div>
+<script type="module">
+import React from 'react';import{createRoot}from'react-dom/client';import App from'/src/App.jsx';import'/src/styles.css';import'/vendor/ekonum-ui/ekonum-ui.js';
+import{mergeAudioFiles}from'/src/merge-audio.js';import{Input,ALL_FORMATS,BlobSource,AudioSampleSink}from'mediabunny';
+const nativeFetch=window.fetch.bind(window);let probes=0;
+window.fetch=async(url,options)=>{
+ if(!String(url).startsWith('/api/'))return nativeFetch(url,options);
+ let data={};const path=String(url).split('?')[0];
+ if(path==='/api/me')data={email:'recette@example.test',name:'Recette',via:'session de recette'};
+ if(path==='/api/jobs')data=[];
+ if(path==='/api/onboarding')data={show:false};
+ if(path==='/api/settings')data={audio:{codec:'mp3',channels:1,sample_rate:16000,bitrate:64000},video:{disponible:true}};
+ if(path==='/api/vocabulary')data=[];
+ if(path==='/api/odoo/meetings')data={meetings:[]};
+ if(path==='/api/probe'){probes++;document.querySelector('#result').textContent=probes+' recherches effectuées';await new Promise(r=>setTimeout(r,500));data={clues:{resume:'Réunion de test',organisations:['Odoo'],personnes:[]},candidates:[],odoo:true,investigation:{auto:false}};}
+ return new Response(JSON.stringify(data),{headers:{'Content-Type':'application/json','X-Total-Count':'0'}});
+};
+async function fixtures(){return Promise.all(['première.wav','suite.wav','autre.wav'].map(async(name)=>new File([await(await nativeFetch('/tests/_fixtures/'+name)).blob()],name,{type:'audio/wav',lastModified:1700000000000})));}
+document.querySelector('#deposit').onclick=async()=>{
+ const files=await fixtures();const transfer=new DataTransfer();files.forEach(f=>transfer.items.add(f));
+ const zone=document.querySelector('input[type=file]')?.parentElement;
+ if(!zone){document.querySelector('#result').textContent='Ouvrir Nouvelle transcription';return;}
+ zone.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}));
+};
+async function frequency(file,at){const input=new Input({formats:ALL_FORMATS,source:new BlobSource(file)});try{const sample=await new AudioSampleSink(await input.getPrimaryAudioTrack()).getSample(at);const floats=new Float32Array(sample.numberOfFrames);sample.copyTo(floats,{planeIndex:0,format:'f32-planar'});let crosses=0;for(let i=1;i<floats.length;i++)if(floats[i-1]<0&&floats[i]>=0)crosses++;const value=crosses*sample.sampleRate/floats.length;sample.close();return value;}finally{input.dispose();}}
+document.querySelector('#audio').onclick=async()=>{const result=document.querySelector('#result');result.textContent='Contrôle en cours…';try{
+ const [a,b]=await fixtures();const joined=await mergeAudioFiles([a,b],{onProgress:p=>result.textContent='Normalisation '+Math.round(p.ratio*100)+' %'});const reverse=await mergeAudioFiles([b,a]);
+ const input=new Input({formats:ALL_FORMATS,source:new BlobSource(joined)});const duration=await input.computeDuration();input.dispose();
+ const order=[await frequency(joined,.5),await frequency(joined,1.5)];const inverted=[await frequency(reverse,.5),await frequency(reverse,1.5)];
+ if(Math.abs(duration-2)>.15||Math.abs(order[0]-440)>100||Math.abs(order[1]-880)>100||Math.abs(inverted[0]-880)>100||Math.abs(inverted[1]-440)>100)throw Error(JSON.stringify({duration,order,inverted}));
+ result.textContent='Audio OK : durée '+duration.toFixed(3)+' s, ordre 440 → 880 Hz et ordre inverse vérifiés. Recherches : '+probes;
+}catch(error){result.textContent='ÉCHEC : '+error.message;}};
+createRoot(document.getElementById('root')).render(React.createElement(App));
+</script></body></html>
