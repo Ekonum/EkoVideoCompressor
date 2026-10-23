@@ -29,3 +29,13 @@ service distant, ne lance aucune transcription et ne publie rien dans Odoo.
 
 Les fichiers générés sont ignorés par Git. Cette page de recette n'est pas
 une entrée du build de production.
+
+### Module absent après déploiement
+
+`/tests/browser.html?missing-worker=1` renvoie volontairement le worker de
+lecture vers un module inexistant. Déposer un son valide doit afficher une
+consigne et le bouton « Recharger la page », jamais « Fichier illisible ».
+L'action est explicite et annonce la nécessité de redéposer la file.
+
+`/tests/browser.html?reload-only=1&busy=1` vérifie le bouton désactivé pendant
+une compression ; sans `busy`, le bouton doit être disponible.

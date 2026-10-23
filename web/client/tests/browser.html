@@ -3,6 +3,15 @@
 <script type="module">
 import React from 'react';import{createRoot}from'react-dom/client';import App from'/src/App.jsx';import'/src/styles.css';import'/vendor/ekonum-ui/ekonum-ui.js';
 import{mergeAudioFiles}from'/src/merge-audio.js';import{Input,ALL_FORMATS,BlobSource,AudioSampleSink}from'mediabunny';
+import{ReloadNotice}from'/src/components/ReloadNotice.jsx';import{MediaModuleUnavailableError}from'/src/media-worker-client.js';
+// Recette du déploiement entre l'ouverture de l'onglet et le dépôt : seul
+// le chargement du module échoue, le fichier synthétique reste valide.
+if(new URLSearchParams(location.search).has('missing-worker')) {
+ const RealWorker=window.Worker;
+ window.Worker=class extends RealWorker {
+  constructor(url,options){super(String(url).includes('media-worker.js')?new URL('/tests/module-absent.js',location.href):url,options);}
+ };
+}
 const nativeFetch=window.fetch.bind(window);let probes=0;
 window.fetch=async(url,options)=>{
  if(!String(url).startsWith('/api/'))return nativeFetch(url,options);
@@ -31,5 +40,8 @@ document.querySelector('#audio').onclick=async()=>{const result=document.querySe
  if(Math.abs(duration-2)>.15||Math.abs(order[0]-440)>100||Math.abs(order[1]-880)>100||Math.abs(inverted[0]-880)>100||Math.abs(inverted[1]-440)>100)throw Error(JSON.stringify({duration,order,inverted}));
  result.textContent='Audio OK : durée '+duration.toFixed(3)+' s, ordre 440 → 880 Hz et ordre inverse vérifiés. Recherches : '+probes;
 }catch(error){result.textContent='ÉCHEC : '+error.message;}};
-createRoot(document.getElementById('root')).render(React.createElement(App));
+const params=new URLSearchParams(location.search);
+createRoot(document.getElementById('root')).render(params.has('reload-only')
+ ?React.createElement(ReloadNotice,{error:new MediaModuleUnavailableError(),compressing:params.has('busy')})
+ :React.createElement(App));
 </script></body></html>

@@ -174,6 +174,12 @@ ce nettoyage n'est pas garanti si le processus s'arrête brutalement.
 
 Recette locale : [`client/tests/README.md`](client/tests/README.md).
 
+Un onglet ouvert avant un déploiement peut encore référencer un ancien
+worker. Le signal de démarrage du module distingue ce cas d'une erreur
+de fichier : un échec avant ce signal affiche « Recharger la page », sans
+rechargement automatique. Le bouton attend la fin des envois, compressions
+et archivages locaux. La file non enregistrée doit ensuite être redéposée.
+
 `web/client/` — React et Vite. Le module média est
 `src/media-worker.js` : il découpe et encode les fenêtres hors du fil
 principal, puis les envoie lui-même (repasser des ArrayBuffers de

@@ -1,19 +1,16 @@
 import { api } from './api.js';
+import { startMediaWorker } from './media-worker-client.js';
 
 /** Sonde la durée d'un fichier sans charger Mediabunny sur le fil
  *  principal : le worker le fait et se retire aussitôt.
  */
 export function sonderDuree(fichier) {
   return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL('./media-worker.js', import.meta.url), {
-      type: 'module',
-    });
-    worker.onmessage = ({ data }) => {
+    const worker = startMediaWorker(({ data }) => {
       if (data.kind === 'probed') { worker.terminate(); resolve(data.duration); }
       else if (data.kind === 'probe-error') { worker.terminate(); reject(new Error(data.message)); }
-    };
-    worker.onerror = (e) => { worker.terminate(); reject(new Error(e.message || 'Le module de lecture n’est plus disponible. Recharge la page puis redépose le fichier.')); };
-    worker.postMessage({ kind: 'probe', file: fichier });
+    }, reject);
+    worker?.postMessage({ kind: 'probe', file: fichier });
   });
 }
 
@@ -34,10 +31,7 @@ export function identifier(fichier, { audio, fenetre = 300, duree = 0, moment = 
     ? new Date(fichier.lastModified - (duree || 0) * 1000).toISOString()
     : '');
   return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL('./media-worker.js', import.meta.url), {
-      type: 'module',
-    });
-    worker.onmessage = async ({ data }) => {
+    const worker = startMediaWorker(async ({ data }) => {
       if (data.kind === 'window-done') {
         worker.terminate();
         // L'extrait est prêt : le reste — écoute puis enquête dans Odoo —
@@ -52,9 +46,8 @@ export function identifier(fichier, { audio, fenetre = 300, duree = 0, moment = 
         worker.terminate();
         reject(new Error(data.message));
       }
-    };
-    worker.onerror = (e) => { worker.terminate(); reject(new Error(e.message || 'Le module audio n’est plus disponible. Recharge la page puis redépose le fichier.')); };
-    worker.postMessage({
+    }, reject);
+    worker?.postMessage({
       kind: 'window',
       file: fichier,
       start: 0,

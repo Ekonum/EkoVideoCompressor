@@ -5,6 +5,7 @@ import { meetingMoment, preparation, snapshotFile, usePreparation } from '../pre
 import { isAudioFile as audioSeul, uniqueFiles } from '../organizer.js';
 import { FileOrganizer } from './FileOrganizer.jsx';
 import { PreparationStatus } from './PreparationStatus.jsx';
+import { ReloadNotice } from './ReloadNotice.jsx';
 import { api } from '../api.js';
 import { useCompression } from '../useCompression.js';
 import { archiver, useArchivage } from '../archivage.js';
@@ -41,6 +42,7 @@ export function Nouveau({ surTermine, surBibliotheque }) {
   const [fichier, setFichier] = useState(null);
   const [secondes, setSecondes] = useState(0);
   const [lecture, setLecture] = useState('');
+  const [reloadError, setReloadError] = useState(null);
   const [client, setClient] = useState('');
   const [participants, setParticipants] = useState('');
   const [glossaire, setGlossaire] = useState('');
@@ -152,7 +154,8 @@ export function Nouveau({ surTermine, surBibliotheque }) {
       // Une réunion récupérée a souvent déjà sa transcription dans Odoo,
       // déposée par l'ancienne app : le dépôt ne s'y fait qu'à la main.
       if (retenu) retenir({ ...retenu, auto: Boolean(vue.investigation.auto) && !choisi.remote });
-    } catch {
+    } catch (error) {
+      if (actuelle() && error.needsReload) setReloadError(error);
       if (actuelle()) setSonde(null);
     }
   }
@@ -204,6 +207,7 @@ export function Nouveau({ surTermine, surBibliotheque }) {
   }, []);
 
   async function charger(original) {
+    setReloadError(null);
     setFichier(null);
     setSecondes(0);
     sondeCourante.current += 1;
@@ -241,7 +245,8 @@ export function Nouveau({ surTermine, surBibliotheque }) {
       if (mode !== 'compresser' || audioSeul(choisi)) ecouter(choisi, total, debutReunion.toISOString());
     } catch (e) {
       setFichier(null);
-      setLecture(`Fichier illisible : ${e.message}`);
+      if (e.needsReload) { setLecture(''); setReloadError(e); }
+      else setLecture(`Fichier illisible : ${e.message}`);
     }
   }
 
@@ -421,6 +426,7 @@ export function Nouveau({ surTermine, surBibliotheque }) {
             </div>
           ) : null}
           {lecture ? <p className="mt-2 text-ekn-sm text-ekn-text/60">{lecture}</p> : null}
+          <ReloadNotice error={reloadError} compressing={compression.etat === 'compression'} />
           {fichier?.mergedParts && <button type="button" disabled={enCours}
             className="ekn-button ekn-button--subtle ekn-button--compact mt-2"
             onClick={() => setOrganisation(uniqueFiles([fichier, ...enAttente.map((entry) => entry.file)]))}>
@@ -626,7 +632,7 @@ export function Nouveau({ surTermine, surBibliotheque }) {
         <div className="flex flex-wrap items-center gap-4">
           <Bouton
             variante="accent"
-            disabled={!fichier || enCours || (mode === 'compresser' && !compression.supportee)}
+            disabled={!fichier || Boolean(reloadError) || enCours || (mode === 'compresser' && !compression.supportee)}
             onClick={() => {
               const borne = debut > 0 || (fin && fin < secondes)
                 ? { start: debut, end: fin || secondes }

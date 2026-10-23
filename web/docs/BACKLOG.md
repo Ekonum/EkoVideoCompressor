@@ -11,6 +11,10 @@ file, puis préparation du contexte des réunions suivantes en arrière-plan.
 La fusion reste sur le poste. Pas de migration de données, de nouveau
 service ni de publication automatique dans Odoo. Mise en production à valider.
 
+La même branche distingue un module audio indisponible d'un fichier
+illisible et propose un rechargement explicite, protégé pendant les
+envois, compressions et archivages locaux.
+
 Le `<dialog>` et les boutons viennent d'ekonum-ui 3.15.0. Les poignées
 d'ordre et le regroupement sont propres à ce parcours ; cette version du
 design system n'expose pas de liste réordonnable partagée. Le besoin est

@@ -23,6 +23,9 @@ import { registerMp3Encoder } from '@mediabunny/mp3-encoder';
 registerMp3Encoder();
 
 const say = (message) => self.postMessage(message);
+// Le client distingue un module devenu introuvable après déploiement
+// d'une erreur survenue en lisant le fichier une fois le module prêt.
+say({ kind: 'ready' });
 
 /** D'où lire le média : le fichier choisi sur ce poste, ou la vidéo déjà
  *  stockée d'une réunion qu'on retraite. Celle-ci se lit par plages, en

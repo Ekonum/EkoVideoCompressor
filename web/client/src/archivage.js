@@ -50,6 +50,12 @@ export function useArchivage(jobId) {
   return jobId == null ? null : taches.get(jobId) || null;
 }
 
+/** Garde le bouton de rechargement à jour pendant les archivages. */
+export function useArchiving() {
+  useArchivage(null);
+  return enCours();
+}
+
 async function compresserVers(fichier, trim, poignee, surProgression) {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL('./media-worker.js', import.meta.url), {
