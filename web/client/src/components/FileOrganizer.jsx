@@ -150,6 +150,7 @@ export function FileOrganizer({ files, onConfirm, onCancel, partsOnly = false })
         const source = { groupId: group.id };
         const groupTarget = !target?.partKey && target?.groupId === group.id;
         return <li key={group.id} data-meeting data-group-id={group.id}
+          data-picked={picked && !picked.partKey && picked.groupId === group.id || undefined}
           data-dragging={drag && !drag.source.partKey && drag.source.groupId === group.id || undefined}
           data-drop={groupTarget ? target.zone : undefined}
           className="organizer-meeting rounded-lg border border-bord p-3">
@@ -167,6 +168,7 @@ export function FileOrganizer({ files, onConfirm, onCancel, partsOnly = false })
               const partKey = fileKey(file), source = { groupId: group.id, partKey };
               return <li key={partKey} data-part-key={partKey} data-group-id={group.id}
                 data-drop={target?.partKey === partKey && target.groupId === group.id ? target.zone : undefined}
+                data-picked={picked && sameSource(picked, source) || undefined}
                 data-dragging={drag && sameSource(drag.source, source) || undefined}
                 className="organizer-part flex min-w-0 items-center gap-2">
                 <OrderHandle source={source} label={`le morceau ${part + 1}`} controller={controller} picked={picked} disabled={busy}

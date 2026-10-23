@@ -199,6 +199,7 @@ h1, h2, h3, .titre { font-family: var(--font-titre); }
 }
 
 .organizer-part { position: relative; }
+.organizer-part[data-picked] { outline: 2px solid var(--ekn-focus); outline-offset: 2px; border-radius: 6px; }
 .organizer-part[data-dragging] { opacity: .5; }
 .organizer-part[data-drop]::before {
   content: ''; position: absolute; left: 0; right: 0; height: 2px;
