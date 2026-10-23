@@ -140,7 +140,7 @@ export function FileOrganizer({ files, onConfirm, onCancel, partsOnly = false })
     <p>{partsOnly ? 'Déplace les morceaux dans l’ordre voulu. Les autres réunions gardent leur place dans la file.'
       : 'Avec la poignée, dépose un audio au centre d’un autre pour les réunir, ou entre deux réunions pour régler l’ordre.'}</p>
     <p className="text-ekn-sm">{groups.length} réunion{groups.length > 1 ? 's' : ''} · {groups.reduce((n, g) => n + g.files.length, 0)} fichier{groups.reduce((n, g) => n + g.files.length, 0) > 1 ? 's' : ''}</p>
-    <p className="text-ekn-sm" role="status">{announcement || (partsOnly ? 'Flèches : déplacer · Entrée sur deux poignées : intervertir · Suppr : retirer · Échap : annuler le geste' : 'Flèches : déplacer · Entrée sur deux poignées : réunir ou intervertir · Suppr : retirer · Échap : annuler le geste')}</p>
+    <p className={announcement ? "text-ekn-sm" : "sr-only"} role="status">{announcement}</p>
     {undo && <button type="button" data-organizer-undo className="ekn-button ekn-button--subtle ekn-button--compact mb-3"
       onClick={() => { setGroups(undo); setUndo(null); setAnnouncement('Retrait annulé.'); }}>Annuler le retrait</button>}
     {!groups.length && <p>Aucun enregistrement dans la sélection.</p>}
@@ -191,7 +191,6 @@ export function FileOrganizer({ files, onConfirm, onCancel, partsOnly = false })
     {drag?.active && <div className="organizer-ghost" aria-hidden="true" style={{ left: Math.min(drag.x + 12, window.innerWidth - 220), top: Math.min(drag.y + 14, window.innerHeight - 70) }}>
       {target?.zone === 'trash' ? 'Retirer l’enregistrement' : target?.zone === 'join' ? '＋ Réunir les audios' : drag.source.partKey ? '⠿ Déplacer le morceau' : '⠿ Déplacer la réunion'}
     </div>}
-    <p className="mt-4 text-ekn-sm">Retirer un enregistrement ne supprime jamais son fichier original.</p>
     <Erreur>{error}</Erreur>
     {busy && <p role="status">{progress}</p>}
     <div className="ekn-dialog__actions">

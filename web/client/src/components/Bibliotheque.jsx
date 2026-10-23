@@ -10,7 +10,7 @@ import { PreparationStatus, PreparationSummary } from './PreparationStatus.jsx';
 import { uniqueFiles } from '../organizer.js';
 import { interrompreReunion } from '../usePipeline.js';
 import {
-  enqueue, isMedia, launch, remoteFile, removeFromQueue, replaceQueue, requestLaunch, useFileDrag, useFileQueue,
+  enqueue, isMedia, launch, remoteFile, removeFromQueue, replaceQueue, requestLaunch, useFileDrag, useFileQueue, useQueuePersistence,
 } from '../fileQueue.js';
 
 /** La bibliothèque : une table, pas une grille de cartes.
@@ -590,6 +590,7 @@ function Resultats({ resultats, requete, surOuvrir }) {
  *  Chacun se lance quand on veut, dans l'ordre qu'on veut.
  */
 function ALancer({ surLancer }) {
+  const persistenceError = useQueuePersistence();
   const enAttente = useFileQueue();
   const [organisation, setOrganisation] = useState(null);
   if (!enAttente.length) return null;
@@ -603,6 +604,7 @@ function ALancer({ surLancer }) {
         {(enAttente.length > 1 || enAttente.some((entry) => entry.file.mergedParts)) && <button className="ekn-button ekn-button--subtle ekn-button--compact"
           onClick={() => setOrganisation(enAttente.map((entry) => entry.file))}>Organiser</button>}
       </div>
+      {persistenceError && <p className="mt-2 text-ekn-sm text-ekn-tone-warning" role="status">{persistenceError}</p>}
       <ul className="mt-2 divide-y divide-bord/60">
         {enAttente.map((entree) => (
           <li key={entree.id} className="flex items-center gap-3 py-2 text-ekn-sm">

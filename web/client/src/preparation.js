@@ -8,6 +8,7 @@ export async function snapshotFile(file) {
   const stable = new File([await file.arrayBuffer()], file.name, { type: file.type, lastModified: file.lastModified });
   if (file.mergedParts) stable.mergedParts = file.mergedParts;
   if (file.audioParts) stable.audioParts = file.audioParts;
+  if (file.draftState) stable.draftState = file.draftState;
   return stable;
 }
 
@@ -67,6 +68,21 @@ export function createPreparer({ snapshot, durationOf, identify, settings, momen
   }
   return {
     prepare,
+    export(files) {
+      return files.map((file) => ({ key: fileKey(file), entry: entries.get(fileKey(file)) }))
+        .filter(({ entry }) => entry?.status === 'ready')
+        .map(({ key, entry }) => ({ key, duration: entry.duration, moment: entry.moment, result: entry.result }));
+    },
+    restore(saved = []) {
+      for (const item of saved) {
+        // Le contexte est réutilisable, le dépôt dans Odoo demande un choix actuel.
+        const result = { ...item.result, investigation: item.result?.investigation
+          ? { ...item.result.investigation, auto: false } : undefined };
+        entries.set(item.key, { ...item, result, status: 'ready',
+          promise: Promise.resolve({ ...result, duration: item.duration, moment: item.moment }) });
+      }
+      notify();
+    },
     schedule(files) { waiting = uniqueFiles(files).filter((file) => !file.remote); void pump(); },
     get(file) { return file ? entries.get(fileKey(file)) : null; },
     subscribe(callback) { listeners.add(callback); return () => listeners.delete(callback); },

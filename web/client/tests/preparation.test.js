@@ -57,3 +57,13 @@ test('changer la date ne reprend pas le contexte de la date précédente', async
     '2026-10-22T12:59:00.000Z');
   assert.equal(calls, 2);
 });
+
+test('un contexte restauré est réutilisé sans recherche ni dépôt Odoo automatique', async () => {
+  const first = harness(async () => ({ clues: { resume: 'Réunion' }, investigation: { auto: true, record: { id: 42 } } }));
+  const input = file('réunion.m4a'); await first.prepare(input);
+  const saved = first.export([input]);
+  const restored = harness(() => assert.fail('le contexte existe déjà'));
+  restored.restore(saved); const result = await restored.prepare(input, { moment: saved[0].moment });
+  assert.equal(result.clues.resume, 'Réunion'); assert.equal(result.investigation.auto, false);
+  assert.equal(result.investigation.record.id, 42);
+});

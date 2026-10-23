@@ -208,6 +208,44 @@ class ApiTestCase(_Fixture):
                 invalid = self._create(duration=20, context={"audio_parts": malformed})["job_id"]
                 self.assertEqual(self.client.get(f"/api/jobs/{invalid}/detail").json()["audio_parts"], [])
 
+    def test_reprise_n_encode_ni_ne_repaye_une_fenetre_terminee(self):
+        job = self._create(duration=3600)["job_id"]
+        self.client.put(f"/api/jobs/{job}/chunks/0", content=b"premier audio")
+        before = len(self.calls)
+        repeated = self.client.put(f"/api/jobs/{job}/chunks/0", content=b"autre audio")
+        self.assertFalse(repeated.json()["accepted"])
+        self.assertEqual(len(self.calls), before)
+        plan = self.client.get(f"/api/jobs/{job}").json()
+        self.assertEqual(plan["missing_chunks"], [1])
+        self.assertEqual(plan["audio"]["codec"], "mp3")
+        self.client.put(f"/api/jobs/{job}/chunks/1", content=b"suite")
+        self.assertEqual(self._attendre_termine(job)["status"], "termine")
+        self.assertEqual(len(self.calls), before + 1)
+
+    def test_une_fenetre_en_cours_ne_peut_etre_ecrasee_ou_reinitialisee(self):
+        job = self._create(duration=60)["job_id"]
+        self.db.set_chunk_status(job, 0, "en_cours")
+        plan = self.client.get(f"/api/jobs/{job}").json()
+        self.assertEqual(plan["missing_chunks"], [])
+        response = self.client.put(f"/api/jobs/{job}/chunks/0", content=b"doublon")
+        self.assertFalse(response.json()["accepted"])
+        self.assertEqual(len(self.calls), 0)
+        self.assertEqual(self.client.post(f"/api/jobs/{job}/chunks/0/reset").status_code, 409)
+
+    def test_un_redemarrage_rend_les_taches_interrompues_reprenables(self):
+        job = self._create(duration=3600)["job_id"]
+        self.client.put(f"/api/jobs/{job}/chunks/0", content=b"premier audio")
+        self.db.set_chunk_status(job, 1, "en_cours")
+        self.db.set_job_status(job, "en_cours")
+        self.db.recover_interrupted_processing()
+        view = self.client.get(f"/api/jobs/{job}").json()
+        self.assertEqual(view["missing_chunks"], [1])
+        self.assertEqual(view["chunks"][0]["status"], "termine")
+        self.assertEqual(view["status"], "en_attente")
+        self.client.put(f"/api/jobs/{job}/chunks/1", content=b"suite")
+        self.assertEqual(self._attendre_termine(job)["status"], "termine")
+        self.assertEqual(len(self.calls), 2)
+
     def test_le_serveur_finit_seul_sans_que_le_navigateur_reste(self):
         """On doit pouvoir quitter l'écran une fois les fenêtres
         envoyées : personne n'appelle la finalisation, et la réunion se

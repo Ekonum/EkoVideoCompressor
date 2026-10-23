@@ -391,6 +391,8 @@ def create_app(
     # asyncio ne garde qu'une référence faible sur les tâches : sans ce
     # jeu, une transcription en cours peut être ramassée par le GC.
     app.state.tasks = set()
+    # Docker lance une seule instance ; aucune ancienne tâche ne survit au démarrage.
+    db.recover_interrupted_processing()
 
     # -- identité ------------------------------------------------------
 
@@ -654,9 +656,15 @@ def create_app(
                 "Opus mono 16 kHz.",
             )
 
+        if not db.claim_chunk_upload(job_id, index):
+            return {"accepted": False, "index": index, "bytes": 0}
         path = config.chunk_dir / f"job{job_id}_chunk{index}{CHUNK_SUFFIX}"
-        path.write_bytes(body)
-        db.set_chunk_status(job_id, index, "en_cours", error=None)
+        try:
+            path.write_bytes(body)
+        except OSError:
+            db.set_chunk_status(job_id, index, "erreur", error="Écriture audio impossible.")
+            raise
+
         db.mark_chunk_started(job_id, index, started=False)
         db.set_job_status(job_id, "en_cours")
 
@@ -689,6 +697,7 @@ def create_app(
             "status": job["status"],
             "error": job["error_message"],
             "filename": job["filename"],
+            "audio": AUDIO_PROFILE,
             "model": job["model"],
             "title": job["title"],
             "cost_usd": job["cloud_cost_usd"],
@@ -713,7 +722,7 @@ def create_app(
             # Ce que le navigateur doit (ré)encoder : la reprise après
             # onglet fermé ou réseau coupé tient dans cette liste.
             "missing_chunks": [
-                c["idx"] for c in chunks if c["status"] not in {"termine"}
+                c["idx"] for c in chunks if c["status"] not in {"termine", "en_cours"}
             ],
         }
 
@@ -1271,6 +1280,9 @@ def create_app(
         job = owned_job(job_id, owner_id)
         if index < 0 or index >= int(job["chunk_count"]):
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Fenêtre inconnue.")
+        chunk = db.chunks_for_job(job_id)[index]
+        if chunk["status"] == "en_cours" or job["status"] == "finalisation":
+            raise HTTPException(status.HTTP_409_CONFLICT, "Cette partie est déjà en cours.")
         db.reset_chunk(job_id, index)
         # Le job repart en attente : `missing_chunks` guidera le navigateur
         # vers cette seule fenêtre, sans repayer les autres.

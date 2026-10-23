@@ -15,7 +15,7 @@ import { Sonde } from './Sonde.jsx';
 import { interrompre, reprendre, usePipeline } from '../usePipeline.js';
 import { avancementGlobal } from '../progression.js';
 import {
-  consumeLaunchRequest, enqueue, isMedia, removeFromQueue, replaceQueue, takeNext, useFileDrag, useFileQueue,
+  setCurrentDraft, useQueuePersistence, consumeLaunchRequest, enqueue, isMedia, removeFromQueue, replaceQueue, takeNext, useFileDrag, useFileQueue,
 } from '../fileQueue.js';
 import { duree, mo, usd, horodatage, liste } from '../format.js';
 
@@ -41,6 +41,7 @@ function versChampLocal(date) {
 const DEBIT_A_COMPRESSER = 1_000_000;
 export function Nouveau({ surTermine, surBibliotheque }) {
   const [fichier, setFichier] = useState(null);
+  const loadingFile = useRef(null);
   const [secondes, setSecondes] = useState(0);
   const [lecture, setLecture] = useState('');
   const [reloadError, setReloadError] = useState(null);
@@ -82,6 +83,7 @@ export function Nouveau({ surTermine, surBibliotheque }) {
   const pipeline = usePipeline();
   const compression = useCompression();
   const enAttente = useFileQueue();
+  const persistenceError = useQueuePersistence();
   const glisse = useFileDrag();
   const [surZone, setSurZone] = useState(false);
   const [ignores, setIgnores] = useState(0);
@@ -94,6 +96,12 @@ export function Nouveau({ surTermine, surBibliotheque }) {
       setSonde((current) => current?.enCours ? { ...current, phase: contextePrepare.phase } : current);
     }
   }, [contextePrepare?.phase, contextePrepare?.status]);
+
+  useEffect(() => {
+    if (pipeline.etat === 'creation' || pipeline.etat === 'traitement' || pipeline.jobId) setCurrentDraft(null);
+    else if (fichier) setCurrentDraft(fichier, { client, participants, glossaire, contexteOdoo,
+      dateReunion, debut, fin, mode, dossier });
+  }, [fichier, client, participants, glossaire, contexteOdoo, dateReunion, debut, fin, mode, dossier, pipeline.etat, pipeline.jobId]);
 
   const capacites = typeof AudioEncoder !== 'undefined' && window.isSecureContext;
 
@@ -142,7 +150,7 @@ export function Nouveau({ surTermine, surBibliotheque }) {
    *  remonte pas comme une erreur — on retombe simplement sur la
    *  saisie à la main.
    */
-  async function ecouter(choisi, total, instant = '') {
+  async function ecouter(choisi, total, instant = '', retainSelection = false) {
     const numero = ++sondeCourante.current;
     const actuelle = () => numero === sondeCourante.current;
     setSonde({ enCours: true, phase: 'extrait', moment: instant });
@@ -155,7 +163,7 @@ export function Nouveau({ surTermine, surBibliotheque }) {
       const retenu = vue.investigation?.record;
       // Une réunion récupérée a souvent déjà sa transcription dans Odoo,
       // déposée par l'ancienne app : le dépôt ne s'y fait qu'à la main.
-      if (retenu) retenir({ ...retenu, auto: Boolean(vue.investigation.auto) && !choisi.remote });
+      if (retenu && !retainSelection) retenir({ ...retenu, auto: Boolean(vue.investigation.auto) && !choisi.remote });
     } catch (error) {
       if (actuelle() && error.needsReload) setReloadError(error);
       if (actuelle()) setSonde(null);
@@ -205,10 +213,13 @@ export function Nouveau({ surTermine, surBibliotheque }) {
   const enSuspens = useRef(null);
   enSuspens.current = pipeline.etat === 'repos' && !pipeline.jobId ? fichier : null;
   useEffect(() => () => {
-    if (enSuspens.current) enqueue([enSuspens.current], { front: true });
+    const waiting = enSuspens.current || loadingFile.current;
+    if (waiting) { setCurrentDraft(null); enqueue([waiting], { front: true }); }
   }, []);
 
   async function charger(original) {
+    loadingFile.current = original;
+    setCurrentDraft(original);
     setReloadError(null);
     setFichier(null);
     setSecondes(0);
@@ -220,6 +231,7 @@ export function Nouveau({ surTermine, surBibliotheque }) {
     try {
       const choisi = await snapshotFile(original);
       const total = preparation.get(original)?.duration ?? await sonderDuree(choisi);
+      loadingFile.current = null;
       setFichier(choisi);
       setSecondes(total);
       setDebut(0);
@@ -244,9 +256,22 @@ export function Nouveau({ surTermine, surBibliotheque }) {
         setMode(modeChoisi.current);
         modeChoisi.current = null;
       }
-      if (mode !== 'compresser' || audioSeul(choisi)) ecouter(choisi, total, debutReunion.toISOString());
+      const draft = choisi.draftState;
+      if (draft) {
+        setClient(draft.client || ''); setParticipants(draft.participants || ''); setGlossaire(draft.glossaire || '');
+        setContexteOdoo(draft.contexteOdoo || ''); setDossier(draft.dossier || null);
+        setDateReunion(draft.dateReunion || versChampLocal(debutReunion));
+        setDebut(draft.debut || 0); setFin(draft.fin || total); setMode(draft.mode || 'transcrire');
+      }
+      const selectedMoment = draft?.dateReunion ? new Date(draft.dateReunion).toISOString() : debutReunion.toISOString();
+      const cachedMoment = preparation.get(choisi)?.moment;
+      const sameMinute = cachedMoment && Math.floor(Date.parse(cachedMoment) / 60000) === Math.floor(Date.parse(selectedMoment) / 60000);
+      if (mode !== 'compresser' || audioSeul(choisi)) ecouter(choisi, total,
+        sameMinute ? cachedMoment : selectedMoment, Boolean(draft?.dossier));
     } catch (e) {
+      loadingFile.current = null;
       setFichier(null);
+      setCurrentDraft(null);
       if (e.needsReload) { setLecture(''); setReloadError(e); }
       else setLecture(`Fichier illisible : ${e.message}`);
     }
@@ -335,9 +360,7 @@ export function Nouveau({ surTermine, surBibliotheque }) {
     <section className="mx-auto max-w-3xl px-6 py-10">
       <h1 className="titre text-[1.5rem] font-semibold">Nouvelle transcription</h1>
       <p className="mt-2 max-w-xl text-ekn-text/70">
-        Le découpage et l'encodage se font sur ce poste. Seules des fenêtres
-        audio de quelques mégaoctets partent au serveur — ta vidéo, elle, ne
-        quitte pas ta machine.
+        Dépose un enregistrement pour le transcrire et retrouver le contexte de ta réunion.
       </p>
 
       <div className="mt-8 space-y-8">
@@ -424,6 +447,7 @@ export function Nouveau({ surTermine, surBibliotheque }) {
               </li>)}
             </ul>
           </div>}
+          {persistenceError && (fichier || enAttente.length > 0) && <p className="mt-2 text-ekn-sm text-ekn-tone-warning" role="status">{persistenceError}</p>}
           {lecture ? <p className="mt-2 text-ekn-sm text-ekn-text/60">{lecture}</p> : null}
           <ReloadNotice error={reloadError} compressing={compression.etat === 'compression'} />
           {fichier?.mergedParts && <button type="button" disabled={enCours}
@@ -453,7 +477,7 @@ export function Nouveau({ surTermine, surBibliotheque }) {
           />
         </div>
 
-        <div>
+        {(!audioSeul(fichier)) && <div>
           <h2 className="titre text-[1.0625rem] font-medium">2. Que faire de ce fichier</h2>
           <div className="mt-3 flex flex-wrap gap-2">
             {(audioSeul(fichier) && !fichier.remote ? [['transcrire', 'Transcrire']] : [
@@ -512,10 +536,10 @@ export function Nouveau({ surTermine, surBibliotheque }) {
                 : ''}
             </p>
           ) : null}
-        </div>
+        </div>}
 
         <div className={mode === 'compresser' ? 'hidden' : undefined}>
-          <h2 className="titre text-[1.0625rem] font-medium">3. Le contexte</h2>
+          <h2 className="titre text-[1.0625rem] font-medium">{audioSeul(fichier) ? '2. Le contexte' : '3. Le contexte'}</h2>
           <p className="mt-1 text-ekn-sm text-ekn-text/60">
             Facultatif, mais c'est ce qui fait la différence entre « Réunion du
             3 juillet » et un titre utile.
@@ -704,7 +728,7 @@ export function Nouveau({ surTermine, surBibliotheque }) {
         <Erreur>{compression.erreur}</Erreur>
         {pipeline.fenetres.length > 0 || pipeline.etat === 'creation' ? (
           <Avancement
-            numero={mode === 'compresser' ? 3 : 4}
+            numero={mode === 'compresser' || audioSeul(fichier) ? 3 : 4}
             pipeline={pipeline}
             video={archivage || (mode !== 'transcrire' ? compressionEnTache(compression) : null)}
           />

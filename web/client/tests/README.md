@@ -83,3 +83,25 @@ place des deux sons ; les fixtures restent ignorées par Git.
 Les repères après rognage et leur restitution par l’API sont couverts par les
 tests automatisés. Les nouvelles données sont facultatives dans le contexte
 JSON existant ; aucune migration de base n’est requise.
+
+### Sauvegarde et reprise simples
+
+La page de recette monte désormais le même StrictMode que la production.
+
+- Préparer un assemblage et une attente, saisir des participants et rogner.
+  Recharger : les deux réunions reviennent dans « À lancer », contextes prêts.
+  Ouvrir le premier : morceaux, champs et rognage sont conservés, sans recherche.
+- Ouvrir un second onglet : la file active n’est pas dupliquée. Fermer le
+  premier puis ouvrir un troisième : sa file devient disponible.
+- Réordonner les morceaux restaurés et valider pour vérifier aussi les octets
+  des originaux conservés, pas seulement les noms de fichiers.
+- `?account=autre@example.test` isole un deuxième compte simulé.
+- `?quota=1&account=quota@example.test` refuse les écritures IndexedDB. Le fichier
+  reste lisible et lançable, avec une seule indication de sauvegarde impossible.
+- `?resume=1` relaie l’API au serveur de test configuré dans Vite. Utiliser un
+  serveur FastAPI isolé, stockage en mémoire et fournisseur doublé : audio
+  archivé, première fenêtre terminée, seconde attendue. Un clic « Reprendre »
+  doit terminer la réunion en ne transcrivant que la seconde fenêtre.
+
+Les scénarios de droits, de double envoi, de contexte restauré, de verrou entre
+onglets et d’échec de sauvegarde sont aussi couverts par les tests automatisés.

@@ -41,6 +41,19 @@ Proposition pour le système partagé : un contrat `chapters` (nom, début, fin)
 des marqueurs non interactifs sur la piste et une liste de liens accessibles.
 Aucune évolution d’ekonum-ui n’est nécessaire pour livrer ce parcours.
 
+### Continuité du travail et simplicité (23/10)
+
+La file se sauvegarde dans le navigateur et revient dans « À lancer », sans
+nouvel écran. Les morceaux, champs saisis, rognage et contextes prêts suivent.
+Les onglets ne se disputent pas la même file ; les comptes sont séparés.
+Un refus de stockage garde le parcours utilisable et affiche une seule ligne.
+
+« Reprendre » renvoie depuis l’archive uniquement les parties manquantes.
+Les fenêtres terminées ou en cours sont protégées contre un double envoi.
+La liste technique est repliée ; le choix « Transcrire » seul disparaît pour
+un audio, les explications générales et celles du dialogue sont raccourcies.
+Les éditeurs sans transcription sont masqués. Aucun nouveau réglage permanent.
+
 ## Prochains sujets
 
 | # | Sujet | État |

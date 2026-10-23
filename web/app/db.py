@@ -873,6 +873,31 @@ class Database:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    def recover_interrupted_processing(self) -> None:
+        """Le serveur mono-instance a redémarré : ses anciennes tâches n'existent plus."""
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE job_chunks SET status = 'erreur', started_at = NULL, error = ? "
+                "WHERE status = 'en_cours' AND job_id IN "
+                "(SELECT id FROM jobs WHERE deleted_at IS NULL AND status != 'cancelled')",
+                ("Traitement interrompu par un redémarrage. Reprends cette partie.",),
+            )
+            conn.execute("UPDATE jobs SET status = 'en_attente' "
+                         "WHERE status = 'en_cours' AND deleted_at IS NULL")
+            conn.execute("UPDATE jobs SET status = 'a_finaliser' "
+                         "WHERE status = 'finalisation' AND deleted_at IS NULL")
+
+    def claim_chunk_upload(self, job_id: int, idx: int) -> bool:
+        """Deux onglets ne doivent ni payer ni écraser la même fenêtre."""
+        with self.connect() as conn:
+            result = conn.execute(
+                "UPDATE job_chunks SET status = 'en_cours', error = NULL "
+                "WHERE job_id = ? AND idx = ? AND status NOT IN ('termine', 'en_cours') "
+                "AND EXISTS (SELECT 1 FROM jobs WHERE id = ? AND deleted_at IS NULL "
+                "AND status != 'cancelled')", (job_id, idx, job_id),
+            )
+            return result.rowcount == 1
+
     def reset_chunk(self, job_id: int, idx: int) -> None:
         """Remet une fenêtre à l'état attendu pour que le navigateur la
         réencode. C'est le mécanisme derrière « relancer cette fenêtre » :

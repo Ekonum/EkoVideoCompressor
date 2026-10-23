@@ -180,9 +180,26 @@ par fichier et un résumé commun indiquent l’état des contextes, sans bulles
 l'ordre des morceaux crée un contexte distinct ; changer seulement
 l'ordre des réunions réutilise leurs contextes.
 
-La file et les contextes restent propres à l'onglet. Fermer celui-ci vide
-la file. Le navigateur tente alors de nettoyer les assemblages temporaires ;
+La file, les groupes, le rognage, les champs saisis et les contextes prêts
+sont copiés dans le stockage privé du navigateur (IndexedDB), par compte.
+Un rechargement ou une réouverture retrouve la préparation dans « À lancer ».
+Les onglets actifs gardent chacun leur file : un nouvel onglet ne reprend
+qu’une file qui n’est plus ouverte ailleurs (verrou Web Locks).
+Le dépôt automatique dans Odoo est décoché après restauration.
+Les copies quittent ce stockage quand les fichiers sont retirés ou lancés.
+La sauvegarde peut être refusée (quota, navigation privée) ou effacée par
+le navigateur ; un refus laisse la file utilisable dans l’onglet avec une
+indication discrète. Elle ne remplace pas les fichiers originaux.
+Le navigateur tente aussi de nettoyer les assemblages temporaires ;
 ce nettoyage n'est pas garanti si le processus s'arrête brutalement.
+
+Une transcription incomplète dont l’audio est archivé propose « Reprendre ».
+Le navigateur relit cet audio par plages et renvoie seulement les fenêtres
+absentes ou en échec. Le serveur conserve le plan et le contexte existants,
+rend reprenables les calculs interrompus par son redémarrage,
+et ignore un envoi doublonné d’une fenêtre terminée ou déjà en cours.
+Les détails et la relance ciblée restent sous « Détails du traitement ».
+Aucune reprise ni transcription ne démarre seule après restauration de la file.
 
 Recette locale : [`client/tests/README.md`](client/tests/README.md).
 
@@ -190,7 +207,7 @@ Un onglet ouvert avant un déploiement peut encore référencer un ancien
 worker. Le signal de démarrage du module distingue ce cas d'une erreur
 de fichier : un échec avant ce signal affiche « Recharger la page », sans
 rechargement automatique. Le bouton attend la fin des envois, compressions
-et archivages locaux. La file non enregistrée doit ensuite être redéposée.
+et archivages locaux. La file non sauvegardée doit ensuite être redéposée ; le bouton attend aussi la fin de la copie locale.
 
 `web/client/` — React et Vite. Le module média est
 `src/media-worker.js` : il découpe et encode les fenêtres hors du fil
