@@ -2,7 +2,7 @@
 <body><div class="flex flex-wrap gap-3 p-4"><button id="deposit" class="ekn-button">Déposer 3 enregistrements de test</button><button id="audio" class="ekn-button ekn-button--subtle">Contrôler l’assemblage audio</button><button id="export" class="ekn-button ekn-button--subtle">Exporter l’assemblage de recette</button><output id="result" role="status"></output></div><div id="root"></div>
 <script type="module">
 import React from 'react';import{createRoot}from'react-dom/client';import App from'/src/App.jsx';import'/src/styles.css';import'/vendor/ekonum-ui/ekonum-ui.js';
-import{mergeAudioFiles}from'/src/merge-audio.js';import{Input,ALL_FORMATS,BlobSource,AudioSampleSink}from'mediabunny';
+import{mergeAudioFiles}from'/src/merge-audio.js';import{MediaPlayer}from'/src/components/MediaPlayer.jsx';import{snapshotFile}from'/src/preparation.js';import{Input,ALL_FORMATS,BlobSource,AudioSampleSink}from'mediabunny';
 import{ReloadNotice}from'/src/components/ReloadNotice.jsx';import{MediaModuleUnavailableError}from'/src/media-worker-client.js';
 // Recette du déploiement entre l'ouverture de l'onglet et le dépôt : seul
 // le chargement du module échoue, le fichier synthétique reste valide.
@@ -37,12 +37,14 @@ async function frequency(file,at){const input=new Input({formats:ALL_FORMATS,sou
 document.querySelector('#audio').onclick=async()=>{const result=document.querySelector('#result');result.textContent='Contrôle en cours…';try{
  const [a,b]=await fixtures();const joined=await mergeAudioFiles([a,b],{onProgress:p=>result.textContent='Normalisation '+Math.round(p.ratio*100)+' %'});const reverse=await mergeAudioFiles([b,a]);
  const input=new Input({formats:ALL_FORMATS,source:new BlobSource(joined)});const duration=await input.computeDuration();input.dispose();
+ const saved=await snapshotFile(joined);if(joined.audioParts.length!==2||Math.abs(joined.audioParts[1].start-1.066666)>.01||Math.abs(joined.audioParts[1].end-duration)>.01||JSON.stringify(saved.audioParts)!==JSON.stringify(joined.audioParts))throw Error('Repères ou copie du fichier incorrects');
  const order=[await frequency(joined,.5),await frequency(joined,1.5)];const inverted=[await frequency(reverse,.5),await frequency(reverse,1.5)];
  if(Math.abs(duration-2)>.15||Math.abs(order[0]-440)>100||Math.abs(order[1]-880)>100||Math.abs(inverted[0]-880)>100||Math.abs(inverted[1]-440)>100)throw Error(JSON.stringify({duration,order,inverted}));
  result.textContent='Audio OK : durée '+duration.toFixed(3)+' s, ordre 440 → 880 Hz et ordre inverse vérifiés. Recherches : '+probes;
 }catch(error){result.textContent='ÉCHEC : '+error.message;}};
 const params=new URLSearchParams(location.search);
-createRoot(document.getElementById('root')).render(params.has('reload-only')
+if(params.has('player-only')){const [a,b]=await fixtures();const joined=await mergeAudioFiles([a,b]);createRoot(document.getElementById('root')).render(React.createElement(MediaPlayer,{src:URL.createObjectURL(joined),parts:joined.audioParts,duration:2.133333}));}
+else createRoot(document.getElementById('root')).render(params.has('reload-only')
  ?React.createElement(ReloadNotice,{error:new MediaModuleUnavailableError(),compressing:params.has('busy')})
  :React.createElement(App));
 </script></body></html>

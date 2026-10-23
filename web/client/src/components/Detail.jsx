@@ -151,7 +151,7 @@ export function Detail({ jobId, recherche = '', surRetour, surRetraiter }) {
             </div>
           </div>
           <Video jobId={jobId} video={fiche.video} filename={fiche.filename} surMaj={recharger}
-                 duree={fiche.duration_seconds} meetingDate={fiche.meeting_date}
+                 parts={fiche.audio_parts} duree={fiche.duration_seconds} meetingDate={fiche.meeting_date}
                  lecteur={lecteur} surTemps={setEcoute} />
           {trouver ? (
             <div className="mt-3 flex items-center gap-2 rounded-lg border border-bord bg-ekn-field px-3 py-1.5">
@@ -364,7 +364,7 @@ const DEBIT_LOURD = 1_000_000;
 // Sans durée, seule la taille parle : une heure compressée pèse ~150 Mo.
 const TAILLE_LOURDE = 200 * 1024 * 1024;
 
-function Video({ jobId, video, filename, duree, meetingDate, surMaj, lecteur, surTemps }) {
+function Video({ jobId, video, filename, duree, parts, meetingDate, surMaj, lecteur, surTemps }) {
   const audio = AUDIO.test(filename || '');
   const tache = useArchivage(jobId);
   const [etape, setEtape] = useState('repos'); // repos → question → lecture | allegement
@@ -397,6 +397,8 @@ function Video({ jobId, video, filename, duree, meetingDate, surMaj, lecteur, su
         src={`/api/jobs/${jobId}/video`}
         autoPlay
         onTime={surTemps}
+        duration={duree}
+        parts={parts}
       />
     );
   }

@@ -62,3 +62,24 @@ Le bouton « Exporter l’assemblage de recette » permet de vérifier le
 fichier produit hors de la page. `?spoken=1` utilise les fichiers locaux
 `_fixtures/recette-partie-1.m4a` et `_fixtures/recette-partie-2.m4a` à la
 place des deux sons ; les fixtures restent ignorées par Git.
+
+### Retrait, ordre interne et repères d’écoute
+
+- La corbeille est absente au repos, visible dès la saisie d’une poignée,
+  et change d’état au survol. Relâcher y retire seulement l’élément saisi.
+- Retirer un morceau puis « Annuler le retrait » ; vérifier aussi un groupe
+  entier, Suppr au clavier et la validation d’une sélection devenue vide.
+- Intervertir les morceaux avec leur propre poignée ; les réunions voisines
+  conservent leur ordre. « Modifier les morceaux » ne montre que la réunion
+  courante ; la file reste identique après validation.
+- Vérifier les marqueurs aux jonctions dans le lecteur, et les liens des
+  morceaux qui déplacent la tête de lecture sans démarrer le son.
+- `?player-only=1` ouvre le lecteur de réécoute avec un assemblage synthétique.
+  « Contrôler l’assemblage audio » vérifie aussi les repères réellement encodés
+  et leur conservation lors de la copie du fichier avant transcription.
+- Refaire le retrait au tactile à 375 px ; vérifier la file dans les deux
+  écrans, sans débordement horizontal, et le lecteur sombre à mouvement réduit.
+
+Les repères après rognage et leur restitution par l’API sont couverts par les
+tests automatisés. Les nouvelles données sont facultatives dans le contexte
+JSON existant ; aucune migration de base n’est requise.

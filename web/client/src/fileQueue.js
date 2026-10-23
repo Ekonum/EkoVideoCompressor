@@ -51,6 +51,7 @@ export function remoteFile(job) {
   return {
     name: job.filename,
     size: job.video_bytes,
+    audioParts: job.audio_parts || [],
     type: '',
     // La date sert à distinguer deux réunions de même nom ; c'est
     // `meetingDate` qui date la réunion à l'écran de lancement.

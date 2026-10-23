@@ -28,6 +28,19 @@ d'ordre et le regroupement sont propres à ce parcours ; cette version du
 design system n'expose pas de liste réordonnable partagée. Le besoin est
 à proposer au design system s'il apparaît dans d'autres applications.
 
+### Affinements des poignées et de l’écoute (23/10)
+
+Corbeille temporaire pendant la saisie, retrait d’une réunion ou d’un morceau
+avec annulation, éditeur des morceaux indépendant de la file, repères aux
+jonctions dans les lecteurs avant transcription et après archivage. Les
+contextes utilisent des pictogrammes et un résumé de file compact.
+
+Les repères du lecteur sont ajoutés par l’adaptateur Transcript, sans modifier
+les fichiers vendus d’ekonum-ui 3.15.0 : cette version n’expose pas de chapitres.
+Proposition pour le système partagé : un contrat `chapters` (nom, début, fin),
+des marqueurs non interactifs sur la piste et une liste de liens accessibles.
+Aucune évolution d’ekonum-ui n’est nécessaire pour livrer ce parcours.
+
 ## Prochains sujets
 
 | # | Sujet | État |

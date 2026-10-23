@@ -190,6 +190,20 @@ class _Fixture(unittest.TestCase):
 class ApiTestCase(_Fixture):
     """Le contrat d'exécution : plan, budget, envoi, reprise."""
 
+    def test_reperes_des_morceaux_conserves_pour_ecoute_et_retraitement(self):
+        parts = [{"name": "premier.m4a", "start": 0, "end": 10.066},
+                 {"name": "suite.m4a", "start": 10.066, "end": 20.132}]
+        job = self._create(duration=20.132, context={"audio_parts": parts})["job_id"]
+        self.assertEqual(self.client.get(f"/api/jobs/{job}/detail").json()["audio_parts"], parts)
+        self.assertEqual(self.client.get("/api/jobs").json()[0]["audio_parts"], parts)
+        # Les noms et les repères ne partent pas dans le prompt de transcription.
+        prompt = transcription.context_for_chunk(chunk_index=0, chunk_count=1, start=0,
+                    end=20.132, language="fr", context={"audio_parts": parts})
+        self.assertNotIn("premier.m4a", repr(prompt))
+        invalid = self._create(duration=20, context={"audio_parts": [
+            {"name": "incorrect", "start": 15, "end": 30}]})["job_id"]
+        self.assertEqual(self.client.get(f"/api/jobs/{invalid}/detail").json()["audio_parts"], [])
+
     def test_le_serveur_finit_seul_sans_que_le_navigateur_reste(self):
         """On doit pouvoir quitter l'écran une fois les fenêtres
         envoyées : personne n'appelle la finalisation, et la réunion se

@@ -7,6 +7,7 @@ export async function snapshotFile(file) {
   if (file.remote || file.size > 400 * 1024 * 1024) return file;
   const stable = new File([await file.arrayBuffer()], file.name, { type: file.type, lastModified: file.lastModified });
   if (file.mergedParts) stable.mergedParts = file.mergedParts;
+  if (file.audioParts) stable.audioParts = file.audioParts;
   return stable;
 }
 

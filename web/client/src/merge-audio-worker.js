@@ -29,6 +29,7 @@ self.onmessage = async ({ data: { files, handle, temporaryName } }) => {
     await output.start();
     let offset = 0;
     let firstDuration = 0;
+    const parts = [];
     for (let index = 0; index < files.length; index++) {
       const file = files[index];
       const temporary = await root.getFileHandle(temporaryName, { create: true });
@@ -65,6 +66,7 @@ self.onmessage = async ({ data: { files, handle, temporaryName } }) => {
         end = Math.max(end, timestamp + packet.duration);
       }
       if (start === null) throw new Error(`« ${file.name} » ne contient aucun son lisible.`);
+      parts.push({ name: file.name, start: offset, end });
       offset = end;
       input.dispose();
       input = null;
@@ -72,7 +74,7 @@ self.onmessage = async ({ data: { files, handle, temporaryName } }) => {
     }
     source.close();
     await output.finalize();
-    self.postMessage({ kind: 'done', duration: offset, firstDuration });
+    self.postMessage({ kind: 'done', duration: offset, firstDuration, parts });
   } catch (error) {
     await output?.cancel().catch(() => {});
     self.postMessage({ kind: 'error', message: error?.message || 'L’assemblage audio a échoué.' });

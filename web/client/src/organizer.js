@@ -49,3 +49,25 @@ export function splitGroup(groups, id) {
     id: `${id}-part-${index}`, files: [file], materialized: file,
   })));
 }
+
+export function removeRecording(groups, { groupId, partKey }) {
+  if (!partKey) return groups.filter((group) => group.id !== groupId);
+  return groups.flatMap((group) => {
+    if (group.id !== groupId || !group.files.some((file) => fileKey(file) === partKey)) return [group];
+    const files = group.files.filter((file) => fileKey(file) !== partKey);
+    return files.length ? [{ ...group, files, materialized: files.length === 1 ? files[0] : null }] : [];
+  });
+}
+
+/** Un morceau reste dans sa réunion : le reste de la file est inchangé. */
+export function dropPart(groups, groupId, sourceKey, targetKey, zone) {
+  return groups.map((group) => {
+    if (group.id !== groupId || sourceKey === targetKey || !['before', 'after'].includes(zone)) return group;
+    const source = group.files.find((file) => fileKey(file) === sourceKey);
+    const target = group.files.find((file) => fileKey(file) === targetKey);
+    if (!source || !target) return group;
+    const files = group.files.filter((file) => file !== source);
+    files.splice(files.indexOf(target) + (zone === 'after' ? 1 : 0), 0, source);
+    return { ...group, files, materialized: null };
+  });
+}
